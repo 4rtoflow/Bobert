@@ -18,12 +18,16 @@ Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のも�
 | ファイル               | 役割                                                                  |
 | ---------------------- | --------------------------------------------------------------------- |
 | `src/index.ts`         | エントリポイント(HTTPの受付とQueueの処理)                             |
-| `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認)                   |
+| `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)   |
 | `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                             |
 | `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)       |
 | `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認            |
-| `src/oauth/`           | OpenRouterのOAuthのコールバック                                       |
+| `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                  |
 | `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み) |
+| `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)            |
+| `src/llm/`             | AnthropicとOpenRouterの呼び出し                                       |
+| `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態)                  |
+| `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                      |
 | `src/config/models.ts` | `/model`で選べるモデルの候補                                          |
 | `src/discord/`         | Discord APIの定数と呼び出し                                           |
 | `migrations/`          | D1のスキーマ                                                          |
@@ -72,15 +76,19 @@ pnpm exec wrangler secret put DISCORD_BOT_TOKEN --env=""
 pnpm db:migrate:dev
 ```
 
-## Gatewayを動かす
+## Gatewayとコマンドを準備する
 
-デプロイしたあと、環境ごとに最初の1回だけ、管理用エンドポイントから接続を始める。以降はアラームで動き続け、デプロイで切れてもResumeでつなぎ直す。`ADMIN_TOKEN`は`.env`の値。
+デプロイしたあと、管理用エンドポイントから次の操作をする。`ADMIN_TOKEN`は`.env`の値。
+- **Gateway:** 環境ごとに最初の1回だけ、接続を始める。以降はアラームで動き続け、デプロイで切れてもResumeでつなぎ直す。
+- **スラッシュコマンド:** コマンドを追加・変更したら、登録し直す(`src/interactions/commands.ts`の一覧で丸ごと置き換える)。
+- **D1のスキーマ:** `migrations/`にファイルが増えたら、デプロイの前に`pnpm db:migrate:dev`で反映する。
 
 ```sh
 URL=https://bobert-dev.<サブドメイン>.workers.dev
-curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/start  # 始める
-curl -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/status          # 状態を見る
-curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/stop   # 止める
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/start      # Gatewayを始める
+curl -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/status              # 状態を見る
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/stop       # 止める
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/commands/register  # コマンドを登録する
 ```
 
 ## よく使うコマンド

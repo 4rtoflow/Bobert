@@ -1,10 +1,13 @@
+import { overwriteGlobalCommands } from "./discord/api";
 import { GATEWAY_LOCATION_HINT, GATEWAY_OBJECT_NAME } from "./gateway/protocol";
+import { COMMANDS } from "./interactions/commands";
 
 /**
  * 管理用エンドポイント。ADMIN_TOKENで保護する。
  * - POST /admin/gateway/start: Gatewayへの接続を始める
  * - POST /admin/gateway/stop: Gatewayへの接続を止める
  * - GET /admin/gateway/status: 接続の状態を返す
+ * - POST /admin/commands/register: スラッシュコマンドをDiscordに登録する(一覧で丸ごと置き換える)
  */
 export async function handleAdminRequest(
 	request: Request,
@@ -29,6 +32,20 @@ export async function handleAdminRequest(
 	}
 	if (request.method === "GET" && url.pathname === "/admin/gateway/status") {
 		return Response.json(await gateway.status());
+	}
+	if (
+		request.method === "POST" &&
+		url.pathname === "/admin/commands/register"
+	) {
+		const registered = await overwriteGlobalCommands(
+			env.DISCORD_APPLICATION_ID,
+			env.DISCORD_BOT_TOKEN,
+			COMMANDS,
+		);
+		return Response.json({
+			ok: true,
+			commands: registered.map((command) => command.name),
+		});
 	}
 	return new Response("Not Found", { status: 404 });
 }

@@ -1,10 +1,17 @@
 import type {
+	ApplicationCommandType as DiscordApplicationCommandType,
+	ApplicationIntegrationType as DiscordApplicationIntegrationType,
+	ButtonStyle as DiscordButtonStyle,
+	ComponentType as DiscordComponentType,
 	GatewayCloseCodes as DiscordGatewayCloseCodes,
 	GatewayIntentBits as DiscordGatewayIntentBits,
 	GatewayOpcodes as DiscordGatewayOpcodes,
+	InteractionContextType as DiscordInteractionContextType,
 	InteractionResponseType as DiscordInteractionResponseType,
 	InteractionType as DiscordInteractionType,
 	MessageFlags as DiscordMessageFlags,
+	MessageType as DiscordMessageType,
+	TextInputStyle as DiscordTextInputStyle,
 } from "discord-api-types/v10";
 
 /*
@@ -42,6 +49,9 @@ export const GatewayCloseCodes = {
 
 export const InteractionType = {
 	Ping: 1 as DiscordInteractionType.Ping,
+	ApplicationCommand: 2 as DiscordInteractionType.ApplicationCommand,
+	MessageComponent: 3 as DiscordInteractionType.MessageComponent,
+	ModalSubmit: 5 as DiscordInteractionType.ModalSubmit,
 } as const;
 
 export const InteractionResponseType = {
@@ -50,9 +60,44 @@ export const InteractionResponseType = {
 		4 as DiscordInteractionResponseType.ChannelMessageWithSource,
 	DeferredChannelMessageWithSource:
 		5 as DiscordInteractionResponseType.DeferredChannelMessageWithSource,
+	UpdateMessage: 7 as DiscordInteractionResponseType.UpdateMessage,
 	Modal: 9 as DiscordInteractionResponseType.Modal,
 } as const;
 
 export const MessageFlags = {
 	Ephemeral: 64 as DiscordMessageFlags.Ephemeral,
+} as const;
+
+export const MessageType = {
+	Default: 0 as DiscordMessageType.Default,
+	Reply: 19 as DiscordMessageType.Reply,
+} as const;
+
+export const ComponentType = {
+	ActionRow: 1 as DiscordComponentType.ActionRow,
+	Button: 2 as DiscordComponentType.Button,
+	TextInput: 4 as DiscordComponentType.TextInput,
+	Label: 18 as DiscordComponentType.Label,
+} as const;
+
+export const ButtonStyle = {
+	Primary: 1 as DiscordButtonStyle.Primary,
+	Danger: 4 as DiscordButtonStyle.Danger,
+	Link: 5 as DiscordButtonStyle.Link,
+} as const;
+
+export const TextInputStyle = {
+	Short: 1 as DiscordTextInputStyle.Short,
+} as const;
+
+export const ApplicationCommandType = {
+	ChatInput: 1 as DiscordApplicationCommandType.ChatInput,
+} as const;
+
+export const InteractionContextType = {
+	Guild: 0 as DiscordInteractionContextType.Guild,
+} as const;
+
+export const ApplicationIntegrationType = {
+	GuildInstall: 0 as DiscordApplicationIntegrationType.GuildInstall,
 } as const;
