@@ -1,0 +1,2 @@
+# 改行コードはLFにそろえる。WindowsでもLFのまま取り出し、Biomeの整形チェックとCI(Linux)の結果をそろえるため
+* text=auto eol=lf

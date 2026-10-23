@@ -1,0 +1,17 @@
+# 依存パッケージ
+node_modules/
+
+# Wranglerの作業用フォルダ(手元のD1やDurable Objectのデータ)
+.wrangler/
+
+# 手元の秘密情報(.env.example だけはGitに入れる)
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+
+# テストやビルドの出力
+coverage/
+dist/
+*.log

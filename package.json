@@ -1,0 +1,36 @@
+{
+	"name": "bobert",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Discord上でAIと会話できるBot。LLMの費用は各ユーザーが自分のキーで負担する。",
+	"type": "module",
+	"packageManager": "pnpm@12.15.0",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy:dev": "wrangler deploy --env=\"\"",
+		"deploy:production": "wrangler deploy --env production",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"cf-typegen": "wrangler types",
+		"db:migrate:local": "wrangler d1 migrations apply DB --local",
+		"db:migrate:dev": "wrangler d1 migrations apply DB --remote --env=\"\"",
+		"db:migrate:production": "wrangler d1 migrations apply DB --remote --env production"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.6.2",
+		"@cloudflare/vitest-plugin": "^1.4.6",
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.5",
+		"wrangler": "^4.151.3"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^1.1.0",
+		"discord-api-types": "^0.38.57"
+	}
+}

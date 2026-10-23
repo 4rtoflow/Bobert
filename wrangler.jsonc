@@ -1,0 +1,125 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	// 既定は開発用の環境。本番用は「--env production」で使う(下のenv.production)。
+	// 構成の仕様: docs/spec/architecture.md
+	"name": "bobert-dev",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-19",
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"ENVIRONMENT": "development"
+	},
+	// 手元では .env、Cloudflare上では「wrangler secret put」で設定する(.env.example を参照)
+	"secrets": {
+		"required": [
+			"DISCORD_APPLICATION_ID",
+			"DISCORD_PUBLIC_KEY",
+			"DISCORD_BOT_TOKEN",
+			"ADMIN_TOKEN",
+			"ALERT_WEBHOOK_URL",
+			"CREDENTIAL_ENCRYPTION_KEYS"
+		]
+	},
+	// Discord Gatewayへの常時接続を持つDurable Object
+	"durable_objects": {
+		"bindings": [{ "name": "GATEWAY", "class_name": "Gateway" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Gateway"] }],
+	"queues": {
+		"producers": [
+			{ "binding": "RESPOND_QUEUE", "queue": "bobert-respond-dev" },
+			{ "binding": "INGEST_QUEUE", "queue": "bobert-ingest-dev" }
+		],
+		"consumers": [
+			// 応答の生成(LLMの呼び出し)。1件ずつ処理する
+			{ "queue": "bobert-respond-dev", "max_batch_size": 1, "max_retries": 2 },
+			// メッセージの保存とベクトル化、削除の反映、過去ログの取り込み
+			{
+				"queue": "bobert-ingest-dev",
+				"max_batch_size": 50,
+				"max_batch_timeout": 5,
+				"max_retries": 5
+			}
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "bobert-dev",
+			// 北米東部(enam)に作成。DiscordとGatewayのDurable Objectに近い場所に置くため
+			"database_id": "484b6a27-1fd5-4fec-9a38-4850e0835f05",
+			"migrations_dir": "migrations"
+		}
+	],
+	// VectorizeとWorkers AIは手元で再現できないため、開発用のリソースにつなぐ
+	"vectorize": [
+		{
+			"binding": "VECTORIZE",
+			"index_name": "bobert-messages-dev",
+			"remote": true
+		}
+	],
+	"ai": {
+		"binding": "AI",
+		"remote": true
+	},
+	"env": {
+		"production": {
+			"name": "bobert",
+			"vars": {
+				"ENVIRONMENT": "production"
+			},
+			"secrets": {
+				"required": [
+					"DISCORD_APPLICATION_ID",
+					"DISCORD_PUBLIC_KEY",
+					"DISCORD_BOT_TOKEN",
+					"ADMIN_TOKEN",
+					"ALERT_WEBHOOK_URL",
+					"CREDENTIAL_ENCRYPTION_KEYS"
+				]
+			},
+			"durable_objects": {
+				"bindings": [{ "name": "GATEWAY", "class_name": "Gateway" }]
+			},
+			"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Gateway"] }],
+			"queues": {
+				"producers": [
+					{ "binding": "RESPOND_QUEUE", "queue": "bobert-respond" },
+					{ "binding": "INGEST_QUEUE", "queue": "bobert-ingest" }
+				],
+				"consumers": [
+					{ "queue": "bobert-respond", "max_batch_size": 1, "max_retries": 2 },
+					{
+						"queue": "bobert-ingest",
+						"max_batch_size": 50,
+						"max_batch_timeout": 5,
+						"max_retries": 5
+					}
+				]
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "bobert",
+					// 「wrangler d1 create bobert」で作ったIDに置き換える
+					"database_id": "00000000-0000-0000-0000-000000000000",
+					"migrations_dir": "migrations"
+				}
+			],
+			"vectorize": [
+				{
+					"binding": "VECTORIZE",
+					"index_name": "bobert-messages",
+					"remote": true
+				}
+			],
+			"ai": {
+				"binding": "AI",
+				"remote": true
+			}
+		}
+	}
+}
