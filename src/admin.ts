@@ -3,6 +3,7 @@ import { GATEWAY_LOCATION_HINT, GATEWAY_OBJECT_NAME } from "./gateway/protocol";
 /**
  * 管理用エンドポイント。ADMIN_TOKENで保護する。
  * - POST /admin/gateway/start: Gatewayへの接続を始める
+ * - POST /admin/gateway/stop: Gatewayへの接続を止める
  * - GET /admin/gateway/status: 接続の状態を返す
  */
 export async function handleAdminRequest(
@@ -20,6 +21,10 @@ export async function handleAdminRequest(
 
 	if (request.method === "POST" && url.pathname === "/admin/gateway/start") {
 		await gateway.start();
+		return Response.json({ ok: true });
+	}
+	if (request.method === "POST" && url.pathname === "/admin/gateway/stop") {
+		await gateway.stop();
 		return Response.json({ ok: true });
 	}
 	if (request.method === "GET" && url.pathname === "/admin/gateway/status") {
