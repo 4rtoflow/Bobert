@@ -1,9 +1,9 @@
-import { cloudflareTest } from "@cloudflare/vitest-plugin";
+import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 // テスト専用の値(本物の秘密ではない)。テストの実行環境は、wrangler.jsonc の
 // secrets.required に挙げた値をプロセスの環境変数から読む。
-// DISCORD_PUBLIC_KEY は test/interactions.test.ts の秘密鍵と対になっている。
+// DISCORD_PUBLIC_KEY は test/helpers.ts の秘密鍵と対になっている。
 const TEST_SECRETS = {
 	DISCORD_APPLICATION_ID: "000000000000000000",
 	DISCORD_PUBLIC_KEY:
@@ -17,10 +17,19 @@ Object.assign(process.env, TEST_SECRETS);
 
 export default defineConfig({
 	plugins: [
-		cloudflareTest({
+		cloudflareTest(async () => ({
 			wrangler: { configPath: "./wrangler.jsonc" },
 			// テストでは本物のVectorizeやWorkers AIにつながない
 			remoteBindings: false,
-		}),
+			miniflare: {
+				// D1のスキーマは、test/setup.ts でテストの前に作る
+				bindings: { TEST_MIGRATIONS: await readD1Migrations("./migrations") },
+			},
+		})),
 	],
+	test: {
+		setupFiles: ["./test/setup.ts"],
+		// テストのファイルごとにworkerdを起動する。同時に起動しすぎると、メモリが足りずに落ちることがあるため
+		maxWorkers: 4,
+	},
 });

@@ -7,22 +7,22 @@
  */
 import { handleAdminRequest } from "./admin";
 import { handleInteraction } from "./interactions/handler";
-import { handleOpenRouterCallback } from "./oauth/openrouter";
+import {
+	handleOpenRouterCallback,
+	OPENROUTER_CALLBACK_PATH,
+} from "./oauth/openrouter";
 import { handleQueueBatch } from "./queue/consumer";
 import type { QueueMessage } from "./queue/messages";
 
 export { Gateway } from "./gateway/gateway";
 
 export default {
-	async fetch(request, env): Promise<Response> {
+	async fetch(request, env, ctx): Promise<Response> {
 		const url = new URL(request.url);
 		if (request.method === "POST" && url.pathname === "/interactions") {
-			return handleInteraction(request, env);
+			return handleInteraction(request, env, ctx);
 		}
-		if (
-			request.method === "GET" &&
-			url.pathname === "/oauth/openrouter/callback"
-		) {
+		if (request.method === "GET" && url.pathname === OPENROUTER_CALLBACK_PATH) {
 			return handleOpenRouterCallback(request, env);
 		}
 		if (url.pathname.startsWith("/admin/")) {
