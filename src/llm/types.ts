@@ -79,9 +79,17 @@ export type KeyCheckResult =
 	| { status: "workspace_not_found" }
 	| { status: "unavailable"; detail: string };
 
+/** モデルで選べる思考の深さ(effort) */
+export interface EffortSupport {
+	/** 選べる段階(浅い順)。空なら、思考の深さを選べないモデル */
+	levels: string[];
+	/** モデルの既定の段階。分からなければnull */
+	defaultLevel: string | null;
+}
+
 /** 「その他」で入力されたモデルの確認の結果。確かめられなかったときは、原因の説明を付ける */
 export type ModelCheckResult =
-	| { status: "found" }
+	| { status: "found"; efforts: EffortSupport }
 	| { status: "not_found" }
 	/** 登録したキーが無効になっている */
 	| { status: "invalid_key" }

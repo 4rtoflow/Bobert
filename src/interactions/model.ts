@@ -11,7 +11,6 @@ import {
 	findModelCandidate,
 	type ModelCandidate,
 } from "../config/models";
-import { editOriginalInteractionResponse } from "../discord/api";
 import {
 	ComponentType,
 	InteractionResponseType,
@@ -25,6 +24,7 @@ import { logEvent } from "../log";
 import {
 	availableCandidates,
 	customModelProvider,
+	type ResolvedModel,
 	resolveModel,
 	selectedCandidate,
 } from "../respond/model";
@@ -37,6 +37,8 @@ import {
 	type UserSettings,
 	updateUserSettings,
 } from "../store/users";
+import { type MessageEdit, respondLater } from "./deferred";
+import { effortSupport, openRouterEfforts } from "./effort";
 import { normalizeInput, PRINTABLE_ASCII, readTextInput } from "./input";
 
 /** /model のセレクトメニューと、「その他」のモデルIDを入力するモーダルのID */
@@ -66,39 +68,30 @@ export async function modelCommand(
 	};
 }
 
-/** メニューで選んだとき: 候補なら保存し、「その他」ならIDを入力するモーダルを開く */
+/**
+ * メニューで選んだとき: 「その他」ならIDを入力するモーダルを開き、候補なら保存する。
+ * 保存した思考の深さを新しいモデルで選べるか確かめる(モデル情報の取得が要ることがある)ので、
+ * 候補のときは、保留の応答を返してから、メニューのメッセージを結果で書き換える。
+ */
 export async function selectModel(
+	interaction: { application_id: string; token: string },
 	env: Env,
+	ctx: ExecutionContext,
 	userId: string,
 	value: string,
 ): Promise<APIInteractionResponse> {
-	const [providers, settings] = await Promise.all([
-		getRegisteredProviders(env.DB, userId),
-		getUserSettings(env.DB, userId),
-	]);
 	if (value === CUSTOM_MODEL_KEY) {
+		const settings = await getUserSettings(env.DB, userId);
 		return customModelModal(settings.customModelId);
 	}
-	const candidate = findModelCandidate(value);
-	if (!candidate) {
-		// メニューを出した後に、候補の一覧が変わった。今の候補で出し直す
-		return {
-			type: InteractionResponseType.UpdateMessage,
-			data: modelMenu(settings, providers),
-		};
-	}
-	// 「その他」で前に入力したIDは、次にモーダルを開いたときのために残しておく
-	const resolution = resolveModel(
-		{ ...settings, modelKey: candidate.key },
-		providers,
+	return respondLater(
+		ctx,
+		interaction,
+		userId,
+		"update",
+		() => applyCandidate(env, userId, value),
+		textOnly(CHECK_UNAVAILABLE),
 	);
-	if (!resolution.ok) {
-		// メニューを出した後に、資格情報が消された
-		return updateWith(setupGuidance(resolution));
-	}
-	await updateUserSettings(env.DB, userId, { modelKey: candidate.key });
-	log("model_selected", { userId, model: candidate.key });
-	return updateWith(changedMessage(candidate.label));
 }
 
 /**
@@ -114,16 +107,14 @@ export function submitCustomModel(
 	const modelId = normalizeInput(
 		readTextInput(interaction, MODEL_ID_INPUT_ID) ?? "",
 	);
-	ctx.waitUntil(
-		registerCustomModel(
-			env,
-			interaction.application_id,
-			interaction.token,
-			userId,
-			modelId,
-		),
+	return respondLater(
+		ctx,
+		interaction,
+		userId,
+		"update",
+		async () => textOnly(await verifyAndSaveCustomModel(env, userId, modelId)),
+		textOnly(CHECK_UNAVAILABLE),
 	);
-	return { type: InteractionResponseType.DeferredMessageUpdate };
 }
 
 /** メニューを出すメッセージの中身。資格情報を登録していなければ、メニューの代わりに登録を案内する */
@@ -219,27 +210,69 @@ function customModelModal(previousId: string | null): APIInteractionResponse {
 	};
 }
 
-async function registerCustomModel(
+/** メニューで選んだ候補を保存する。保存した思考の深さを新しいモデルで選べなければ、既定に戻す */
+async function applyCandidate(
 	env: Env,
-	applicationId: string,
-	interactionToken: string,
 	userId: string,
-	modelId: string,
-): Promise<void> {
-	let content: string;
-	try {
-		content = await verifyAndSaveCustomModel(env, userId, modelId);
-	} catch (error) {
-		log("custom_model_failed", { userId, error: errorName(error) });
-		content = CHECK_UNAVAILABLE;
+	value: string,
+): Promise<MessageEdit> {
+	const [providers, settings] = await Promise.all([
+		getRegisteredProviders(env.DB, userId),
+		getUserSettings(env.DB, userId),
+	]);
+	const candidate = findModelCandidate(value);
+	if (!candidate) {
+		// メニューを出した後に、候補の一覧が変わった。今の候補で出し直す
+		return modelMenu(settings, providers);
+	}
+	// 「その他」で前に入力したIDは、次にモーダルを開いたときのために残しておく
+	const next = { ...settings, modelKey: candidate.key };
+	const resolution = resolveModel(next, providers);
+	if (!resolution.ok) {
+		// メニューを出した後に、資格情報が消された
+		return textOnly(setupGuidance(resolution));
+	}
+	const resetEffort = await unsupportedEffort(
+		env,
+		userId,
+		next,
+		resolution.model,
+	);
+	await updateUserSettings(env.DB, userId, {
+		modelKey: candidate.key,
+		...(resetEffort === null ? {} : { effort: null }),
+	});
+	log("model_selected", {
+		userId,
+		model: candidate.key,
+		effortReset: resetEffort !== null,
+	});
+	return textOnly(changedMessage(candidate.label, resetEffort));
+}
+
+/**
+ * 保存した思考の深さを、新しいモデルで選べなければ、その段階を返す(既定に戻すため)。
+ * モデル情報を取得できず、確かめられなかったときは、そのままにする。
+ */
+async function unsupportedEffort(
+	env: Env,
+	userId: string,
+	settings: UserSettings,
+	model: ResolvedModel,
+): Promise<string | null> {
+	const effort = settings.effort;
+	if (effort === null) {
+		return null;
 	}
 	try {
-		await editOriginalInteractionResponse(applicationId, interactionToken, {
-			content,
-			components: [],
-		});
+		const support = await effortSupport(env, userId, settings, model);
+		return support.levels.includes(effort) ? null : effort;
 	} catch (error) {
-		log("interaction_edit_failed", { userId, error: errorName(error) });
+		log("effort_check_unavailable", {
+			userId,
+			error: error instanceof Error ? error.name : "unknown",
+		});
+		return null;
 	}
 }
 
@@ -259,20 +292,36 @@ async function verifyAndSaveCustomModel(
 		return notFound;
 	}
 	const provider = customModelProvider(modelId);
-	const providers = await getRegisteredProviders(env.DB, userId);
+	const [providers, settings] = await Promise.all([
+		getRegisteredProviders(env.DB, userId),
+		getUserSettings(env.DB, userId),
+	]);
 	if (!providers.has(provider)) {
 		return setupGuidance({ ok: false, missing: provider, label: modelId });
 	}
 
 	const check = await checkCustomModel(env, userId, provider, modelId);
 	switch (check.status) {
-		case "found":
+		case "found": {
+			// 保存した思考の深さを、このモデルで選べなければ、既定に戻す
+			const resetEffort =
+				settings.effort !== null &&
+				!check.efforts.levels.includes(settings.effort)
+					? settings.effort
+					: null;
 			await updateUserSettings(env.DB, userId, {
 				modelKey: CUSTOM_MODEL_KEY,
 				customModelId: modelId,
+				...(resetEffort === null ? {} : { effort: null }),
 			});
-			log("custom_model_selected", { userId, provider, model: modelId });
-			return changedMessage(modelId);
+			log("custom_model_selected", {
+				userId,
+				provider,
+				model: modelId,
+				effortReset: resetEffort !== null,
+			});
+			return changedMessage(modelId, resetEffort);
+		}
 		case "not_found":
 			log("custom_model_not_found", { userId, provider });
 			return notFound;
@@ -303,28 +352,26 @@ async function checkCustomModel(
 			: checkAnthropicModel(credential, modelId);
 	}
 	try {
-		return (await findOpenRouterModel(modelId)) === null
+		const info = await findOpenRouterModel(modelId);
+		return info === null
 			? { status: "not_found" }
-			: { status: "found" };
+			: { status: "found", efforts: openRouterEfforts(info) };
 	} catch (error) {
 		return { status: "unavailable", detail: describeError(error) };
 	}
 }
 
-function changedMessage(label: string): string {
-	return `使うモデルを「${label}」に変えました。`;
+/** モデルを変えたときの知らせ。思考の深さを既定に戻したときは、そのことも書く */
+function changedMessage(label: string, resetEffort: string | null): string {
+	const changed = `使うモデルを「${label}」に変えました。`;
+	return resetEffort === null
+		? changed
+		: `${changed}このモデルでは思考の深さ「${resetEffort}」を選べないため、モデルの既定に戻しました。`;
 }
 
-/** メニューを出したメッセージを、文だけのメッセージに書き換える */
-function updateWith(content: string): APIInteractionResponse {
-	return {
-		type: InteractionResponseType.UpdateMessage,
-		data: { content, components: [] },
-	};
-}
-
-function errorName(error: unknown): string {
-	return error instanceof Error ? error.name : "unknown";
+/** 文だけのメッセージにする(メニューを消す) */
+function textOnly(content: string): MessageEdit {
+	return { content, components: [] };
 }
 
 function log(event: string, detail: Record<string, unknown>): void {

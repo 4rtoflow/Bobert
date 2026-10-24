@@ -10,18 +10,14 @@ import {
 } from "../src/discord/constants";
 import { describeCandidate } from "../src/interactions/model";
 import { clearModelInfoCache } from "../src/llm/model-info";
+import { getUserSettings, updateUserSettings } from "../src/store/users";
 import {
-	getUserSettings,
-	type Provider,
-	saveCredential,
-	updateUserSettings,
-} from "../src/store/users";
-import { ALICE } from "./fixtures";
-import {
-	type FetchCall,
+	editedMessage,
 	guildInteraction,
 	mockFetch,
+	mockModelApis,
 	sendInteraction,
+	userFactory,
 } from "./helpers";
 
 afterEach(() => {
@@ -29,19 +25,8 @@ afterEach(() => {
 	clearModelInfoCache();
 });
 
-let nextUserId = 300;
-
 /** 資格情報を登録した、新しいユーザー(テストごとに別の人にする) */
-async function userWith(...providers: Provider[]): Promise<APIUser> {
-	const user = { ...ALICE, id: String(nextUserId++) };
-	for (const provider of providers) {
-		await saveCredential(env, user.id, provider, {
-			apiKey: `key-${provider}`,
-			workspaceId: null,
-		});
-	}
-	return user;
-}
+const userWith = userFactory(300);
 
 function modelCommand(user: APIUser) {
 	return guildInteraction(
@@ -85,34 +70,6 @@ function submitModelId(user: APIUser, modelId: string) {
 		},
 		user,
 	);
-}
-
-/** OpenRouterのモデル一覧と、Discordへの書き換えに応える偽物 */
-function mockModelApis(
-	models: { id: string; inputModalities: string[] }[],
-	anthropic: (call: FetchCall) => Response = () =>
-		new Response(null, { status: 500 }),
-): FetchCall[] {
-	return mockFetch((call) => {
-		if (call.url.hostname === "openrouter.ai") {
-			return Response.json({
-				data: models.map((model) => ({
-					id: model.id,
-					architecture: { input_modalities: model.inputModalities },
-				})),
-			});
-		}
-		if (call.url.hostname === "api.anthropic.com") {
-			return anthropic(call);
-		}
-		return Response.json({});
-	});
-}
-
-/** 保留にした応答の書き換え(メニューのメッセージの新しい中身) */
-function edited(calls: FetchCall[]) {
-	const edit = calls.find((call) => call.url.hostname === "discord.com");
-	return edit?.body as { content?: string; components?: unknown[] } | undefined;
 }
 
 describe("/model", () => {
@@ -202,31 +159,92 @@ describe("/model", () => {
 		}
 	});
 
-	it("メニューで選んだモデルを保存し、メッセージを結果に書き換える", async () => {
+	it("メニューで選んだモデルを保存し、メニューのメッセージを結果に書き換える", async () => {
 		const user = await userWith("openrouter");
+		const calls = mockModelApis([]);
 
 		const body = await sendInteraction(select(user, "gpt-6-luna"));
 
+		// 思考の深さを確かめることがあるので、まず保留の応答を返す
 		expect(body).toEqual({
-			type: InteractionResponseType.UpdateMessage,
-			data: {
-				content: "使うモデルを「GPT-6 Luna」に変えました。",
-				components: [],
-			},
+			type: InteractionResponseType.DeferredMessageUpdate,
+		});
+		expect(editedMessage(calls)).toEqual({
+			content: "使うモデルを「GPT-6 Luna」に変えました。",
+			components: [],
 		});
 		expect((await getUserSettings(env.DB, user.id)).modelKey).toBe(
 			"gpt-6-luna",
+		);
+		// 思考の深さを設定していなければ、モデル情報は取得しない
+		expect(calls.some((call) => call.url.hostname === "openrouter.ai")).toBe(
+			false,
 		);
 	});
 
 	it("登録した資格情報で使えないモデルなら保存せず、必要な登録を案内する", async () => {
 		const user = await userWith("anthropic");
+		const calls = mockModelApis([]);
 
-		const body = await sendInteraction(select(user, "gpt-6-luna"));
+		await sendInteraction(select(user, "gpt-6-luna"));
 
-		expect(body.type).toBe(InteractionResponseType.UpdateMessage);
-		expect(body.data.content).toContain("OpenRouterとの連携が必要");
+		expect(editedMessage(calls)?.content).toContain("OpenRouterとの連携が必要");
 		expect((await getUserSettings(env.DB, user.id)).modelKey).toBeNull();
+	});
+
+	it("保存した思考の深さを新しいモデルで選べなければ、モデルの既定に戻す", async () => {
+		const user = await userWith("openrouter");
+		await updateUserSettings(env.DB, user.id, { effort: "medium" });
+		const calls = mockModelApis([
+			{
+				id: "z-ai/glm-5.3",
+				efforts: ["max", "high", "low"],
+				defaultEffort: "max",
+			},
+		]);
+
+		await sendInteraction(select(user, "glm-5.3"));
+
+		const settings = await getUserSettings(env.DB, user.id);
+		expect(settings.modelKey).toBe("glm-5.3");
+		expect(settings.effort).toBeNull();
+		expect(editedMessage(calls)?.content).toBe(
+			"使うモデルを「GLM 5.3」に変えました。このモデルでは思考の深さ「medium」を選べないため、モデルの既定に戻しました。",
+		);
+	});
+
+	it("保存した思考の深さを新しいモデルでも選べるなら、そのまま残す", async () => {
+		const user = await userWith("openrouter");
+		await updateUserSettings(env.DB, user.id, { effort: "high" });
+		const calls = mockModelApis([
+			{
+				id: "z-ai/glm-5.3",
+				efforts: ["max", "high", "low"],
+				defaultEffort: "max",
+			},
+		]);
+
+		await sendInteraction(select(user, "glm-5.3"));
+
+		expect((await getUserSettings(env.DB, user.id)).effort).toBe("high");
+		expect(editedMessage(calls)?.content).toBe(
+			"使うモデルを「GLM 5.3」に変えました。",
+		);
+	});
+
+	it("Claudeは low〜max を選べるので、Anthropicで直接呼ぶならモデル情報を取得せずに確かめる", async () => {
+		const user = await userWith("anthropic");
+		await updateUserSettings(env.DB, user.id, { effort: "xhigh" });
+		const calls = mockModelApis([]);
+
+		await sendInteraction(select(user, "claude-opus-5.5"));
+
+		const settings = await getUserSettings(env.DB, user.id);
+		expect(settings.modelKey).toBe("claude-opus-5.5");
+		expect(settings.effort).toBe("xhigh");
+		expect(calls.some((call) => call.url.hostname === "openrouter.ai")).toBe(
+			false,
+		);
 	});
 
 	it("「その他」を選ぶと、前に入力したIDを入れたモーダルを開く", async () => {
@@ -272,7 +290,7 @@ describe("/model の「その他」", () => {
 		expect(edit?.url.pathname).toBe(
 			`/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/interaction-token/messages/@original`,
 		);
-		expect(edited(calls)).toEqual({
+		expect(editedMessage(calls)).toEqual({
 			content: "使うモデルを「openai/gpt-6.1-sol」に変えました。",
 			components: [],
 		});
@@ -287,7 +305,7 @@ describe("/model の「その他」", () => {
 		await sendInteraction(submitModelId(user, "openai/gpt-9"));
 
 		expect((await getUserSettings(env.DB, user.id)).modelKey).toBeNull();
-		expect(edited(calls)?.content).toBe(
+		expect(editedMessage(calls)?.content).toBe(
 			"モデル「openai/gpt-9」が見つかりませんでした。IDを確かめて、もう一度入力してください。",
 		);
 	});
@@ -303,7 +321,7 @@ describe("/model の「その他」", () => {
 		await sendInteraction(submitModelId(user, "openai/gpt-6.1-sol"));
 
 		expect((await getUserSettings(env.DB, user.id)).modelKey).toBeNull();
-		expect(edited(calls)?.content).toContain("確かめられませんでした");
+		expect(editedMessage(calls)?.content).toContain("確かめられませんでした");
 	});
 
 	it("OpenRouterのモデル一覧は、取得したらしばらく使い回す", async () => {
@@ -349,7 +367,7 @@ describe("/model の「その他」", () => {
 		expect((await getUserSettings(env.DB, user.id)).customModelId).toBe(
 			"claude-sonnet-4-6",
 		);
-		expect(edited(calls)?.content).toBe(
+		expect(editedMessage(calls)?.content).toBe(
 			"使うモデルを「claude-sonnet-4-6」に変えました。",
 		);
 	});
@@ -369,7 +387,7 @@ describe("/model の「その他」", () => {
 		await sendInteraction(submitModelId(user, "claude-unknown-9"));
 
 		expect((await getUserSettings(env.DB, user.id)).modelKey).toBeNull();
-		expect(edited(calls)?.content).toContain("見つかりませんでした");
+		expect(editedMessage(calls)?.content).toContain("見つかりませんでした");
 	});
 
 	it("claude-で始まるIDでも、Anthropicのキーがなければ確かめずに登録を案内する", async () => {
@@ -381,6 +399,53 @@ describe("/model の「その他」", () => {
 		expect(
 			calls.some((call) => call.url.hostname === "api.anthropic.com"),
 		).toBe(false);
-		expect(edited(calls)?.content).toContain("AnthropicのAPIキーの登録が必要");
+		expect(editedMessage(calls)?.content).toContain(
+			"AnthropicのAPIキーの登録が必要",
+		);
+	});
+
+	it("保存した思考の深さをそのモデルで選べなければ、モデルの既定に戻す", async () => {
+		const user = await userWith("openrouter");
+		await updateUserSettings(env.DB, user.id, { effort: "xhigh" });
+		const calls = mockModelApis([
+			{ id: "z-ai/glm-5.3", efforts: ["max", "high", "low"] },
+		]);
+
+		await sendInteraction(submitModelId(user, "z-ai/glm-5.3"));
+
+		const settings = await getUserSettings(env.DB, user.id);
+		expect(settings.customModelId).toBe("z-ai/glm-5.3");
+		expect(settings.effort).toBeNull();
+		expect(editedMessage(calls)?.content).toContain(
+			"このモデルでは思考の深さ「xhigh」を選べないため、モデルの既定に戻しました。",
+		);
+	});
+
+	it("Claudeで選べる段階は、Anthropicのモデル情報から確かめる", async () => {
+		const user = await userWith("anthropic");
+		await updateUserSettings(env.DB, user.id, { effort: "high" });
+		const calls = mockModelApis([], () =>
+			Response.json({
+				type: "model",
+				id: "claude-haiku-4-5",
+				display_name: "Claude Haiku 4.5",
+				created_at: "2025-10-01T00:00:00Z",
+				capabilities: {
+					effort: {
+						supported: false,
+						low: { supported: false },
+						medium: { supported: false },
+						high: { supported: false },
+						xhigh: null,
+						max: { supported: false },
+					},
+				},
+			}),
+		);
+
+		await sendInteraction(submitModelId(user, "claude-haiku-4-5"));
+
+		expect((await getUserSettings(env.DB, user.id)).effort).toBeNull();
+		expect(editedMessage(calls)?.content).toContain("「high」を選べないため");
 	});
 });
