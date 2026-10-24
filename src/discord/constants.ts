@@ -91,6 +91,7 @@ export const ButtonStyle = {
 
 export const TextInputStyle = {
 	Short: 1 as DiscordTextInputStyle.Short,
+	Paragraph: 2 as DiscordTextInputStyle.Paragraph,
 } as const;
 
 export const ApplicationCommandType = {

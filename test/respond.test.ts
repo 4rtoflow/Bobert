@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearModelInfoCache } from "../src/llm/model-info";
 import type { RespondJob } from "../src/queue/messages";
 import { handleRespondJob } from "../src/respond/handler";
+import { COMMON_SYSTEM_PROMPT } from "../src/respond/prompt";
 import { saveCredential, updateUserSettings } from "../src/store/users";
 import {
 	ALICE,
@@ -250,6 +251,33 @@ describe("メンションと返信への応答", () => {
 			"wrkspc_01TEST",
 		);
 		expect(posted(calls)[0]?.content).toBe("こんにちは!");
+	});
+
+	it("自分用の指示を、共通の指示の後ろに並べてAIに渡す", async () => {
+		const user = { ...ALICE, id: "116" };
+		await saveCredential(env, user.id, "anthropic", {
+			apiKey: "sk-ant-test",
+			workspaceId: null,
+		});
+		await updateUserSettings(env.DB, user.id, {
+			customPrompt: "敬語で答えて",
+		});
+		const trigger = discordMessage("5070", user, `<@${BOT.id}> こんにちは`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([trigger], () => anthropicStream("こんにちは。"));
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const request = calls.find(
+			(call) => call.url.hostname === "api.anthropic.com",
+		);
+		expect(request?.body).toMatchObject({
+			system: [
+				{ type: "text", text: COMMON_SYSTEM_PROMPT },
+				{ type: "text", text: "このユーザーからの指示:\n敬語で答えて" },
+			],
+		});
 	});
 
 	it("長い返答は分けて投稿し、2通目からは前の返信につなげる", async () => {

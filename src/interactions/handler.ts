@@ -17,6 +17,7 @@ import {
 	selectModel,
 	submitCustomModel,
 } from "./model";
+import { PROMPT_MODAL_ID, promptCommand, submitPrompt } from "./prompt";
 import {
 	anthropicKeyModal,
 	SETUP_ANTHROPIC_ID,
@@ -30,7 +31,7 @@ import { verifyDiscordRequest } from "./verify";
  * 最初の応答は3秒以内に返す必要がある。時間のかかる処理は、保留の応答を返してから続ける。
  *
  * これから実装すること(仕様: docs/spec/behavior.md「スラッシュコマンド」):
- * /feat、/prompt、/settings、/compact、/help と、
+ * /feat、/settings、/compact、/help と、
  * 右クリックメニューの「Bobertに聞く」
  */
 export async function handleInteraction(
@@ -73,6 +74,9 @@ async function route(
 			if (interaction.data.name === "effort") {
 				return effortCommand(interaction, env, ctx, user.id);
 			}
+			if (interaction.data.name === "prompt") {
+				return promptCommand(env, user.id);
+			}
 			if (interaction.data.name === "delete") {
 				return deleteCommand();
 			}
@@ -100,6 +104,9 @@ async function route(
 			}
 			if (interaction.data.custom_id === MODEL_CUSTOM_ID) {
 				return submitCustomModel(interaction, env, ctx, user.id);
+			}
+			if (interaction.data.custom_id === PROMPT_MODAL_ID) {
+				return submitPrompt(interaction, env, user.id);
 			}
 			break;
 	}
