@@ -29,6 +29,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	},
 	{
 		...GUILD_ONLY,
+		name: "effort",
+		description: "AIの思考の深さ(effort)の変更",
+	},
+	{
+		...GUILD_ONLY,
 		name: "delete",
 		description: "登録したキーと設定の削除",
 	},

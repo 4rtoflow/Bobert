@@ -6,6 +6,7 @@ import { env } from "cloudflare:workers";
 import type { APIUser } from "discord-api-types/v10";
 import { vi } from "vitest";
 import { handleInteraction } from "../src/interactions/handler";
+import { type Provider, saveCredential } from "../src/store/users";
 import { ALICE } from "./fixtures";
 
 // テスト専用の秘密鍵(本物の秘密ではない)。
@@ -84,6 +85,75 @@ export async function sendInteraction(payload: unknown) {
 	await waitOnExecutionContext(ctx);
 	// biome-ignore lint/suspicious/noExplicitAny: 応答の形はテストの中で確かめる
 	return (await response.json()) as any;
+}
+
+/**
+ * 資格情報を登録したユーザーを作る関数。呼ぶたびに別の人にする(IDはfirstIdから順に使う)。
+ * テストのファイルごとに、ほかのファイルと重ならないfirstIdを使う。
+ */
+export function userFactory(firstId: number) {
+	let nextId = firstId;
+	return async (...providers: Provider[]): Promise<APIUser> => {
+		const user = { ...ALICE, id: String(nextId++) };
+		for (const provider of providers) {
+			await saveCredential(env, user.id, provider, {
+				apiKey: `key-${provider}`,
+				workspaceId: null,
+			});
+		}
+		return user;
+	};
+}
+
+/** OpenRouterのモデル一覧に載せるモデル */
+export interface ListedModel {
+	id: string;
+	inputModalities?: string[];
+	/** 選べる思考の深さ */
+	efforts?: string[];
+	defaultEffort?: string;
+}
+
+/** OpenRouterのモデル一覧と、AnthropicのAPI、Discordへの書き換えに応える偽物 */
+export function mockModelApis(
+	models: ListedModel[],
+	anthropic: (call: FetchCall) => Response = () =>
+		new Response(null, { status: 500 }),
+): FetchCall[] {
+	return mockFetch((call) => {
+		if (call.url.hostname === "openrouter.ai") {
+			return Response.json({
+				data: models.map((model) => ({
+					id: model.id,
+					architecture: { input_modalities: model.inputModalities ?? ["text"] },
+					...(model.efforts
+						? {
+								reasoning: {
+									supported_efforts: model.efforts,
+									default_effort: model.defaultEffort,
+								},
+							}
+						: {}),
+				})),
+			});
+		}
+		if (call.url.hostname === "api.anthropic.com") {
+			return anthropic(call);
+		}
+		return Response.json({});
+	});
+}
+
+/** 保留にした応答の書き換え(Discordに送った、メッセージの新しい中身) */
+export function editedMessage(calls: FetchCall[]) {
+	const edit = calls.find((call) => call.url.hostname === "discord.com");
+	return edit?.body as
+		| {
+				content?: string;
+				// biome-ignore lint/suspicious/noExplicitAny: メッセージの部品の形はテストの中で確かめる
+				components?: any[];
+		  }
+		| undefined;
 }
 
 /** 偽のfetchが受け取ったリクエスト */
