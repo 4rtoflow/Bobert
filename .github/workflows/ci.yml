@@ -20,6 +20,16 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # 見えない文字(ゼロ幅スペースなど)が、ソースに直接書かれていないか確かめる。
+      # 正規表現などで使うときは、エスケープで書く(リントでは文字列や正規表現の中まで見ないため)
+      - name: Check for invisible characters
+        env:
+          LC_ALL: C.UTF-8
+        run: |
+          if grep -rnP '[\x{200B}-\x{200D}\x{2060}\x{FEFF}]' src test; then
+            echo "見えない文字が直接書かれています。エスケープで書いてください。"
+            exit 1
+          fi
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test

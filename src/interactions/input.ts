@@ -26,5 +26,5 @@ export function readTextInput(
  * コピーしたときや、日本語入力のままで入力したときに混ざることがあるため。
  */
 export function normalizeInput(input: string): string {
-	return input.normalize("NFKC").replace(/[\s​-‍⁠﻿]/g, "");
+	return input.normalize("NFKC").replace(/[\s\u200b-\u200d\u2060\ufeff]/g, "");
 }
