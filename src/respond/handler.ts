@@ -6,6 +6,7 @@ import {
 	triggerTyping,
 } from "../discord/api";
 import { chatWithAnthropic } from "../llm/anthropic";
+import { findOpenRouterModel } from "../llm/model-info";
 import { chatWithOpenRouter } from "../llm/openrouter";
 import { type ChatRequest, LlmError } from "../llm/types";
 import { logEvent } from "../log";
@@ -15,13 +16,14 @@ import {
 	getRegisteredProviders,
 	getUserSettings,
 	loadCredential,
+	type UserSettings,
 } from "../store/users";
 import {
 	fetchReplyChain,
 	type MessageFetcher,
 	toConversation,
 } from "./conversation";
-import { resolveModel } from "./model";
+import { type ResolvedModel, resolveModel, usesCustomModel } from "./model";
 import { buildSystemPrompt } from "./prompt";
 import { describeLlmError, formatReply, setupGuidance } from "./replies";
 import { splitMessage } from "./split";
@@ -97,9 +99,16 @@ async function composeReply(
 	}
 
 	const chain = await fetchReplyChain(trigger, fetchMessage);
+	// 添付がなければ、画像を読めるかは確かめない(「その他」のモデルでは、モデル情報の取得が要るため)
+	const hasAttachments = chain.some(
+		(message) => message.attachments.length > 0,
+	);
 	const conversation = toConversation(chain, {
 		botUserId: env.DISCORD_APPLICATION_ID,
-		includeImages: model.supportsImages && settings.featImageInput,
+		includeImages:
+			hasAttachments &&
+			settings.featImageInput &&
+			(await readsImages(model, settings)),
 	});
 	const request: ChatRequest = {
 		model: model.modelId,
@@ -143,6 +152,27 @@ async function composeReply(
 			durationMs: Date.now() - startedAt,
 		});
 		return describeLlmError(error, model);
+	}
+}
+
+/**
+ * モデルが画像を読めるか。「その他」で入力したOpenRouterのモデルは、モデル情報で確かめる。
+ * モデル情報を取得できなければ、画像は渡さない。
+ */
+async function readsImages(
+	model: ResolvedModel,
+	settings: UserSettings,
+): Promise<boolean> {
+	if (!usesCustomModel(settings) || model.provider !== "openrouter") {
+		return model.supportsImages;
+	}
+	try {
+		return (await findOpenRouterModel(model.modelId))?.supportsImages ?? false;
+	} catch (error) {
+		log("model_info_unavailable", {
+			error: error instanceof Error ? error.message : "unknown",
+		});
+		return false;
 	}
 }
 

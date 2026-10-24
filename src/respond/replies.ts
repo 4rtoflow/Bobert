@@ -1,4 +1,5 @@
 import type { ChatResult, LlmError } from "../llm/types";
+import type { Provider } from "../store/users";
 import type { ModelResolution, ResolvedModel } from "./model";
 
 /** キーを登録していない人などへの、登録方法の案内(仕様: docs/spec/architecture.md「決定事項」) */
@@ -23,9 +24,7 @@ export function describeLlmError(
 	const anthropic = model.provider === "anthropic";
 	switch (error.kind) {
 		case "invalid_key":
-			return anthropic
-				? "AnthropicのAPIキーが無効です。`/setup` から登録し直してください。"
-				: "OpenRouterとの連携が無効になっています。`/setup` から連携し直してください。";
+			return invalidKeyMessage(model.provider);
 		case "insufficient_credit":
 			return anthropic
 				? "Anthropicの残高が不足しています。Claude Consoleでクレジットを追加してください。"
@@ -46,6 +45,13 @@ export function describeLlmError(
 		case "unknown":
 			return "AIの呼び出しでエラーが起きました。少し待ってから、もう一度試してください。";
 	}
+}
+
+/** 登録したキー(OpenRouterとの連携)が無効になっているときの案内 */
+export function invalidKeyMessage(provider: Provider): string {
+	return provider === "anthropic"
+		? "AnthropicのAPIキーが無効です。`/setup` から登録し直してください。"
+		: "OpenRouterとの連携が無効になっています。`/setup` から連携し直してください。";
 }
 
 /** AIの返答に、必要な注記を添えて投稿する本文にする */

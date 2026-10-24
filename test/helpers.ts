@@ -1,4 +1,12 @@
+import {
+	createExecutionContext,
+	waitOnExecutionContext,
+} from "cloudflare:test";
+import { env } from "cloudflare:workers";
+import type { APIUser } from "discord-api-types/v10";
 import { vi } from "vitest";
+import { handleInteraction } from "../src/interactions/handler";
+import { ALICE } from "./fixtures";
 
 // テスト専用の秘密鍵(本物の秘密ではない)。
 // 対になる公開鍵は vitest.config.ts の DISCORD_PUBLIC_KEY に入れてある。
@@ -36,6 +44,46 @@ export async function signedInteractionRequest(
 		// 署名の後に本文を書き換えて、改ざんされたリクエストを作る
 		body: options.tamper ? `${body} ` : body,
 	});
+}
+
+/** サーバーの中で、userが起こしたInteraction */
+export function guildInteraction(
+	type: number,
+	data: unknown,
+	user: APIUser = ALICE,
+) {
+	return {
+		id: "1",
+		application_id: env.DISCORD_APPLICATION_ID,
+		type,
+		token: "interaction-token",
+		version: 1,
+		guild_id: "900",
+		channel_id: "800",
+		member: {
+			user,
+			roles: [],
+			joined_at: "2026-10-01T00:00:00.000Z",
+			deaf: false,
+			mute: false,
+			flags: 0,
+			permissions: "0",
+		},
+		data,
+	};
+}
+
+/** Interactionを送り、応答と、裏で続けた処理が終わるのを待つ */
+export async function sendInteraction(payload: unknown) {
+	const ctx = createExecutionContext();
+	const response = await handleInteraction(
+		await signedInteractionRequest(payload),
+		env,
+		ctx,
+	);
+	await waitOnExecutionContext(ctx);
+	// biome-ignore lint/suspicious/noExplicitAny: 応答の形はテストの中で確かめる
+	return (await response.json()) as any;
 }
 
 /** 偽のfetchが受け取ったリクエスト */

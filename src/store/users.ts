@@ -68,6 +68,48 @@ export async function getUserSettings(
 	};
 }
 
+/** 設定の項目と、usersの列 */
+const SETTING_COLUMNS = {
+	modelKey: "model_key",
+	customModelId: "custom_model_id",
+	effort: "effort",
+	customPrompt: "custom_prompt",
+	featWebSearch: "feat_web_search",
+	featUsageDisplay: "feat_usage_display",
+	featImageInput: "feat_image_input",
+} as const satisfies Record<keyof UserSettings, string>;
+
+/** 設定を保存する。渡した項目だけを変える。usersの行がなければ作り、ほかの項目は既定のままにする */
+export async function updateUserSettings(
+	db: D1Database,
+	userId: string,
+	changes: Partial<UserSettings>,
+	now = Date.now(),
+): Promise<void> {
+	const keys = (Object.keys(SETTING_COLUMNS) as (keyof UserSettings)[]).filter(
+		(key) => changes[key] !== undefined,
+	);
+	if (keys.length === 0) {
+		return;
+	}
+	// 列の名前はSETTING_COLUMNSのものだけを使う(入力をSQLに入れない)
+	const columns = keys.map((key) => SETTING_COLUMNS[key]);
+	const values = keys.map((key) => {
+		const value = changes[key];
+		return typeof value === "boolean" ? Number(value) : (value ?? null);
+	});
+	await db
+		.prepare(
+			`INSERT INTO users (user_id, ${columns.join(", ")}, created_at, updated_at)
+			VALUES (?, ${columns.map(() => "?").join(", ")}, ?, ?)
+			ON CONFLICT (user_id) DO UPDATE SET
+				${columns.map((column) => `${column} = excluded.${column}`).join(", ")},
+				updated_at = excluded.updated_at`,
+		)
+		.bind(userId, ...values, now, now)
+		.run();
+}
+
 /** 資格情報を登録済みのプロバイダ */
 export async function getRegisteredProviders(
 	db: D1Database,
