@@ -16,6 +16,7 @@ import type { KeyCheckResult } from "../llm/types";
 import { logEvent } from "../log";
 import { createOpenRouterAuthLink } from "../oauth/openrouter";
 import { getRegisteredProviders, saveCredential } from "../store/users";
+import { normalizeInput, PRINTABLE_ASCII, readTextInput } from "./input";
 
 /** 「Anthropicのキーを登録」ボタンと、キーを入力するモーダルのID */
 export const SETUP_ANTHROPIC_ID = "setup:anthropic";
@@ -128,10 +129,10 @@ export function submitAnthropicKey(
 	ctx: ExecutionContext,
 	userId: string,
 ): APIInteractionResponse {
-	const apiKey = normalizeCredentialInput(
+	const apiKey = normalizeInput(
 		readTextInput(interaction, API_KEY_INPUT_ID) ?? "",
 	);
-	const workspaceId = normalizeCredentialInput(
+	const workspaceId = normalizeInput(
 		readTextInput(interaction, WORKSPACE_INPUT_ID) ?? "",
 	);
 	ctx.waitUntil(
@@ -221,34 +222,6 @@ async function verifyAndSave(
 			});
 			return "キーを確かめられませんでした。少し待ってから、もう一度登録してください。";
 	}
-}
-
-/** モーダルで入力された値を読む */
-function readTextInput(
-	interaction: APIModalSubmitInteraction,
-	customId: string,
-): string | undefined {
-	for (const component of interaction.data.components) {
-		if (
-			component.type === ComponentType.Label &&
-			component.component.type === ComponentType.TextInput &&
-			component.component.custom_id === customId
-		) {
-			return component.component.value;
-		}
-	}
-	return undefined;
-}
-
-/** APIキーに使われる文字(空白を除く、表示できるASCII文字) */
-const PRINTABLE_ASCII = /^[\x21-\x7e]+$/;
-
-/**
- * 入力されたキーやワークスペースIDを整える。全角の英数字は半角にし、空白と見えない文字(ゼロ幅スペースなど)は取り除く。
- * コピーしたときや、日本語入力のままで入力したときに混ざることがあるため。
- */
-export function normalizeCredentialInput(input: string): string {
-	return input.normalize("NFKC").replace(/[\s\u200b-\u200d\u2060\ufeff]/g, "");
 }
 
 /**

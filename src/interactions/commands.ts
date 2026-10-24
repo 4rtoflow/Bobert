@@ -24,6 +24,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	},
 	{
 		...GUILD_ONLY,
+		name: "model",
+		description: "使うモデルの変更",
+	},
+	{
+		...GUILD_ONLY,
 		name: "delete",
 		description: "登録したキーと設定の削除",
 	},

@@ -1,4 +1,10 @@
-import { DEFAULT_MODEL_KEY, MODEL_CANDIDATES } from "../config/models";
+import {
+	CUSTOM_MODEL_KEY,
+	DEFAULT_MODEL_KEY,
+	findModelCandidate,
+	MODEL_CANDIDATES,
+	type ModelCandidate,
+} from "../config/models";
 import type { Provider, UserSettings } from "../store/users";
 
 /** 返答に使うモデルと、その呼び出し先 */
@@ -33,32 +39,9 @@ export function resolveModel(
 		return { ok: false, missing: "credentials", label: "" };
 	}
 
-	if (settings.modelKey === "custom" && settings.customModelId) {
-		// 「その他」で入力されたID。claude-で始まるものはAnthropicで直接、それ以外はOpenRouterで呼ぶ
-		const id = settings.customModelId;
-		const provider: Provider = id.startsWith("claude-")
-			? "anthropic"
-			: "openrouter";
-		if (!providers.has(provider)) {
-			return { ok: false, missing: provider, label: id };
-		}
-		// 画像に対応しているかは、Claude以外は分からないので渡さない
-		return {
-			ok: true,
-			model: {
-				provider,
-				modelId: id,
-				label: id,
-				supportsImages: provider === "anthropic",
-			},
-		};
-	}
-
-	const candidate =
-		MODEL_CANDIDATES.find((model) => model.key === settings.modelKey) ??
-		MODEL_CANDIDATES.find((model) => model.key === DEFAULT_MODEL_KEY);
-	if (!candidate) {
-		throw new Error(`Default model ${DEFAULT_MODEL_KEY} is not a candidate`);
+	const candidate = selectedCandidate(settings);
+	if (candidate === null) {
+		return resolveCustomModel(settings.customModelId ?? "", providers);
 	}
 	const base = {
 		label: candidate.label,
@@ -81,4 +64,67 @@ export function resolveModel(
 		};
 	}
 	return { ok: false, missing: "openrouter", label: candidate.label };
+}
+
+/** 「その他」で入力したモデルを使っているか */
+export function usesCustomModel(settings: UserSettings): boolean {
+	return (
+		settings.modelKey === CUSTOM_MODEL_KEY && Boolean(settings.customModelId)
+	);
+}
+
+/**
+ * 本人が使う候補。「その他」で入力したモデルを使っていればnull。
+ * 候補にないモデルが設定されていたら(候補から外したときなど)、既定のモデルを使う。
+ */
+export function selectedCandidate(
+	settings: UserSettings,
+): ModelCandidate | null {
+	if (usesCustomModel(settings)) {
+		return null;
+	}
+	const candidate =
+		findModelCandidate(settings.modelKey) ??
+		findModelCandidate(DEFAULT_MODEL_KEY);
+	if (!candidate) {
+		throw new Error(`Default model ${DEFAULT_MODEL_KEY} is not a candidate`);
+	}
+	return candidate;
+}
+
+/** 登録した資格情報で使える候補。Claudeは、AnthropicのキーかOpenRouterのどちらかがあれば使える */
+export function availableCandidates(
+	providers: ReadonlySet<Provider>,
+): ModelCandidate[] {
+	return MODEL_CANDIDATES.filter(
+		(candidate) =>
+			providers.has("openrouter") ||
+			(candidate.anthropicId !== undefined && providers.has("anthropic")),
+	);
+}
+
+/** 「その他」で入力したIDの呼び出し先。claude-で始まるものはAnthropicで直接、それ以外はOpenRouterで呼ぶ */
+export function customModelProvider(modelId: string): Provider {
+	return modelId.startsWith("claude-") ? "anthropic" : "openrouter";
+}
+
+function resolveCustomModel(
+	modelId: string,
+	providers: ReadonlySet<Provider>,
+): ModelResolution {
+	const provider = customModelProvider(modelId);
+	if (!providers.has(provider)) {
+		return { ok: false, missing: provider, label: modelId };
+	}
+	// Claudeは画像を読める。ほかのモデルが読めるかはここでは分からないので、
+	// 応答の処理で、OpenRouterのモデル情報から確かめる
+	return {
+		ok: true,
+		model: {
+			provider,
+			modelId,
+			label: modelId,
+			supportsImages: provider === "anthropic",
+		},
+	};
 }

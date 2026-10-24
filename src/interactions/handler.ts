@@ -3,11 +3,19 @@ import type {
 	APIInteractionResponse,
 } from "discord-api-types/v10";
 import {
+	ComponentType,
 	InteractionResponseType,
 	InteractionType,
 	MessageFlags,
 } from "../discord/constants";
 import { confirmDelete, DELETE_CONFIRM_ID, deleteCommand } from "./delete";
+import {
+	MODEL_CUSTOM_ID,
+	MODEL_SELECT_ID,
+	modelCommand,
+	selectModel,
+	submitCustomModel,
+} from "./model";
 import {
 	anthropicKeyModal,
 	SETUP_ANTHROPIC_ID,
@@ -21,7 +29,7 @@ import { verifyDiscordRequest } from "./verify";
  * 最初の応答は3秒以内に返す必要がある。時間のかかる処理は、保留の応答を返してから続ける。
  *
  * これから実装すること(仕様: docs/spec/behavior.md「スラッシュコマンド」):
- * /model、/effort、/feat、/prompt、/settings、/compact、/help と、
+ * /effort、/feat、/prompt、/settings、/compact、/help と、
  * 右クリックメニューの「Bobertに聞く」
  */
 export async function handleInteraction(
@@ -58,6 +66,9 @@ async function route(
 			if (interaction.data.name === "setup") {
 				return setupCommand(env, origin, user);
 			}
+			if (interaction.data.name === "model") {
+				return modelCommand(env, user.id);
+			}
 			if (interaction.data.name === "delete") {
 				return deleteCommand();
 			}
@@ -66,6 +77,12 @@ async function route(
 			if (interaction.data.custom_id === SETUP_ANTHROPIC_ID) {
 				return anthropicKeyModal();
 			}
+			if (
+				interaction.data.custom_id === MODEL_SELECT_ID &&
+				interaction.data.component_type === ComponentType.StringSelect
+			) {
+				return selectModel(env, user.id, interaction.data.values[0] ?? "");
+			}
 			if (interaction.data.custom_id === DELETE_CONFIRM_ID) {
 				return confirmDelete(env, user.id);
 			}
@@ -73,6 +90,9 @@ async function route(
 		case InteractionType.ModalSubmit:
 			if (interaction.data.custom_id === SETUP_ANTHROPIC_ID) {
 				return submitAnthropicKey(interaction, env, ctx, user.id);
+			}
+			if (interaction.data.custom_id === MODEL_CUSTOM_ID) {
+				return submitCustomModel(interaction, env, ctx, user.id);
 			}
 			break;
 	}

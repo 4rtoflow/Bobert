@@ -1,7 +1,3 @@
-import {
-	createExecutionContext,
-	waitOnExecutionContext,
-} from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,54 +6,22 @@ import {
 	InteractionType,
 	MessageFlags,
 } from "../src/discord/constants";
-import { handleInteraction } from "../src/interactions/handler";
 import {
 	getRegisteredProviders,
 	loadCredential,
 	saveCredential,
 } from "../src/store/users";
 import { ALICE } from "./fixtures";
-import { type FetchCall, mockFetch, signedInteractionRequest } from "./helpers";
+import {
+	type FetchCall,
+	guildInteraction as interaction,
+	mockFetch,
+	sendInteraction as send,
+} from "./helpers";
 
 afterEach(() => {
 	vi.restoreAllMocks();
 });
-
-/** サーバーの中で、userが起こしたInteraction */
-function interaction(type: number, data: unknown, user = ALICE) {
-	return {
-		id: "1",
-		application_id: env.DISCORD_APPLICATION_ID,
-		type,
-		token: "interaction-token",
-		version: 1,
-		guild_id: "900",
-		channel_id: "800",
-		member: {
-			user,
-			roles: [],
-			joined_at: "2026-10-01T00:00:00.000Z",
-			deaf: false,
-			mute: false,
-			flags: 0,
-			permissions: "0",
-		},
-		data,
-	};
-}
-
-/** Interactionを送り、応答と、裏で続けた処理が終わるのを待つ */
-async function send(payload: unknown) {
-	const ctx = createExecutionContext();
-	const response = await handleInteraction(
-		await signedInteractionRequest(payload),
-		env,
-		ctx,
-	);
-	await waitOnExecutionContext(ctx);
-	// biome-ignore lint/suspicious/noExplicitAny: 応答の形はテストの中で確かめる
-	return (await response.json()) as any;
-}
 
 /** キーの登録のモーダルの送信。ワークスペースIDの欄は、空なら空文字で届く */
 function modalSubmit(apiKey: string, user = ALICE, workspaceId = "") {

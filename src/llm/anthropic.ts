@@ -6,6 +6,7 @@ import {
 	describeError,
 	type KeyCheckResult,
 	LlmError,
+	type ModelCheckResult,
 } from "./types";
 
 type Effort = NonNullable<Anthropic.OutputConfig["effort"]>;
@@ -102,6 +103,36 @@ export async function checkAnthropicKey(
 			credential.workspaceId !== null
 		) {
 			return { status: "workspace_not_found" };
+		}
+		return { status: "unavailable", detail: describeError(error) };
+	}
+}
+
+/**
+ * 「その他」で入力されたClaudeのモデルを、このキーで使えるか確かめる。
+ * 料金のかからない、モデルの情報のAPIを呼ぶ。
+ */
+export async function checkAnthropicModel(
+	credential: AnthropicCredential,
+	modelId: string,
+): Promise<ModelCheckResult> {
+	const client = createClient(credential, 1);
+	try {
+		await client.models.retrieve(modelId);
+		return { status: "found" };
+	} catch (error) {
+		// 形の正しくないIDは、404ではなく400になることがある
+		if (
+			error instanceof Anthropic.NotFoundError ||
+			error instanceof Anthropic.BadRequestError
+		) {
+			return { status: "not_found" };
+		}
+		if (
+			error instanceof Anthropic.AuthenticationError ||
+			error instanceof Anthropic.PermissionDeniedError
+		) {
+			return { status: "invalid_key" };
 		}
 		return { status: "unavailable", detail: describeError(error) };
 	}

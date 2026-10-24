@@ -25,7 +25,7 @@ Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のも�
 | `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                  |
 | `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み) |
 | `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)            |
-| `src/llm/`             | AnthropicとOpenRouterの呼び出し                                       |
+| `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                   |
 | `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態)                  |
 | `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                      |
 | `src/config/models.ts` | `/model`で選べるモデルの候補                                          |

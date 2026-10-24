@@ -199,3 +199,13 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 
 /** 既定のモデル */
 export const DEFAULT_MODEL_KEY = "claude-haiku-5.5";
+
+/** 「その他」で入力したモデルを使うときの、users.model_key の値 */
+export const CUSTOM_MODEL_KEY = "custom";
+
+/** 候補をキーで探す */
+export function findModelCandidate(
+	key: string | null,
+): ModelCandidate | undefined {
+	return MODEL_CANDIDATES.find((candidate) => candidate.key === key);
+}

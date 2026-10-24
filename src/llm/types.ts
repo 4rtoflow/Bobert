@@ -79,6 +79,14 @@ export type KeyCheckResult =
 	| { status: "workspace_not_found" }
 	| { status: "unavailable"; detail: string };
 
+/** 「その他」で入力されたモデルの確認の結果。確かめられなかったときは、原因の説明を付ける */
+export type ModelCheckResult =
+	| { status: "found" }
+	| { status: "not_found" }
+	/** 登録したキーが無効になっている */
+	| { status: "invalid_key" }
+	| { status: "unavailable"; detail: string };
+
 /**
  * 例外を、ログに残せる短い説明にする(種類、ステータス、メッセージ、原因)。
  * キーのような文字列は伏せる。会話の本文を含みうるリクエストの失敗には使わない。

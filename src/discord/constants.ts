@@ -60,6 +60,8 @@ export const InteractionResponseType = {
 		4 as DiscordInteractionResponseType.ChannelMessageWithSource,
 	DeferredChannelMessageWithSource:
 		5 as DiscordInteractionResponseType.DeferredChannelMessageWithSource,
+	DeferredMessageUpdate:
+		6 as DiscordInteractionResponseType.DeferredMessageUpdate,
 	UpdateMessage: 7 as DiscordInteractionResponseType.UpdateMessage,
 	Modal: 9 as DiscordInteractionResponseType.Modal,
 } as const;
@@ -76,6 +78,7 @@ export const MessageType = {
 export const ComponentType = {
 	ActionRow: 1 as DiscordComponentType.ActionRow,
 	Button: 2 as DiscordComponentType.Button,
+	StringSelect: 3 as DiscordComponentType.StringSelect,
 	TextInput: 4 as DiscordComponentType.TextInput,
 	Label: 18 as DiscordComponentType.Label,
 } as const;

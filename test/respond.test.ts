@@ -1,9 +1,10 @@
 import { env } from "cloudflare:workers";
-import type { APIMessage } from "discord-api-types/v10";
+import type { APIAttachment, APIMessage } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearModelInfoCache } from "../src/llm/model-info";
 import type { RespondJob } from "../src/queue/messages";
 import { handleRespondJob } from "../src/respond/handler";
-import { saveCredential } from "../src/store/users";
+import { saveCredential, updateUserSettings } from "../src/store/users";
 import {
 	ALICE,
 	BOB,
@@ -16,6 +17,7 @@ import { type FetchCall, mockFetch } from "./helpers";
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	clearModelInfoCache();
 });
 
 /** messageへの応答の仕事 */
@@ -134,6 +136,32 @@ function anthropicStream(text: string): Response {
 		{ headers: { "Content-Type": "text/event-stream" } },
 	);
 }
+
+/** OpenRouterのAPIが、textを返す */
+function openRouterChat(text: string): Response {
+	return Response.json({
+		choices: [{ message: { content: text }, finish_reason: "stop" }],
+		usage: { prompt_tokens: 10, completion_tokens: 5 },
+	});
+}
+
+/** OpenRouterのモデル一覧のAPIの応答 */
+function openRouterModels(id: string, inputModalities: string[]): Response {
+	return Response.json({
+		data: [{ id, architecture: { input_modalities: inputModalities } }],
+	});
+}
+
+const CAT_URL = "https://cdn.discordapp.com/attachments/800/1/cat.png";
+
+const CAT_IMAGE: APIAttachment = {
+	id: "1",
+	filename: "cat.png",
+	size: 1000,
+	url: CAT_URL,
+	proxy_url: CAT_URL,
+	content_type: "image/png",
+};
 
 describe("メンションと返信への応答", () => {
 	it("キーを登録していない人には、登録方法を返信する", async () => {
@@ -273,5 +301,82 @@ describe("メンションと返信への応答", () => {
 			provider: { data_collection: "deny" },
 		});
 		expect(posted(calls)[0]?.content).toContain("OpenRouterの残高が不足");
+	});
+
+	it("「その他」で選んだOpenRouterのモデルが画像を読めるなら、画像を渡す", async () => {
+		const user = { ...ALICE, id: "114" };
+		await saveCredential(env, user.id, "openrouter", {
+			apiKey: "sk-or-test",
+			workspaceId: null,
+		});
+		await updateUserSettings(env.DB, user.id, {
+			modelKey: "custom",
+			customModelId: "x-ai/grok-4.7-mini",
+		});
+		const trigger = discordMessage("5050", user, `<@${BOT.id}> これ何?`, {
+			mentions: [BOT],
+			attachments: [CAT_IMAGE],
+		});
+		const calls = mockApis([trigger], (call) =>
+			call.url.pathname === "/api/v1/models"
+				? openRouterModels("x-ai/grok-4.7-mini", ["text", "image"])
+				: openRouterChat("猫だね!"),
+		);
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const request = calls.find(
+			(call) => call.url.pathname === "/api/v1/chat/completions",
+		);
+		expect(request?.body).toMatchObject({
+			model: "x-ai/grok-4.7-mini",
+			messages: [
+				{ role: "system" },
+				{
+					role: "user",
+					content: [
+						{ type: "text", text: "Alice: @Bobert これ何?" },
+						{ type: "image_url", image_url: { url: CAT_URL } },
+					],
+				},
+			],
+		});
+		expect(posted(calls)[0]?.content).toBe("猫だね!");
+	});
+
+	it("「その他」で選んだOpenRouterのモデルが画像を読めないなら、本文だけで答えて一言添える", async () => {
+		const user = { ...ALICE, id: "115" };
+		await saveCredential(env, user.id, "openrouter", {
+			apiKey: "sk-or-test",
+			workspaceId: null,
+		});
+		await updateUserSettings(env.DB, user.id, {
+			modelKey: "custom",
+			customModelId: "z-ai/glm-5.3",
+		});
+		const trigger = discordMessage("5060", user, `<@${BOT.id}> これ何?`, {
+			mentions: [BOT],
+			attachments: [CAT_IMAGE],
+		});
+		const calls = mockApis([trigger], (call) =>
+			call.url.pathname === "/api/v1/models"
+				? openRouterModels("z-ai/glm-5.3", ["text"])
+				: openRouterChat("猫だね!"),
+		);
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const request = calls.find(
+			(call) => call.url.pathname === "/api/v1/chat/completions",
+		);
+		expect(request?.body).toMatchObject({
+			messages: [
+				{ role: "system" },
+				{ role: "user", content: "Alice: @Bobert これ何?\n[画像: cat.png]" },
+			],
+		});
+		expect(posted(calls)[0]?.content).toBe(
+			"猫だね!\n-# このモデルは画像を読めません",
+		);
 	});
 });
