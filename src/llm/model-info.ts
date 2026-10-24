@@ -1,6 +1,6 @@
 /**
  * モデル情報(OpenRouterのモデル一覧)。
- * 「その他」で入力されたモデルの存在の確認と、画像を読めるかの判断に使う。
+ * 「その他」で入力されたモデルの存在の確認、画像を読めるかの判断、選べる思考の深さに使う。
  * 一覧は大きい(数百件、約800KB)ので、取得したら、しばらく使い回す。
  */
 
@@ -14,12 +14,17 @@ export interface OpenRouterModelInfo {
 	id: string;
 	/** 画像を読めるか */
 	supportsImages: boolean;
+	/** 選べる思考の深さ(effort)。並びはOpenRouterのまま。空なら選べない */
+	efforts: string[];
+	/** 既定の思考の深さ */
+	defaultEffort: string | null;
 }
 
 interface ModelsResponse {
 	data?: {
 		id?: unknown;
 		architecture?: { input_modalities?: unknown };
+		reasoning?: { supported_efforts?: unknown; default_effort?: unknown };
 	}[];
 }
 
@@ -67,9 +72,15 @@ async function fetchModels(): Promise<Map<string, OpenRouterModelInfo>> {
 			continue;
 		}
 		const modalities = model.architecture?.input_modalities;
+		const efforts = model.reasoning?.supported_efforts;
+		const defaultEffort = model.reasoning?.default_effort;
 		models.set(model.id, {
 			id: model.id,
 			supportsImages: Array.isArray(modalities) && modalities.includes("image"),
+			efforts: Array.isArray(efforts)
+				? efforts.filter((effort) => typeof effort === "string")
+				: [],
+			defaultEffort: typeof defaultEffort === "string" ? defaultEffort : null,
 		});
 	}
 	return models;

@@ -11,13 +11,18 @@ import {
 
 type Effort = NonNullable<Anthropic.OutputConfig["effort"]>;
 
-const EFFORTS: readonly string[] = [
+/** Claudeで選べる思考の深さ(浅い順)。仕様: docs/spec/llm-cost.md「/effortの選択肢」 */
+export const CLAUDE_EFFORTS = [
 	"low",
 	"medium",
 	"high",
 	"xhigh",
 	"max",
-] satisfies Effort[];
+] as const satisfies readonly Effort[];
+
+function isClaudeEffort(value: string): value is Effort {
+	return (CLAUDE_EFFORTS as readonly string[]).includes(value);
+}
 
 /** ユーザーのAnthropicの資格情報 */
 export interface AnthropicCredential {
@@ -47,8 +52,8 @@ export async function chatWithAnthropic(
 				cache_control: { type: "ephemeral" },
 				system: request.system.map((text) => ({ type: "text", text })),
 				messages: request.messages.map(toMessageParam),
-				...(request.effort !== null && EFFORTS.includes(request.effort)
-					? { output_config: { effort: request.effort as Effort } }
+				...(request.effort !== null && isClaudeEffort(request.effort)
+					? { output_config: { effort: request.effort } }
 					: {}),
 			})
 			.finalMessage();
@@ -110,7 +115,7 @@ export async function checkAnthropicKey(
 
 /**
  * 「その他」で入力されたClaudeのモデルを、このキーで使えるか確かめる。
- * 料金のかからない、モデルの情報のAPIを呼ぶ。
+ * 料金のかからない、モデルの情報のAPIを呼ぶ。選べる思考の深さも、モデルの情報から取り出す。
  */
 export async function checkAnthropicModel(
 	credential: AnthropicCredential,
@@ -118,8 +123,15 @@ export async function checkAnthropicModel(
 ): Promise<ModelCheckResult> {
 	const client = createClient(credential, 1);
 	try {
-		await client.models.retrieve(modelId);
-		return { status: "found" };
+		const model = await client.models.retrieve(modelId);
+		// 既定の段階は、モデルの情報に含まれない
+		return {
+			status: "found",
+			efforts: {
+				levels: claudeEfforts(model.capabilities),
+				defaultLevel: null,
+			},
+		};
 	} catch (error) {
 		// 形の正しくないIDは、404ではなく400になることがある
 		if (
@@ -136,6 +148,23 @@ export async function checkAnthropicModel(
 		}
 		return { status: "unavailable", detail: describeError(error) };
 	}
+}
+
+/**
+ * モデルの情報から、選べる思考の深さを取り出す。古いモデルには、選べない段階がある。
+ * 情報がなければ(応答に含まれないことがある)、Claudeの段階をすべて選べることにする。
+ */
+function claudeEfforts(
+	capabilities: Anthropic.ModelCapabilities | null | undefined,
+): string[] {
+	const effort = capabilities?.effort;
+	if (!effort) {
+		return [...CLAUDE_EFFORTS];
+	}
+	if (!effort.supported) {
+		return [];
+	}
+	return CLAUDE_EFFORTS.filter((level) => effort[level]?.supported === true);
 }
 
 /**

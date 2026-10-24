@@ -9,6 +9,7 @@ import {
 	MessageFlags,
 } from "../discord/constants";
 import { confirmDelete, DELETE_CONFIRM_ID, deleteCommand } from "./delete";
+import { EFFORT_SELECT_ID, effortCommand, selectEffort } from "./effort";
 import {
 	MODEL_CUSTOM_ID,
 	MODEL_SELECT_ID,
@@ -29,7 +30,7 @@ import { verifyDiscordRequest } from "./verify";
  * 最初の応答は3秒以内に返す必要がある。時間のかかる処理は、保留の応答を返してから続ける。
  *
  * これから実装すること(仕様: docs/spec/behavior.md「スラッシュコマンド」):
- * /effort、/feat、/prompt、/settings、/compact、/help と、
+ * /feat、/prompt、/settings、/compact、/help と、
  * 右クリックメニューの「Bobertに聞く」
  */
 export async function handleInteraction(
@@ -69,6 +70,9 @@ async function route(
 			if (interaction.data.name === "model") {
 				return modelCommand(env, user.id);
 			}
+			if (interaction.data.name === "effort") {
+				return effortCommand(interaction, env, ctx, user.id);
+			}
 			if (interaction.data.name === "delete") {
 				return deleteCommand();
 			}
@@ -77,11 +81,14 @@ async function route(
 			if (interaction.data.custom_id === SETUP_ANTHROPIC_ID) {
 				return anthropicKeyModal();
 			}
-			if (
-				interaction.data.custom_id === MODEL_SELECT_ID &&
-				interaction.data.component_type === ComponentType.StringSelect
-			) {
-				return selectModel(env, user.id, interaction.data.values[0] ?? "");
+			if (interaction.data.component_type === ComponentType.StringSelect) {
+				const value = interaction.data.values[0] ?? "";
+				if (interaction.data.custom_id === MODEL_SELECT_ID) {
+					return selectModel(interaction, env, ctx, user.id, value);
+				}
+				if (interaction.data.custom_id === EFFORT_SELECT_ID) {
+					return selectEffort(interaction, env, ctx, user.id, value);
+				}
 			}
 			if (interaction.data.custom_id === DELETE_CONFIRM_ID) {
 				return confirmDelete(env, user.id);
