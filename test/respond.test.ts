@@ -525,4 +525,82 @@ describe("メンションと返信への応答", () => {
 			"こんにちは!\n-# 入力 1,200トークン(うちキャッシュ 1,000)・出力 30トークン・約$0.00012",
 		);
 	});
+
+	it("Web検索をONにしていれば、検索の道具を渡し、引用したページを出典として添える", async () => {
+		const user = { ...ALICE, id: "124" };
+		await saveCredential(env, user.id, "openrouter", {
+			apiKey: "sk-or-test",
+			workspaceId: null,
+		});
+		await updateUserSettings(env.DB, user.id, { featWebSearch: true });
+		const trigger = discordMessage("5120", user, `<@${BOT.id}> 今日の天気は?`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([trigger], () =>
+			Response.json({
+				choices: [
+					{
+						message: {
+							content: "今日は晴れ。",
+							annotations: [
+								{
+									type: "url_citation",
+									url_citation: { url: "https://example.com/a", title: "天気" },
+								},
+							],
+						},
+						finish_reason: "stop",
+					},
+				],
+				usage: { prompt_tokens: 100, completion_tokens: 10 },
+			}),
+		);
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const request = calls.find(
+			(call) => call.url.pathname === "/api/v1/chat/completions",
+		);
+		expect(request?.body).toMatchObject({
+			tools: [{ type: "openrouter:web_search" }],
+		});
+		expect(posted(calls)[0]?.content).toBe(
+			"今日は晴れ。\n-# 出典: [example.com](<https://example.com/a>)",
+		);
+	});
+
+	it("Web検索を使えないモデルでは、検索せずに答え、一言添える", async () => {
+		const user = { ...ALICE, id: "125" };
+		await saveCredential(env, user.id, "openrouter", {
+			apiKey: "sk-or-test",
+			workspaceId: null,
+		});
+		await updateUserSettings(env.DB, user.id, {
+			featWebSearch: true,
+			modelKey: "custom",
+			customModelId: "x-ai/old-model",
+		});
+		const trigger = discordMessage("5130", user, `<@${BOT.id}> こんにちは`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([trigger], (call) =>
+			call.url.pathname === "/api/v1/models"
+				? Response.json({
+						data: [
+							{ id: "x-ai/old-model", supported_parameters: ["max_tokens"] },
+						],
+					})
+				: openRouterChat("こんにちは!"),
+		);
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const request = calls.find(
+			(call) => call.url.pathname === "/api/v1/chat/completions",
+		);
+		expect(request?.body).not.toHaveProperty("tools");
+		expect(posted(calls)[0]?.content).toBe(
+			"こんにちは!\n-# このモデルはWeb検索を使えません",
+		);
+	});
 });

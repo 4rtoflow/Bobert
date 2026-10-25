@@ -1,3 +1,4 @@
+import { MAX_WEB_SEARCHES } from "../config/models";
 import {
 	type ChatMessage,
 	type ChatRequest,
@@ -5,6 +6,7 @@ import {
 	describeError,
 	LlmError,
 	type LlmErrorKind,
+	type Source,
 } from "./types";
 
 const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
@@ -22,7 +24,14 @@ interface OpenRouterError {
 
 interface OpenRouterResponse {
 	choices?: {
-		message?: { content?: string | null };
+		message?: {
+			content?: string | null;
+			/** Web検索の結果から引用したページ */
+			annotations?: {
+				type?: string;
+				url_citation?: { url?: string; title?: string };
+			}[];
+		};
 		finish_reason?: string | null;
 		error?: OpenRouterError;
 	}[];
@@ -36,6 +45,9 @@ interface OpenRouterResponse {
 			cached_tokens?: number;
 			cache_write_tokens?: number;
 		};
+		/** Web検索の回数。どちらの場所に入るかは、ドキュメントに書かれていないので両方を見る */
+		server_tool_use?: { web_search_requests?: number };
+		web_search_requests?: number;
 	};
 	error?: OpenRouterError;
 }
@@ -63,6 +75,15 @@ export async function chatWithOpenRouter(
 			: {}),
 		...(request.effort !== null
 			? { reasoning: { effort: request.effort } }
+			: {}),
+		// Web検索はOpenRouterのサーバーで動く。1回の返答で使える回数に上限を設ける
+		...(request.webSearch
+			? {
+					tools: [
+						{ type: "openrouter:web_search", parameters: { max_results: 5 } },
+					],
+					max_tool_calls: MAX_WEB_SEARCHES,
+				}
 			: {}),
 	};
 
@@ -122,9 +143,32 @@ export async function chatWithOpenRouter(
 			cacheReadTokens: data?.usage?.prompt_tokens_details?.cached_tokens ?? 0,
 			cacheWriteTokens:
 				data?.usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
+			webSearchRequests:
+				data?.usage?.server_tool_use?.web_search_requests ??
+				data?.usage?.web_search_requests ??
+				0,
 			costUsd: typeof data?.usage?.cost === "number" ? data.usage.cost : null,
 		},
+		sources: sourcesOf(choice.message?.annotations ?? []),
 	};
+}
+
+/** Web検索の結果から引用したページ(出典)。同じURLは1つにまとめる */
+function sourcesOf(
+	annotations: NonNullable<
+		NonNullable<
+			NonNullable<OpenRouterResponse["choices"]>[number]["message"]
+		>["annotations"]
+	>,
+): Source[] {
+	const sources = new Map<string, Source>();
+	for (const annotation of annotations) {
+		const url = annotation.url_citation?.url;
+		if (annotation.type === "url_citation" && url && !sources.has(url)) {
+			sources.set(url, { url, title: annotation.url_citation?.title ?? null });
+		}
+	}
+	return [...sources.values()];
 }
 
 /** OAuth(PKCE)のcodeを、ユーザー本人のAPIキーと交換する */

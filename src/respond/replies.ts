@@ -1,6 +1,7 @@
 import type { ChatResult, LlmError } from "../llm/types";
 import type { Provider } from "../store/users";
 import type { ModelResolution, ResolvedModel } from "./model";
+import { sourcesNote } from "./web-search";
 
 /** キーを登録していない人などへの、登録方法の案内(仕様: docs/spec/architecture.md「決定事項」) */
 export function setupGuidance(
@@ -54,11 +55,20 @@ export function invalidKeyMessage(provider: Provider): string {
 		: "OpenRouterとの連携が無効になっています。`/setup` から連携し直してください。";
 }
 
-/** AIの返答に、必要な注記を添えて投稿する本文にする。usageは利用量の表示の行(表示しないならnull) */
+/** 返答に添える注記 */
+export interface ReplyNotes {
+	/** 話しかけたメッセージに画像があったのに、AIに渡さなかった */
+	imagesSkipped: boolean;
+	/** Web検索をONにしているのに、このモデルでは使えなかった */
+	webSearchSkipped: boolean;
+	/** 利用量の表示の行。表示しないならnull */
+	usage: string | null;
+}
+
+/** AIの返答に、出典と必要な注記を添えて、投稿する本文にする */
 export function formatReply(
 	result: ChatResult,
-	imagesSkipped: boolean,
-	usage: string | null = null,
+	{ imagesSkipped, webSearchSkipped, usage }: ReplyNotes,
 ): string {
 	if (result.stopReason === "refusal") {
 		return [
@@ -70,8 +80,15 @@ export function formatReply(
 	if (result.stopReason === "max_tokens") {
 		notes.push("-# 返答が長すぎるため、途中で切れました");
 	}
+	const sources = sourcesNote(result.sources);
+	if (sources !== null) {
+		notes.push(sources);
+	}
 	if (imagesSkipped) {
 		notes.push("-# このモデルは画像を読めません");
+	}
+	if (webSearchSkipped) {
+		notes.push("-# このモデルはWeb検索を使えません");
 	}
 	if (usage !== null) {
 		notes.push(usage);

@@ -1,7 +1,7 @@
 import { DEFAULT_EFFORT } from "../config/models";
 import { CLAUDE_EFFORTS } from "../llm/anthropic";
 import {
-	findClaudeEfforts,
+	findClaudeModel,
 	findOpenRouterModel,
 	type OpenRouterModelInfo,
 } from "../llm/model-info";
@@ -41,7 +41,7 @@ export async function availableEfforts(
 		if (credential === null) {
 			throw new Error("Anthropic credential is missing");
 		}
-		return findClaudeEfforts(credential, model.modelId);
+		return (await findClaudeModel(credential, model.modelId)).efforts;
 	}
 	const info = await findOpenRouterModel(model.modelId);
 	return info === null ? [] : openRouterEfforts(info);

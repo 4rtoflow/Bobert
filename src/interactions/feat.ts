@@ -19,8 +19,13 @@ import {
 /** /feat のボタンのIDの頭 */
 export const FEAT_BUTTON_PREFIX = "feat:";
 
-/** /feat で切り替えられる機能(仕様: docs/spec/behavior.md「決定事項」)。Web検索は、実装したら足す */
+/** /feat で切り替えられる機能(仕様: docs/spec/behavior.md「決定事項」) */
 const FEATURES = [
+	{
+		setting: "featWebSearch",
+		customId: `${FEAT_BUTTON_PREFIX}web_search`,
+		label: "Web検索",
+	},
 	{
 		setting: "featUsageDisplay",
 		customId: `${FEAT_BUTTON_PREFIX}usage_display`,

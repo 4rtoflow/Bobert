@@ -24,6 +24,8 @@ export interface ChatRequest {
 	messages: ChatMessage[];
 	/** 思考の深さ。nullならモデルの既定 */
 	effort: string | null;
+	/** Web検索を使うか。使えるモデルのときだけtrueにする */
+	webSearch: boolean;
 	maxTokens: number;
 }
 
@@ -32,6 +34,14 @@ export interface ChatResult {
 	/** 返答が終わった理由。end以外は、返答に注記する */
 	stopReason: "end" | "max_tokens" | "refusal";
 	usage: TokenUsage;
+	/** 返答が引用したWebページ(出典)。引用した順 */
+	sources: Source[];
+}
+
+/** 返答が引用したWebページ */
+export interface Source {
+	url: string;
+	title: string | null;
 }
 
 /** 使ったトークン数と費用 */
@@ -44,6 +54,8 @@ export interface TokenUsage {
 	cacheReadTokens: number;
 	/** 入力のうち、キャッシュに書いた分 */
 	cacheWriteTokens: number;
+	/** Web検索の回数 */
+	webSearchRequests: number;
 	/** 費用(USD)。プロバイダが応答で返したときだけ(OpenRouter)。分からなければnull */
 	costUsd: number | null;
 }
@@ -88,8 +100,8 @@ export type KeyCheckResult =
 
 /** 「その他」で入力されたモデルの確認の結果。確かめられなかったときは、原因の説明を付ける */
 export type ModelCheckResult =
-	/** effortsは、選べる思考の深さ(浅い順)。空なら選べない */
-	| { status: "found"; efforts: string[] }
+	/** effortsは、選べる思考の深さ(浅い順)。空なら選べない。webSearchは、Web検索を使えるか */
+	| { status: "found"; efforts: string[]; webSearch: boolean }
 	| { status: "not_found" }
 	/** 登録したキーが無効になっている */
 	| { status: "invalid_key" }

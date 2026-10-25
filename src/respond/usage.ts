@@ -25,6 +25,9 @@ export async function usageNote(
 	const parts = [
 		`入力 ${formatCount(usage.inputTokens)}トークン${cached}`,
 		`出力 ${formatCount(usage.outputTokens)}トークン`,
+		...(usage.webSearchRequests > 0
+			? [`Web検索 ${usage.webSearchRequests}回`]
+			: []),
 		...(cost === null ? [] : [`約$${formatCost(cost)}`]),
 	];
 	return `-# ${parts.join("・")}`;
@@ -32,6 +35,7 @@ export async function usageNote(
 
 /**
  * 単価から費用(USD)を計算する。入力が多いと単価が上がるモデルは、入力のトークン数(キャッシュの分を含む)で段階を選ぶ。
+ * Web検索の費用も足す。
  */
 export function costFromPricing(
 	pricing: ModelPricing,
@@ -47,7 +51,8 @@ export function costFromPricing(
 		uncached * prices.prompt +
 		usage.cacheReadTokens * (prices.cacheRead ?? prices.prompt) +
 		usage.cacheWriteTokens * (prices.cacheWrite ?? prices.prompt) +
-		usage.outputTokens * prices.completion
+		usage.outputTokens * prices.completion +
+		usage.webSearchRequests * (prices.webSearch ?? 0)
 	);
 }
 
