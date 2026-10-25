@@ -463,4 +463,66 @@ describe("メンションと返信への応答", () => {
 			reasoning: { effort: "high" },
 		});
 	});
+
+	it("利用量の表示をONにしていれば、返答の末尾にトークン数と費用を添える", async () => {
+		const user = { ...ALICE, id: "122" };
+		await saveCredential(env, user.id, "anthropic", {
+			apiKey: "sk-ant-test",
+			workspaceId: null,
+		});
+		await updateUserSettings(env.DB, user.id, { featUsageDisplay: true });
+		const trigger = discordMessage("5100", user, `<@${BOT.id}> こんにちは`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([trigger], (call) =>
+			call.url.hostname === "openrouter.ai"
+				? Response.json({
+						data: [
+							{
+								id: "anthropic/claude-haiku-5.5",
+								pricing: { prompt: "0.0000001", completion: "0.0000005" },
+							},
+						],
+					})
+				: anthropicStream("こんにちは!"),
+		);
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		// Anthropicで直接呼んだので、費用はOpenRouterのモデル情報の単価から計算する
+		expect(posted(calls)[0]?.content).toBe(
+			"こんにちは!\n-# 入力 20トークン・出力 5トークン・約$0.0000045",
+		);
+	});
+
+	it("OpenRouter経由なら、利用量の表示に、応答に含まれる費用を使う", async () => {
+		const user = { ...ALICE, id: "123" };
+		await saveCredential(env, user.id, "openrouter", {
+			apiKey: "sk-or-test",
+			workspaceId: null,
+		});
+		await updateUserSettings(env.DB, user.id, { featUsageDisplay: true });
+		const trigger = discordMessage("5110", user, `<@${BOT.id}> こんにちは`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([trigger], () =>
+			Response.json({
+				choices: [
+					{ message: { content: "こんにちは!" }, finish_reason: "stop" },
+				],
+				usage: {
+					prompt_tokens: 1200,
+					completion_tokens: 30,
+					prompt_tokens_details: { cached_tokens: 1000 },
+					cost: 0.00012,
+				},
+			}),
+		);
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		expect(posted(calls)[0]?.content).toBe(
+			"こんにちは!\n-# 入力 1,200トークン(うちキャッシュ 1,000)・出力 30トークン・約$0.00012",
+		);
+	});
 });

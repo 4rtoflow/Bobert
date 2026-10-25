@@ -7,6 +7,7 @@ import {
 	type KeyCheckResult,
 	LlmError,
 	type ModelCheckResult,
+	type TokenUsage,
 } from "./types";
 
 type Effort = NonNullable<Anthropic.OutputConfig["effort"]>;
@@ -71,12 +72,20 @@ export async function chatWithAnthropic(
 				: message.stop_reason === "refusal"
 					? "refusal"
 					: "end",
-		usage: {
-			inputTokens: message.usage.input_tokens,
-			outputTokens: message.usage.output_tokens,
-			cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
-			cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
-		},
+		usage: usageOf(message.usage),
+	};
+}
+
+/** 使ったトークン数。Anthropicのinput_tokensは、キャッシュを使わなかった分だけなので、キャッシュの分を足す */
+function usageOf(usage: Anthropic.Usage): TokenUsage {
+	const cacheRead = usage.cache_read_input_tokens ?? 0;
+	const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+	return {
+		inputTokens: usage.input_tokens + cacheRead + cacheWrite,
+		outputTokens: usage.output_tokens,
+		cacheReadTokens: cacheRead,
+		cacheWriteTokens: cacheWrite,
+		costUsd: null,
 	};
 }
 

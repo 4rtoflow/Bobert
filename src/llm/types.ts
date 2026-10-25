@@ -34,11 +34,18 @@ export interface ChatResult {
 	usage: TokenUsage;
 }
 
+/** 使ったトークン数と費用 */
 export interface TokenUsage {
+	/** 入力のトークン数。キャッシュから読んだ分と、キャッシュに書いた分を含む */
 	inputTokens: number;
+	/** 出力のトークン数。考えた分(thinking)を含む */
 	outputTokens: number;
+	/** 入力のうち、キャッシュから読んだ分 */
 	cacheReadTokens: number;
+	/** 入力のうち、キャッシュに書いた分 */
 	cacheWriteTokens: number;
+	/** 費用(USD)。プロバイダが応答で返したときだけ(OpenRouter)。分からなければnull */
+	costUsd: number | null;
 }
 
 /** 失敗の種類。ユーザーに見せる理由はこれで決める */

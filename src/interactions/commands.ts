@@ -34,6 +34,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	},
 	{
 		...GUILD_ONLY,
+		name: "feat",
+		description: "機能のON/OFF(利用量の表示、画像の読み取り)",
+	},
+	{
+		...GUILD_ONLY,
 		name: "prompt",
 		description: "自分用のAIへの指示の設定",
 	},
