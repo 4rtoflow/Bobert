@@ -34,6 +34,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	},
 	{
 		...GUILD_ONLY,
+		name: "prompt",
+		description: "自分用のAIへの指示の設定",
+	},
+	{
+		...GUILD_ONLY,
 		name: "delete",
 		description: "登録したキーと設定の削除",
 	},
