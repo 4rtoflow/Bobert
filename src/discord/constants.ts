@@ -85,6 +85,8 @@ export const ComponentType = {
 
 export const ButtonStyle = {
 	Primary: 1 as DiscordButtonStyle.Primary,
+	Secondary: 2 as DiscordButtonStyle.Secondary,
+	Success: 3 as DiscordButtonStyle.Success,
 	Danger: 4 as DiscordButtonStyle.Danger,
 	Link: 5 as DiscordButtonStyle.Link,
 } as const;

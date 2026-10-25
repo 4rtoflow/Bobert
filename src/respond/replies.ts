@@ -54,13 +54,17 @@ export function invalidKeyMessage(provider: Provider): string {
 		: "OpenRouterとの連携が無効になっています。`/setup` から連携し直してください。";
 }
 
-/** AIの返答に、必要な注記を添えて投稿する本文にする */
+/** AIの返答に、必要な注記を添えて投稿する本文にする。usageは利用量の表示の行(表示しないならnull) */
 export function formatReply(
 	result: ChatResult,
 	imagesSkipped: boolean,
+	usage: string | null = null,
 ): string {
 	if (result.stopReason === "refusal") {
-		return "この内容には答えられません。";
+		return [
+			"この内容には答えられません。",
+			...(usage === null ? [] : [usage]),
+		].join("\n");
 	}
 	const notes: string[] = [];
 	if (result.stopReason === "max_tokens") {
@@ -68,6 +72,9 @@ export function formatReply(
 	}
 	if (imagesSkipped) {
 		notes.push("-# このモデルは画像を読めません");
+	}
+	if (usage !== null) {
+		notes.push(usage);
 	}
 	const text = result.text.trim() || "(返答が空でした)";
 	return [text, ...notes].join("\n");

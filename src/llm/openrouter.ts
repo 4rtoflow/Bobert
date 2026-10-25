@@ -27,8 +27,11 @@ interface OpenRouterResponse {
 		error?: OpenRouterError;
 	}[];
 	usage?: {
+		/** 入力のトークン数。キャッシュの分を含む */
 		prompt_tokens?: number;
 		completion_tokens?: number;
+		/** 費用(OpenRouterのクレジット。1クレジットは1ドル)。応答にいつも含まれる */
+		cost?: number;
 		prompt_tokens_details?: {
 			cached_tokens?: number;
 			cache_write_tokens?: number;
@@ -119,6 +122,7 @@ export async function chatWithOpenRouter(
 			cacheReadTokens: data?.usage?.prompt_tokens_details?.cached_tokens ?? 0,
 			cacheWriteTokens:
 				data?.usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
+			costUsd: typeof data?.usage?.cost === "number" ? data.usage.cost : null,
 		},
 	};
 }

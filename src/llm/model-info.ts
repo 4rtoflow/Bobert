@@ -1,6 +1,7 @@
 /**
  * モデル情報。取得したら、しばらく使い回す。
- * - OpenRouterのモデル一覧: 「その他」で入力されたモデルの存在の確認、画像を読めるかの判断、選べる思考の深さに使う。
+ * - OpenRouterのモデル一覧: 「その他」で入力されたモデルの存在の確認、画像を読めるかの判断、選べる思考の深さ、
+ *   利用量の表示の費用(Anthropicで直接呼ぶClaude)に使う。
  *   一覧は大きい(数百件、約800KB)
  * - Anthropicのモデル情報: 「その他」で入力したClaudeで選べる思考の深さに使う
  */
@@ -18,6 +19,35 @@ export interface OpenRouterModelInfo {
 	supportsImages: boolean;
 	/** 選べる思考の深さ(effort)。並びはOpenRouterのまま。空なら選べない */
 	efforts: string[];
+	/** 単価。分からなければnull */
+	pricing: ModelPricing | null;
+}
+
+/** モデルの単価 */
+export interface ModelPricing {
+	base: TokenPrices;
+	/** 入力が多いと単価が上がるモデルの、段階ごとの単価(入力のトークン数がminPromptTokens以上のとき) */
+	tiers: { minPromptTokens: number; prices: TokenPrices }[];
+}
+
+/** 1トークンあたりの単価(USD) */
+export interface TokenPrices {
+	prompt: number;
+	completion: number;
+	/** キャッシュから読む入力。なければpromptの単価 */
+	cacheRead: number | null;
+	/** キャッシュに書く入力(5分間保持)。なければpromptの単価 */
+	cacheWrite: number | null;
+}
+
+/** OpenRouterの単価(1トークンあたりのUSDを文字列で持つ) */
+interface PricingResponse {
+	prompt?: unknown;
+	completion?: unknown;
+	input_cache_read?: unknown;
+	input_cache_write?: unknown;
+	/** 入力が多いときの単価や、時間帯ごとの単価 */
+	overrides?: unknown;
 }
 
 interface ModelsResponse {
@@ -25,6 +55,7 @@ interface ModelsResponse {
 		id?: unknown;
 		architecture?: { input_modalities?: unknown };
 		reasoning?: { supported_efforts?: unknown };
+		pricing?: PricingResponse;
 	}[];
 }
 
@@ -109,7 +140,53 @@ async function fetchModels(): Promise<Map<string, OpenRouterModelInfo>> {
 			efforts: Array.isArray(efforts)
 				? efforts.filter((effort) => typeof effort === "string")
 				: [],
+			pricing: model.pricing ? parsePricing(model.pricing) : null,
 		});
 	}
 	return models;
+}
+
+/**
+ * 単価を読む。段階ごとの単価のうち、入力のトークン数で決まるもの(min_prompt_tokens)だけを使う。
+ * 時間帯で変わる単価は、Anthropicで直接呼ぶClaudeには関係しないので使わない。
+ */
+function parsePricing(pricing: PricingResponse): ModelPricing | null {
+	const base = parsePrices(pricing, null);
+	if (base === null) {
+		return null;
+	}
+	const tiers: ModelPricing["tiers"] = [];
+	for (const override of Array.isArray(pricing.overrides)
+		? pricing.overrides
+		: []) {
+		const minPromptTokens = override?.min_prompt_tokens;
+		const prices = parsePrices(override, base);
+		if (typeof minPromptTokens === "number" && prices !== null) {
+			tiers.push({ minPromptTokens, prices });
+		}
+	}
+	return { base, tiers };
+}
+
+/** 単価を数にする。書かれていない単価は、fallbackのものを使う */
+function parsePrices(
+	pricing: PricingResponse,
+	fallback: TokenPrices | null,
+): TokenPrices | null {
+	const price = (value: unknown) => {
+		const number = typeof value === "string" ? Number(value) : Number.NaN;
+		return Number.isFinite(number) ? number : null;
+	};
+	const prompt = price(pricing.prompt) ?? fallback?.prompt ?? null;
+	const completion = price(pricing.completion) ?? fallback?.completion ?? null;
+	if (prompt === null || completion === null) {
+		return null;
+	}
+	return {
+		prompt,
+		completion,
+		cacheRead: price(pricing.input_cache_read) ?? fallback?.cacheRead ?? null,
+		cacheWrite:
+			price(pricing.input_cache_write) ?? fallback?.cacheWrite ?? null,
+	};
 }

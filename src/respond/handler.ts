@@ -24,10 +24,16 @@ import {
 	toConversation,
 } from "./conversation";
 import { replyEffort } from "./effort";
-import { type ResolvedModel, resolveModel, usesCustomModel } from "./model";
+import {
+	type ResolvedModel,
+	resolveModel,
+	selectedCandidate,
+	usesCustomModel,
+} from "./model";
 import { buildSystemPrompt } from "./prompt";
 import { describeLlmError, formatReply, setupGuidance } from "./replies";
 import { splitMessage } from "./split";
+import { usageNote } from "./usage";
 
 /** 返答の長さの上限(トークン)。考える分(thinking)もここに含まれる */
 const MAX_OUTPUT_TOKENS = 16_000;
@@ -139,6 +145,9 @@ async function composeReply(
 		return formatReply(
 			result,
 			conversation.imagesSkipped && settings.featImageInput,
+			settings.featUsageDisplay
+				? await usageNote(result.usage, model, selectedCandidate(settings))
+				: null,
 		);
 	} catch (error) {
 		if (!(error instanceof LlmError)) {
