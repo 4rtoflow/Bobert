@@ -88,14 +88,14 @@ describe("/effort", () => {
 		});
 	});
 
-	it("Anthropicで直接呼ぶClaudeなら、low〜maxを出す。既定の段階は分からないので書かない", async () => {
+	it("Claudeなら low〜max を出し、既定のlowに「(既定)」を付けて選んだ状態にする", async () => {
 		const user = await userWith("anthropic");
 		const calls = mockModelApis([]);
 
 		await sendInteraction(effortCommand(user));
 
 		expect(editedMessage(calls)?.content).toBe(
-			"思考の深さ(effort)を選んでください。今は「モデルの既定」です。",
+			"思考の深さ(effort)を選んでください。",
 		);
 		expect(editedMessage(calls)?.components?.[0]?.components[0]).toMatchObject({
 			type: ComponentType.StringSelect,
@@ -103,12 +103,11 @@ describe("/effort", () => {
 			placeholder: "思考の深さを選ぶ",
 		});
 		expect(menuOptions(calls)).toEqual([
-			{ label: "モデルの既定", value: "model_default", default: true },
 			{
-				label: "low",
+				label: "low(既定)",
 				value: "low",
 				description: "軽く考える。速く、安い",
-				default: false,
+				default: true,
 			},
 			{
 				label: "medium",
@@ -135,45 +134,30 @@ describe("/effort", () => {
 				default: false,
 			},
 		]);
+		// Claudeの段階は決まっているので、モデル情報は取得しない
 		expect(calls.some((call) => call.url.hostname === "openrouter.ai")).toBe(
 			false,
 		);
 	});
 
-	it("OpenRouter経由のClaudeなら、既定の段階をOpenRouterのモデル情報から書く。noneは出さない", async () => {
+	it("OpenRouter経由のClaudeでも low〜max を出し、設定した段階を選んだ状態にする", async () => {
 		const user = await userWith("openrouter");
 		await updateUserSettings(env.DB, user.id, { effort: "high" });
-		const calls = mockModelApis([
-			{
-				id: "anthropic/claude-haiku-5.5",
-				efforts: ["max", "xhigh", "high", "medium", "low", "none"],
-				defaultEffort: "medium",
-			},
-		]);
+		const calls = mockModelApis([]);
 
 		await sendInteraction(effortCommand(user));
 
-		expect(editedMessage(calls)?.content).toBe(
-			"思考の深さ(effort)を選んでください。今は「high」です。",
-		);
 		const options = menuOptions(calls);
 		expect(options.map((option: { value: string }) => option.value)).toEqual([
-			"model_default",
 			"low",
 			"medium",
 			"high",
 			"xhigh",
 			"max",
 		]);
-		expect(options[0]).toEqual({
-			label: "モデルの既定(medium)",
-			value: "model_default",
-			default: false,
-		});
 		expect(
-			options.find((option: { value: string }) => option.value === "high")
-				?.default,
-		).toBe(true);
+			options.filter((option: { default: boolean }) => option.default),
+		).toEqual([expect.objectContaining({ value: "high" })]);
 	});
 
 	it("Claude以外は、OpenRouterのモデル情報の段階を、浅い順に並べて出す", async () => {
@@ -183,7 +167,6 @@ describe("/effort", () => {
 			{
 				id: "qwen/qwen3.8-max-0902",
 				efforts: ["xhigh", "high", "medium", "low", "minimal"],
-				defaultEffort: "xhigh",
 			},
 		]);
 
@@ -191,13 +174,32 @@ describe("/effort", () => {
 
 		expect(
 			menuOptions(calls).map((option: { label: string }) => option.label),
-		).toEqual([
-			"モデルの既定(xhigh)",
-			"minimal",
-			"low",
-			"medium",
-			"high",
-			"xhigh",
+		).toEqual(["minimal", "low(既定)", "medium", "high", "xhigh"]);
+	});
+
+	it("lowを選べないモデルでは、代わりに使う段階に「(既定)」を付ける", async () => {
+		const user = await userWith("openrouter");
+		await updateUserSettings(env.DB, user.id, { modelKey: "mistral-large-4" });
+		const calls = mockModelApis([
+			{ id: "mistralai/mistral-large-4-0", efforts: ["high", "none"] },
+		]);
+
+		await sendInteraction(effortCommand(user));
+
+		// none(考えない)は、ほかに選べる段階があれば、代わりには使わない
+		expect(menuOptions(calls)).toEqual([
+			{
+				label: "none",
+				value: "none",
+				description: "考えずに答える",
+				default: false,
+			},
+			{
+				label: "high(既定)",
+				value: "high",
+				description: "よく考える",
+				default: true,
+			},
 		]);
 	});
 
@@ -257,7 +259,7 @@ describe("/effort", () => {
 		expect(check?.headers.get("authorization")).toBe("Bearer key-anthropic");
 		expect(
 			menuOptions(calls).map((option: { value: string }) => option.value),
-		).toEqual(["model_default", "low", "medium", "high", "max"]);
+		).toEqual(["low", "medium", "high", "max"]);
 	});
 });
 
@@ -278,16 +280,16 @@ describe("/effort のメニュー", () => {
 		});
 	});
 
-	it("「モデルの既定」を選ぶと、設定を消す", async () => {
+	it("既定の段階を選ぶと、設定を消して既定に従う", async () => {
 		const user = await userWith("anthropic");
 		await updateUserSettings(env.DB, user.id, { effort: "max" });
 		const calls = mockModelApis([]);
 
-		await sendInteraction(select(user, "model_default"));
+		await sendInteraction(select(user, "low"));
 
 		expect((await getUserSettings(env.DB, user.id)).effort).toBeNull();
 		expect(editedMessage(calls)?.content).toBe(
-			"思考の深さを「モデルの既定」に戻しました。",
+			"思考の深さを「low」に変えました。",
 		);
 	});
 
@@ -296,11 +298,7 @@ describe("/effort のメニュー", () => {
 		const user = await userWith("openrouter");
 		await updateUserSettings(env.DB, user.id, { modelKey: "glm-5.3" });
 		const calls = mockModelApis([
-			{
-				id: "z-ai/glm-5.3",
-				efforts: ["max", "high", "low"],
-				defaultEffort: "max",
-			},
+			{ id: "z-ai/glm-5.3", efforts: ["max", "high", "low"] },
 		]);
 
 		await sendInteraction(select(user, "medium"));
@@ -308,6 +306,6 @@ describe("/effort のメニュー", () => {
 		expect((await getUserSettings(env.DB, user.id)).effort).toBeNull();
 		expect(
 			menuOptions(calls).map((option: { value: string }) => option.value),
-		).toEqual(["model_default", "low", "high", "max"]);
+		).toEqual(["low", "high", "max"]);
 	});
 });

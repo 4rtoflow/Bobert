@@ -23,6 +23,7 @@ import {
 	type MessageFetcher,
 	toConversation,
 } from "./conversation";
+import { replyEffort } from "./effort";
 import { type ResolvedModel, resolveModel, usesCustomModel } from "./model";
 import { buildSystemPrompt } from "./prompt";
 import { describeLlmError, formatReply, setupGuidance } from "./replies";
@@ -114,7 +115,8 @@ async function composeReply(
 		model: model.modelId,
 		system: buildSystemPrompt(settings.customPrompt),
 		messages: conversation.messages,
-		effort: settings.effort,
+		// 設定していなければ既定の段階を、モデルが選べなければいちばん近い段階を送る
+		effort: await replyEffort(env, userId, settings, model),
 		maxTokens: MAX_OUTPUT_TOKENS,
 	};
 

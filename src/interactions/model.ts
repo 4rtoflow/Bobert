@@ -21,6 +21,7 @@ import { checkAnthropicModel } from "../llm/anthropic";
 import { findOpenRouterModel } from "../llm/model-info";
 import { describeError, type ModelCheckResult } from "../llm/types";
 import { logEvent } from "../log";
+import { availableEfforts, openRouterEfforts } from "../respond/effort";
 import {
 	availableCandidates,
 	customModelProvider,
@@ -38,7 +39,6 @@ import {
 	updateUserSettings,
 } from "../store/users";
 import { type MessageEdit, respondLater } from "./deferred";
-import { effortSupport, openRouterEfforts } from "./effort";
 import { normalizeInput, PRINTABLE_ASCII, readTextInput } from "./input";
 
 /** /model のセレクトメニューと、「その他」のモデルIDを入力するモーダルのID */
@@ -129,7 +129,6 @@ function modelMenu(
 	if (!resolution.ok && resolution.missing === "credentials") {
 		return { content: setupGuidance(resolution), components: [] };
 	}
-	const current = resolution.ok ? resolution.model.label : resolution.label;
 	// 「その他」のモデルを使っているときは、どれも選んでいない状態で出す。
 	// 選んだ状態の選択肢をもう一度選んでも、Discordは知らせてこないため
 	const selected = selectedCandidate(settings)?.key;
@@ -150,7 +149,7 @@ function modelMenu(
 		},
 	];
 	return {
-		content: `使うモデルを選んでください。今は「${current}」を使っています。`,
+		content: "使うモデルを選んでください。",
 		components: [
 			{
 				type: ComponentType.ActionRow,
@@ -265,8 +264,8 @@ async function unsupportedEffort(
 		return null;
 	}
 	try {
-		const support = await effortSupport(env, userId, settings, model);
-		return support.levels.includes(effort) ? null : effort;
+		const levels = await availableEfforts(env, userId, settings, model);
+		return levels.includes(effort) ? null : effort;
 	} catch (error) {
 		log("effort_check_unavailable", {
 			userId,
@@ -305,8 +304,7 @@ async function verifyAndSaveCustomModel(
 		case "found": {
 			// 保存した思考の深さを、このモデルで選べなければ、既定に戻す
 			const resetEffort =
-				settings.effort !== null &&
-				!check.efforts.levels.includes(settings.effort)
+				settings.effort !== null && !check.efforts.includes(settings.effort)
 					? settings.effort
 					: null;
 			await updateUserSettings(env.DB, userId, {
@@ -366,7 +364,7 @@ function changedMessage(label: string, resetEffort: string | null): string {
 	const changed = `使うモデルを「${label}」に変えました。`;
 	return resetEffort === null
 		? changed
-		: `${changed}このモデルでは思考の深さ「${resetEffort}」を選べないため、モデルの既定に戻しました。`;
+		: `${changed}このモデルでは思考の深さ「${resetEffort}」を選べないため、既定に戻しました。`;
 }
 
 /** 文だけのメッセージにする(メニューを消す) */
