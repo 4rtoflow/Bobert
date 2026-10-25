@@ -124,14 +124,7 @@ export async function checkAnthropicModel(
 	const client = createClient(credential, 1);
 	try {
 		const model = await client.models.retrieve(modelId);
-		// 既定の段階は、モデルの情報に含まれない
-		return {
-			status: "found",
-			efforts: {
-				levels: claudeEfforts(model.capabilities),
-				defaultLevel: null,
-			},
-		};
+		return { status: "found", efforts: claudeEfforts(model.capabilities) };
 	} catch (error) {
 		// 形の正しくないIDは、404ではなく400になることがある
 		if (

@@ -88,9 +88,7 @@ describe("/model", () => {
 		);
 
 		expect(body.data.flags).toBe(MessageFlags.Ephemeral);
-		expect(body.data.content).toBe(
-			"使うモデルを選んでください。今は「Claude Haiku 5.5」を使っています。",
-		);
+		expect(body.data.content).toBe("使うモデルを選んでください。");
 		const menu = body.data.components[0].components[0];
 		expect(menu).toMatchObject({
 			type: ComponentType.StringSelect,
@@ -131,7 +129,7 @@ describe("/model", () => {
 		]);
 	});
 
-	it("「その他」のモデルを使っていれば、そのIDを書き、どの選択肢も選んでいない状態で出す", async () => {
+	it("「その他」のモデルを使っていれば、どの選択肢も選んでいない状態で出す", async () => {
 		const user = await userWith("openrouter");
 		await updateUserSettings(env.DB, user.id, {
 			modelKey: "custom",
@@ -140,9 +138,7 @@ describe("/model", () => {
 
 		const body = await sendInteraction(modelCommand(user));
 
-		expect(body.data.content).toContain(
-			"今は「openai/gpt-6.1-sol」を使っています",
-		);
+		expect(body.data.content).toBe("使うモデルを選んでください。");
 		const menu = body.data.components[0].components[0];
 		expect(
 			menu.options.some((option: { default?: boolean }) => option.default),
@@ -192,7 +188,7 @@ describe("/model", () => {
 		expect((await getUserSettings(env.DB, user.id)).modelKey).toBeNull();
 	});
 
-	it("保存した思考の深さを新しいモデルで選べなければ、モデルの既定に戻す", async () => {
+	it("保存した思考の深さを新しいモデルで選べなければ、既定に戻す", async () => {
 		const user = await userWith("openrouter");
 		await updateUserSettings(env.DB, user.id, { effort: "medium" });
 		const calls = mockModelApis([
@@ -209,7 +205,7 @@ describe("/model", () => {
 		expect(settings.modelKey).toBe("glm-5.3");
 		expect(settings.effort).toBeNull();
 		expect(editedMessage(calls)?.content).toBe(
-			"使うモデルを「GLM 5.3」に変えました。このモデルでは思考の深さ「medium」を選べないため、モデルの既定に戻しました。",
+			"使うモデルを「GLM 5.3」に変えました。このモデルでは思考の深さ「medium」を選べないため、既定に戻しました。",
 		);
 	});
 
@@ -404,7 +400,7 @@ describe("/model の「その他」", () => {
 		);
 	});
 
-	it("保存した思考の深さをそのモデルで選べなければ、モデルの既定に戻す", async () => {
+	it("保存した思考の深さをそのモデルで選べなければ、既定に戻す", async () => {
 		const user = await userWith("openrouter");
 		await updateUserSettings(env.DB, user.id, { effort: "xhigh" });
 		const calls = mockModelApis([
@@ -417,7 +413,7 @@ describe("/model の「その他」", () => {
 		expect(settings.customModelId).toBe("z-ai/glm-5.3");
 		expect(settings.effort).toBeNull();
 		expect(editedMessage(calls)?.content).toContain(
-			"このモデルでは思考の深さ「xhigh」を選べないため、モデルの既定に戻しました。",
+			"このモデルでは思考の深さ「xhigh」を選べないため、既定に戻しました。",
 		);
 	});
 

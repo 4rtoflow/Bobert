@@ -407,4 +407,60 @@ describe("メンションと返信への応答", () => {
 			"猫だね!\n-# このモデルは画像を読めません",
 		);
 	});
+
+	it("思考の深さを設定していなければ、既定のlowを送る", async () => {
+		const user = { ...ALICE, id: "120" };
+		await saveCredential(env, user.id, "anthropic", {
+			apiKey: "sk-ant-test",
+			workspaceId: null,
+		});
+		const trigger = discordMessage("5080", user, `<@${BOT.id}> こんにちは`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([trigger], () => anthropicStream("こんにちは!"));
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const request = calls.find(
+			(call) => call.url.hostname === "api.anthropic.com",
+		);
+		expect(request?.body).toMatchObject({
+			model: "claude-haiku-5-5",
+			output_config: { effort: "low" },
+		});
+	});
+
+	it("既定のlowを選べないモデルでは、いちばん近い段階を送る", async () => {
+		const user = { ...ALICE, id: "121" };
+		await saveCredential(env, user.id, "openrouter", {
+			apiKey: "sk-or-test",
+			workspaceId: null,
+		});
+		await updateUserSettings(env.DB, user.id, { modelKey: "mistral-large-4" });
+		const trigger = discordMessage("5090", user, `<@${BOT.id}> こんにちは`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([trigger], (call) =>
+			call.url.pathname === "/api/v1/models"
+				? Response.json({
+						data: [
+							{
+								id: "mistralai/mistral-large-4-0",
+								reasoning: { supported_efforts: ["high", "none"] },
+							},
+						],
+					})
+				: openRouterChat("こんにちは!"),
+		);
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const request = calls.find(
+			(call) => call.url.pathname === "/api/v1/chat/completions",
+		);
+		expect(request?.body).toMatchObject({
+			model: "mistralai/mistral-large-4-0",
+			reasoning: { effort: "high" },
+		});
+	});
 });
