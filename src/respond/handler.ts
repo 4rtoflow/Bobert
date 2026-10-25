@@ -34,6 +34,7 @@ import { buildSystemPrompt } from "./prompt";
 import { describeLlmError, formatReply, setupGuidance } from "./replies";
 import { splitMessage } from "./split";
 import { usageNote } from "./usage";
+import { webSearchAvailable } from "./web-search";
 
 /** 返答の長さの上限(トークン)。考える分(thinking)もここに含まれる */
 const MAX_OUTPUT_TOKENS = 16_000;
@@ -117,12 +118,16 @@ async function composeReply(
 			settings.featImageInput &&
 			(await readsImages(model, settings)),
 	});
+	const webSearch = settings.featWebSearch
+		? await webSearchAvailable(env, userId, settings, model)
+		: false;
 	const request: ChatRequest = {
 		model: model.modelId,
 		system: buildSystemPrompt(settings.customPrompt),
 		messages: conversation.messages,
 		// 設定していなければ既定の段階を、モデルが選べなければいちばん近い段階を送る
 		effort: await replyEffort(env, userId, settings, model),
+		webSearch: webSearch === true,
 		maxTokens: MAX_OUTPUT_TOKENS,
 	};
 
@@ -141,14 +146,14 @@ async function composeReply(
 			durationMs: Date.now() - startedAt,
 			...result.usage,
 		});
-		// 本人が画像の読み取りをOFFにしているときは、注記しない
-		return formatReply(
-			result,
-			conversation.imagesSkipped && settings.featImageInput,
-			settings.featUsageDisplay
+		return formatReply(result, {
+			// 本人が画像の読み取りをOFFにしているときは、注記しない
+			imagesSkipped: conversation.imagesSkipped && settings.featImageInput,
+			webSearchSkipped: settings.featWebSearch && webSearch === false,
+			usage: settings.featUsageDisplay
 				? await usageNote(result.usage, model, selectedCandidate(settings))
 				: null,
-		);
+		});
 	} catch (error) {
 		if (!(error instanceof LlmError)) {
 			throw error;

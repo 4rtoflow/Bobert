@@ -353,7 +353,11 @@ async function checkCustomModel(
 		const info = await findOpenRouterModel(modelId);
 		return info === null
 			? { status: "not_found" }
-			: { status: "found", efforts: openRouterEfforts(info) };
+			: {
+					status: "found",
+					efforts: openRouterEfforts(info),
+					webSearch: info.supportsTools,
+				};
 	} catch (error) {
 		return { status: "unavailable", detail: describeError(error) };
 	}

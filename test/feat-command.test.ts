@@ -38,8 +38,14 @@ describe("/feat", () => {
 		expect(body.type).toBe(InteractionResponseType.ChannelMessageWithSource);
 		expect(body.data.flags).toBe(MessageFlags.Ephemeral);
 		expect(body.data.content).toBe("使う機能を、ボタンで切り替えてください。");
-		// 既定は、利用量の表示がOFF、画像の読み取りがON
+		// 既定は、Web検索と利用量の表示がOFF、画像の読み取りがON
 		expect(body.data.components[0].components).toEqual([
+			{
+				type: ComponentType.Button,
+				custom_id: "feat:web_search",
+				style: ButtonStyle.Secondary,
+				label: "Web検索: OFF",
+			},
 			{
 				type: ComponentType.Button,
 				custom_id: "feat:usage_display",
@@ -62,7 +68,7 @@ describe("/feat", () => {
 
 		expect(first.type).toBe(InteractionResponseType.UpdateMessage);
 		expect(first.data.content).toBe("使う機能を、ボタンで切り替えてください。");
-		expect(first.data.components[0].components[0]).toMatchObject({
+		expect(first.data.components[0].components[1]).toMatchObject({
 			style: ButtonStyle.Success,
 			label: "利用量の表示: ON",
 		});
@@ -76,7 +82,7 @@ describe("/feat", () => {
 			second.data.components[0].components.map(
 				(button: { label: string }) => button.label,
 			),
-		).toEqual(["利用量の表示: ON", "画像の読み取り: OFF"]);
+		).toEqual(["Web検索: OFF", "利用量の表示: ON", "画像の読み取り: OFF"]);
 		const settings = await getUserSettings(env.DB, user.id);
 		expect(settings.featUsageDisplay).toBe(true);
 		expect(settings.featImageInput).toBe(false);

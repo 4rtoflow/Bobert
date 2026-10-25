@@ -1,9 +1,9 @@
 /**
  * モデル情報。取得したら、しばらく使い回す。
  * - OpenRouterのモデル一覧: 「その他」で入力されたモデルの存在の確認、画像を読めるかの判断、選べる思考の深さ、
- *   利用量の表示の費用(Anthropicで直接呼ぶClaude)に使う。
+ *   Web検索を使えるかの判断、利用量の表示の費用(Anthropicで直接呼ぶClaude)に使う。
  *   一覧は大きい(数百件、約800KB)
- * - Anthropicのモデル情報: 「その他」で入力したClaudeで選べる思考の深さに使う
+ * - Anthropicのモデル情報: 「その他」で入力したClaudeで選べる思考の深さと、Web検索を使えるかに使う
  */
 import { type AnthropicCredential, checkAnthropicModel } from "./anthropic";
 
@@ -19,8 +19,18 @@ export interface OpenRouterModelInfo {
 	supportsImages: boolean;
 	/** 選べる思考の深さ(effort)。並びはOpenRouterのまま。空なら選べない */
 	efforts: string[];
+	/** 道具を使えるか。OpenRouterのWeb検索は、モデルが道具として呼ぶので、使えないモデルでは検索できない */
+	supportsTools: boolean;
 	/** 単価。分からなければnull */
 	pricing: ModelPricing | null;
+}
+
+/** 「その他」で入力したClaudeについて、Anthropicのモデル情報から分かること */
+export interface ClaudeModelInfo {
+	/** 選べる思考の深さ(浅い順)。空なら選べない */
+	efforts: string[];
+	/** Web検索を使えるか */
+	webSearch: boolean;
 }
 
 /** モデルの単価 */
@@ -38,6 +48,8 @@ export interface TokenPrices {
 	cacheRead: number | null;
 	/** キャッシュに書く入力(5分間保持)。なければpromptの単価 */
 	cacheWrite: number | null;
+	/** Web検索1回 */
+	webSearch: number | null;
 }
 
 /** OpenRouterの単価(1トークンあたりのUSDを文字列で持つ) */
@@ -46,6 +58,7 @@ interface PricingResponse {
 	completion?: unknown;
 	input_cache_read?: unknown;
 	input_cache_write?: unknown;
+	web_search?: unknown;
 	/** 入力が多いときの単価や、時間帯ごとの単価 */
 	overrides?: unknown;
 }
@@ -55,6 +68,7 @@ interface ModelsResponse {
 		id?: unknown;
 		architecture?: { input_modalities?: unknown };
 		reasoning?: { supported_efforts?: unknown };
+		supported_parameters?: unknown;
 		pricing?: PricingResponse;
 	}[];
 }
@@ -68,10 +82,10 @@ let cache: {
 	expiresAt: number;
 } | null = null;
 
-/** 「その他」で入力したClaudeで選べる思考の深さ(モデルIDごと) */
-const claudeEffortCache = new Map<
+/** 「その他」で入力したClaudeのモデル情報(モデルIDごと) */
+const claudeModelCache = new Map<
 	string,
-	{ efforts: string[]; expiresAt: number }
+	{ info: ClaudeModelInfo; expiresAt: number }
 >();
 
 /** OpenRouterのモデルを探す。一覧になければnull。一覧を取得できなければ例外を投げる */
@@ -82,32 +96,33 @@ export async function findOpenRouterModel(
 }
 
 /**
- * 「その他」で入力したClaudeで選べる思考の深さ(浅い順)。本人のキーで、Anthropicのモデル情報から取り出す。
+ * 「その他」で入力したClaudeのモデル情報。本人のキーで、Anthropicのモデル情報から取り出す。
  * 確かめられなければ、例外を投げる。
  */
-export async function findClaudeEfforts(
+export async function findClaudeModel(
 	credential: AnthropicCredential,
 	modelId: string,
-): Promise<string[]> {
-	const cached = claudeEffortCache.get(modelId);
+): Promise<ClaudeModelInfo> {
+	const cached = claudeModelCache.get(modelId);
 	if (cached !== undefined && Date.now() < cached.expiresAt) {
-		return cached.efforts;
+		return cached.info;
 	}
 	const check = await checkAnthropicModel(credential, modelId);
 	if (check.status !== "found") {
 		throw new Error(`Anthropic model check failed: ${check.status}`);
 	}
-	claudeEffortCache.set(modelId, {
-		efforts: check.efforts,
+	const info = { efforts: check.efforts, webSearch: check.webSearch };
+	claudeModelCache.set(modelId, {
+		info,
 		expiresAt: Date.now() + CACHE_TTL_MS,
 	});
-	return check.efforts;
+	return info;
 }
 
 /** 使い回しているモデル情報を捨てる(テスト用) */
 export function clearModelInfoCache(): void {
 	cache = null;
-	claudeEffortCache.clear();
+	claudeModelCache.clear();
 }
 
 async function loadModels(): Promise<Map<string, OpenRouterModelInfo>> {
@@ -134,12 +149,14 @@ async function fetchModels(): Promise<Map<string, OpenRouterModelInfo>> {
 		}
 		const modalities = model.architecture?.input_modalities;
 		const efforts = model.reasoning?.supported_efforts;
+		const parameters = model.supported_parameters;
 		models.set(model.id, {
 			id: model.id,
 			supportsImages: Array.isArray(modalities) && modalities.includes("image"),
 			efforts: Array.isArray(efforts)
 				? efforts.filter((effort) => typeof effort === "string")
 				: [],
+			supportsTools: Array.isArray(parameters) && parameters.includes("tools"),
 			pricing: model.pricing ? parsePricing(model.pricing) : null,
 		});
 	}
@@ -188,5 +205,6 @@ function parsePrices(
 		cacheRead: price(pricing.input_cache_read) ?? fallback?.cacheRead ?? null,
 		cacheWrite:
 			price(pricing.input_cache_write) ?? fallback?.cacheWrite ?? null,
+		webSearch: price(pricing.web_search) ?? fallback?.webSearch ?? null,
 	};
 }

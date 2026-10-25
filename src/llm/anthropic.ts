@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { MAX_WEB_SEARCHES } from "../config/models";
 import {
 	type ChatMessage,
 	type ChatRequest,
@@ -7,6 +8,7 @@ import {
 	type KeyCheckResult,
 	LlmError,
 	type ModelCheckResult,
+	type Source,
 	type TokenUsage,
 } from "./types";
 
@@ -32,48 +34,97 @@ export interface AnthropicCredential {
 	workspaceId: string | null;
 }
 
+/** 検索結果を絞り込む、新しい版のWeb検索を使えるClaude。ほかのClaudeは、古い版を使う */
+const DYNAMIC_WEB_SEARCH_MODELS: ReadonlySet<string> = new Set([
+	"claude-sonnet-5-5",
+	"claude-opus-5-5",
+	"claude-fable-5-1",
+]);
+
+/** サーバー側の処理が長くて、返答が途中で止まった(pause_turn)ときに、続きを頼む回数の上限 */
+const MAX_CONTINUATIONS = 3;
+
 /**
  * ユーザーのAnthropicのAPIキーで、Claudeを直接呼ぶ。
  * 思考(thinking)は指定しない。現行のClaudeは、省略するとモデルが必要に応じて考える。
+ * Web検索はサーバー側で動く。処理が長いと返答が途中で止まる(pause_turn)ので、そのときは続きを頼む。
  */
 export async function chatWithAnthropic(
 	credential: AnthropicCredential,
 	request: ChatRequest,
 ): Promise<ChatResult> {
 	const client = createClient(credential);
-	let message: Anthropic.Message;
+	const messages: Anthropic.MessageParam[] =
+		request.messages.map(toMessageParam);
+	const responses: Anthropic.Message[] = [];
 	try {
-		// 長い返答でも打ち切られないよう、ストリーミングで受けて最後にまとめる
-		message = await client.messages
-			.stream({
-				model: request.model,
-				max_tokens: request.maxTokens,
-				// 毎回同じ並びの会話を渡すので、最後のブロックまでを自動でキャッシュする
-				// (仕様: docs/spec/architecture.md「プロンプトキャッシュ」)
-				cache_control: { type: "ephemeral" },
-				system: request.system.map((text) => ({ type: "text", text })),
-				messages: request.messages.map(toMessageParam),
-				...(request.effort !== null && isClaudeEffort(request.effort)
-					? { output_config: { effort: request.effort } }
-					: {}),
-			})
-			.finalMessage();
+		for (;;) {
+			// 長い返答でも打ち切られないよう、ストリーミングで受けて最後にまとめる
+			const message = await client.messages
+				.stream({
+					model: request.model,
+					max_tokens: request.maxTokens,
+					// 毎回同じ並びの会話を渡すので、最後のブロックまでを自動でキャッシュする
+					// (仕様: docs/spec/architecture.md「プロンプトキャッシュ」)
+					cache_control: { type: "ephemeral" },
+					...(request.webSearch
+						? { tools: [webSearchTool(request.model)] }
+						: {}),
+					system: request.system.map((text) => ({ type: "text", text })),
+					messages,
+					...(request.effort !== null && isClaudeEffort(request.effort)
+						? { output_config: { effort: request.effort } }
+						: {}),
+				})
+				.finalMessage();
+			responses.push(message);
+			if (
+				message.stop_reason !== "pause_turn" ||
+				responses.length > MAX_CONTINUATIONS
+			) {
+				break;
+			}
+			// 止まったところまでの返答を渡すと、その続きから始まる
+			messages.push({ role: "assistant", content: message.content });
+		}
 	} catch (error) {
 		throw toLlmError(error);
 	}
 
+	const blocks = responses.flatMap((message) => message.content);
+	const stopReason = responses.at(-1)?.stop_reason;
 	return {
-		text: message.content
+		text: blocks
 			.flatMap((block) => (block.type === "text" ? [block.text] : []))
 			.join(""),
 		stopReason:
-			message.stop_reason === "max_tokens"
+			stopReason === "max_tokens"
 				? "max_tokens"
-				: message.stop_reason === "refusal"
+				: stopReason === "refusal"
 					? "refusal"
 					: "end",
-		usage: usageOf(message.usage),
+		usage: sumUsage(responses.map((message) => usageOf(message.usage))),
+		sources: sourcesOf(blocks),
 	};
+}
+
+/**
+ * Web検索の道具。1回の返答で使える回数に上限を設ける。
+ * 自分たちのサーバーの人は日本にいるので、日本向けの検索結果になるよう、地域を日本にする。
+ */
+function webSearchTool(model: string): Anthropic.Messages.ToolUnion {
+	const common = {
+		name: "web_search",
+		max_uses: MAX_WEB_SEARCHES,
+		user_location: {
+			type: "approximate",
+			country: "JP",
+			timezone: "Asia/Tokyo",
+		},
+	} as const;
+	return DYNAMIC_WEB_SEARCH_MODELS.has(model)
+		? { ...common, type: "web_search_20260209" }
+		: { ...common, type: "web_search_20250305" };
 }
 
 /** 使ったトークン数。Anthropicのinput_tokensは、キャッシュを使わなかった分だけなので、キャッシュの分を足す */
@@ -85,8 +136,40 @@ function usageOf(usage: Anthropic.Usage): TokenUsage {
 		outputTokens: usage.output_tokens,
 		cacheReadTokens: cacheRead,
 		cacheWriteTokens: cacheWrite,
+		webSearchRequests: usage.server_tool_use?.web_search_requests ?? 0,
 		costUsd: null,
 	};
+}
+
+/** 続きを頼んで、何回かに分けて呼んだときの合計 */
+function sumUsage(usages: TokenUsage[]): TokenUsage {
+	return usages.reduce((total, usage) => ({
+		inputTokens: total.inputTokens + usage.inputTokens,
+		outputTokens: total.outputTokens + usage.outputTokens,
+		cacheReadTokens: total.cacheReadTokens + usage.cacheReadTokens,
+		cacheWriteTokens: total.cacheWriteTokens + usage.cacheWriteTokens,
+		webSearchRequests: total.webSearchRequests + usage.webSearchRequests,
+		costUsd: null,
+	}));
+}
+
+/** 本文が引用したWebページ(出典)。同じURLは1つにまとめる */
+function sourcesOf(blocks: readonly Anthropic.ContentBlock[]): Source[] {
+	const sources = new Map<string, Source>();
+	for (const block of blocks) {
+		if (block.type !== "text") {
+			continue;
+		}
+		for (const citation of block.citations ?? []) {
+			if (
+				citation.type === "web_search_result_location" &&
+				!sources.has(citation.url)
+			) {
+				sources.set(citation.url, { url: citation.url, title: citation.title });
+			}
+		}
+	}
+	return [...sources.values()];
 }
 
 /** キーが有効か確かめる。料金のかからない、モデル一覧のAPIを呼ぶ */
@@ -133,7 +216,13 @@ export async function checkAnthropicModel(
 	const client = createClient(credential, 1);
 	try {
 		const model = await client.models.retrieve(modelId);
-		return { status: "found", efforts: claudeEfforts(model.capabilities) };
+		// Web検索を使えるかの情報がなければ、使えることにする
+		return {
+			status: "found",
+			efforts: claudeEfforts(model.capabilities),
+			webSearch:
+				model.capabilities?.server_tools?.web_search?.supported ?? true,
+		};
 	} catch (error) {
 		// 形の正しくないIDは、404ではなく400になることがある
 		if (

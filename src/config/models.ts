@@ -200,6 +200,9 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 /** 既定のモデル */
 export const DEFAULT_MODEL_KEY = "claude-haiku-5.5";
 
+/** 1回の返答で、Web検索を使える回数の上限(費用を抑えるため) */
+export const MAX_WEB_SEARCHES = 5;
+
 /** 思考の深さ(effort)を設定していない人に使う段階。モデルが選べなければ、いちばん近い段階を使う */
 export const DEFAULT_EFFORT = "low";
 

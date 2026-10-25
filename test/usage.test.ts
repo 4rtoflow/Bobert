@@ -18,6 +18,7 @@ function usage(overrides: Partial<TokenUsage> = {}): TokenUsage {
 		outputTokens: 678,
 		cacheReadTokens: 10_000,
 		cacheWriteTokens: 0,
+		webSearchRequests: 0,
 		costUsd: null,
 		...overrides,
 	};
@@ -90,6 +91,35 @@ describe("利用量の表示", () => {
 		);
 	});
 
+	it("Web検索をしたら、回数を書き、検索の費用も足す", async () => {
+		mockFetch(() =>
+			Response.json({
+				data: [
+					{
+						id: "anthropic/claude-haiku-5.5",
+						pricing: {
+							prompt: "0.0000001",
+							completion: "0.0000005",
+							input_cache_read: "0.00000001",
+							web_search: "0.01",
+						},
+					},
+				],
+			}),
+		);
+
+		const note = await usageNote(
+			usage({ webSearchRequests: 2 }),
+			HAIKU_DIRECT,
+			HAIKU,
+		);
+
+		// トークンの分(約$0.00067)に、検索2回の$0.02を足す
+		expect(note).toBe(
+			"-# 入力 12,345トークン(うちキャッシュ 10,000)・出力 678トークン・Web検索 2回・約$0.021",
+		);
+	});
+
 	it("入力が多くて単価が上がるときは、上がった単価で計算する", async () => {
 		mockHaikuPricing();
 
@@ -144,6 +174,7 @@ describe("利用量の表示", () => {
 					completion: 0.00001,
 					cacheRead: null,
 					cacheWrite: null,
+					webSearch: null,
 				},
 				tiers: [],
 			},
