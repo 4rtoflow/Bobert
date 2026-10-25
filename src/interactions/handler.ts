@@ -11,6 +11,7 @@ import {
 import { confirmDelete, DELETE_CONFIRM_ID, deleteCommand } from "./delete";
 import { EFFORT_SELECT_ID, effortCommand, selectEffort } from "./effort";
 import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
+import { helpCommand } from "./help";
 import {
 	MODEL_CUSTOM_ID,
 	MODEL_SELECT_ID,
@@ -19,6 +20,7 @@ import {
 	submitCustomModel,
 } from "./model";
 import { PROMPT_MODAL_ID, promptCommand, submitPrompt } from "./prompt";
+import { settingsCommand } from "./settings";
 import {
 	anthropicKeyModal,
 	SETUP_ANTHROPIC_ID,
@@ -32,8 +34,7 @@ import { verifyDiscordRequest } from "./verify";
  * 最初の応答は3秒以内に返す必要がある。時間のかかる処理は、保留の応答を返してから続ける。
  *
  * これから実装すること(仕様: docs/spec/behavior.md「スラッシュコマンド」):
- * /settings、/compact、/help と、
- * 右クリックメニューの「Bobertに聞く」
+ * /compact と、右クリックメニューの「Bobertに聞く」
  */
 export async function handleInteraction(
 	request: Request,
@@ -81,8 +82,14 @@ async function route(
 			if (interaction.data.name === "prompt") {
 				return promptCommand(env, user.id);
 			}
+			if (interaction.data.name === "settings") {
+				return settingsCommand(interaction, env, ctx, user.id);
+			}
 			if (interaction.data.name === "delete") {
 				return deleteCommand();
+			}
+			if (interaction.data.name === "help") {
+				return helpCommand();
 			}
 			break;
 		case InteractionType.MessageComponent:

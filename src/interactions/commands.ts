@@ -44,7 +44,17 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	},
 	{
 		...GUILD_ONLY,
+		name: "settings",
+		description: "現在の設定の確認",
+	},
+	{
+		...GUILD_ONLY,
 		name: "delete",
 		description: "登録したキーと設定の削除",
+	},
+	{
+		...GUILD_ONLY,
+		name: "help",
+		description: "使い方",
 	},
 ];
