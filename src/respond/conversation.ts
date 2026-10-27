@@ -134,6 +134,25 @@ export function toConversation(
 	};
 }
 
+/**
+ * メッセージを「名前: 本文」の文にする(道具の結果で使う)。添付は、ファイル名だけを書き添える。
+ * Bobertの発言は、末尾の注記を外す。
+ */
+export function messageLine(message: APIMessage, botUserId: string): string {
+	if (message.author.id === botUserId) {
+		return `${displayName(message.author)}: ${botText(message)}`;
+	}
+	const notes = message.attachments.map((attachment) =>
+		isImage(attachment)
+			? `[画像: ${attachment.filename}]`
+			: `[添付ファイル: ${attachment.filename}]`,
+	);
+	const body = [resolveMentions(message.content, message.mentions), ...notes]
+		.filter((text) => text !== "")
+		.join("\n");
+	return `${displayName(message.author)}: ${body}`;
+}
+
 /** Bobertの発言。末尾に添えた注記(「-# 」で始まる小さな文字の行)は、会話の内容ではないので外す */
 function botText(message: APIMessage): string {
 	const lines = message.content.split("\n");

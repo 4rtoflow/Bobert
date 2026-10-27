@@ -33,6 +33,7 @@ import {
 import { buildSystemPrompt } from "./prompt";
 import { describeLlmError, formatReply, setupGuidance } from "./replies";
 import { splitMessage } from "./split";
+import { replyChainTool, startsWithReply, toolsAvailable } from "./tools";
 import { usageNote } from "./usage";
 import { webSearchAvailable } from "./web-search";
 
@@ -121,6 +122,12 @@ async function composeReply(
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
 		: false;
+	// 会話の最初のメッセージが返信なら、返信先をAIが必要なときに読めるようにする
+	const root = chain[0];
+	const tools =
+		startsWithReply(root) && (await toolsAvailable(settings, model))
+			? [replyChainTool(root, fetchMessage, env.DISCORD_APPLICATION_ID)]
+			: [];
 	const request: ChatRequest = {
 		model: model.modelId,
 		system: buildSystemPrompt(settings.customPrompt),
@@ -128,6 +135,7 @@ async function composeReply(
 		// 設定していなければ既定の段階を、モデルが選べなければいちばん近い段階を送る
 		effort: await replyEffort(env, userId, settings, model),
 		webSearch: webSearch === true,
+		tools,
 		maxTokens: MAX_OUTPUT_TOKENS,
 	};
 
@@ -144,6 +152,7 @@ async function composeReply(
 			messages: chain.length,
 			stopReason: result.stopReason,
 			durationMs: Date.now() - startedAt,
+			toolCalls: result.toolCalls,
 			...result.usage,
 		});
 		return formatReply(result, {

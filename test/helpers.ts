@@ -213,3 +213,132 @@ function bytesToHex(bytes: Uint8Array): string {
 		"",
 	);
 }
+
+/** 本文が引用したWebページ */
+export function citation(url: string, title: string) {
+	return {
+		type: "web_search_result_location",
+		url,
+		title,
+		cited_text: "引用した文",
+		encrypted_index: "x",
+	};
+}
+
+/** AnthropicのAPIの、ストリーミングの応答の中身 */
+export type StreamBlock =
+	| {
+			type: "text";
+			text: string;
+			citations?: ReturnType<typeof citation>[];
+	  }
+	| { type: "server_tool_use"; id: string; query: string }
+	| { type: "tool_use"; id: string; name: string; input?: unknown }
+	| { type: "web_search_tool_result"; toolUseId: string; url: string };
+
+/** AnthropicのAPIの、ストリーミングの応答(SSE)。blocksは返答の中身 */
+export function anthropicStreamOf(
+	blocks: StreamBlock[],
+	options: { stopReason?: string; webSearches?: number } = {},
+): Response {
+	const events: [string, unknown][] = [
+		[
+			"message_start",
+			{
+				type: "message_start",
+				message: {
+					id: "msg_test",
+					type: "message",
+					role: "assistant",
+					model: "claude-haiku-5-5",
+					content: [],
+					stop_reason: null,
+					stop_sequence: null,
+					usage: { input_tokens: 10, output_tokens: 1 },
+				},
+			},
+		],
+	];
+	blocks.forEach((block, index) => {
+		const delta = (data: unknown) =>
+			events.push([
+				"content_block_delta",
+				{ type: "content_block_delta", index, delta: data },
+			]);
+		const start = (contentBlock: unknown) =>
+			events.push([
+				"content_block_start",
+				{ type: "content_block_start", index, content_block: contentBlock },
+			]);
+		if (block.type === "text") {
+			start({ type: "text", text: "", citations: null });
+			delta({ type: "text_delta", text: block.text });
+			for (const item of block.citations ?? []) {
+				delta({ type: "citations_delta", citation: item });
+			}
+		} else if (block.type === "tool_use") {
+			start({ type: "tool_use", id: block.id, name: block.name, input: {} });
+			delta({
+				type: "input_json_delta",
+				partial_json: JSON.stringify(block.input ?? {}),
+			});
+		} else if (block.type === "server_tool_use") {
+			start({
+				type: "server_tool_use",
+				id: block.id,
+				name: "web_search",
+				input: {},
+			});
+			delta({
+				type: "input_json_delta",
+				partial_json: JSON.stringify({ query: block.query }),
+			});
+		} else {
+			start({
+				type: "web_search_tool_result",
+				tool_use_id: block.toolUseId,
+				content: [
+					{
+						type: "web_search_result",
+						url: block.url,
+						title: "検索結果",
+						encrypted_content: "x",
+						page_age: null,
+					},
+				],
+			});
+		}
+		events.push(["content_block_stop", { type: "content_block_stop", index }]);
+	});
+	events.push(
+		[
+			"message_delta",
+			{
+				type: "message_delta",
+				delta: {
+					stop_reason: options.stopReason ?? "end_turn",
+					stop_sequence: null,
+				},
+				usage: {
+					output_tokens: 5,
+					server_tool_use: {
+						web_search_requests: options.webSearches ?? 0,
+						web_fetch_requests: 0,
+					},
+				},
+			},
+		],
+		["message_stop", { type: "message_stop" }],
+	);
+	return new Response(
+		events
+			.map(
+				([event, data]) => `event: ${event}
+data: ${JSON.stringify(data)}
+
+`,
+			)
+			.join(""),
+		{ headers: { "Content-Type": "text/event-stream" } },
+	);
+}

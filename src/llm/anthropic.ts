@@ -1,14 +1,17 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { MAX_WEB_SEARCHES } from "../config/models";
+import { MAX_TOOL_CALLS, MAX_WEB_SEARCHES } from "../config/models";
+import { runChatTool, TOOL_LIMIT_REACHED } from "./tools";
 import {
 	type ChatMessage,
 	type ChatRequest,
 	type ChatResult,
+	type ChatTool,
 	describeError,
 	type KeyCheckResult,
 	LlmError,
 	type ModelCheckResult,
 	type Source,
+	sumUsage,
 	type TokenUsage,
 } from "./types";
 
@@ -44,10 +47,14 @@ const DYNAMIC_WEB_SEARCH_MODELS: ReadonlySet<string> = new Set([
 /** サーバー側の処理が長くて、返答が途中で止まった(pause_turn)ときに、続きを頼む回数の上限 */
 const MAX_CONTINUATIONS = 3;
 
+/** 1回の返答で、AIとやり取りする回数の上限。続きを頼むときと、道具の結果を返すときに数える */
+const MAX_ROUNDS = 10;
+
 /**
  * ユーザーのAnthropicのAPIキーで、Claudeを直接呼ぶ。
  * 思考(thinking)は指定しない。現行のClaudeは、省略するとモデルが必要に応じて考える。
- * Web検索はサーバー側で動く。処理が長いと返答が途中で止まる(pause_turn)ので、そのときは続きを頼む。
+ * - Web検索はサーバー側で動く。処理が長いと返答が途中で止まる(pause_turn)ので、そのときは続きを頼む
+ * - Bobertの道具をAIが呼んだら、実行して結果を返し、続きを頼む。呼び出しが上限に達したら、道具を使わずに答えさせる
  */
 export async function chatWithAnthropic(
 	credential: AnthropicCredential,
@@ -56,9 +63,18 @@ export async function chatWithAnthropic(
 	const client = createClient(credential);
 	const messages: Anthropic.MessageParam[] =
 		request.messages.map(toMessageParam);
+	// 道具の定義は、毎回同じ並びにする(キャッシュのため)。Bobertの道具、Web検索の順
+	const tools: Anthropic.Messages.ToolUnion[] = [
+		...request.tools.map(toAnthropicTool),
+		...(request.webSearch ? [webSearchTool(request.model)] : []),
+	];
 	const responses: Anthropic.Message[] = [];
+	/** 最後の答えが始まる応答。道具の結果を返したら、その次の応答から数え直す */
+	let answerFrom = 0;
+	let continuations = 0;
+	let toolCalls = 0;
 	try {
-		for (;;) {
+		while (responses.length < MAX_ROUNDS) {
 			// 長い返答でも打ち切られないよう、ストリーミングで受けて最後にまとめる
 			const message = await client.messages
 				.stream({
@@ -67,8 +83,9 @@ export async function chatWithAnthropic(
 					// 毎回同じ並びの会話を渡すので、最後のブロックまでを自動でキャッシュする
 					// (仕様: docs/spec/architecture.md「プロンプトキャッシュ」)
 					cache_control: { type: "ephemeral" },
-					...(request.webSearch
-						? { tools: [webSearchTool(request.model)] }
+					...(tools.length > 0 ? { tools } : {}),
+					...(request.tools.length > 0 && toolCalls >= MAX_TOOL_CALLS
+						? { tool_choice: { type: "none" } }
 						: {}),
 					system: request.system.map((text) => ({ type: "text", text })),
 					messages,
@@ -79,13 +96,38 @@ export async function chatWithAnthropic(
 				.finalMessage();
 			responses.push(message);
 			if (
-				message.stop_reason !== "pause_turn" ||
-				responses.length > MAX_CONTINUATIONS
+				message.stop_reason === "pause_turn" &&
+				continuations < MAX_CONTINUATIONS
 			) {
+				continuations++;
+				// 止まったところまでの返答を渡すと、その続きから始まる
+				messages.push({ role: "assistant", content: message.content });
+				continue;
+			}
+			const uses = message.content.filter(
+				(block): block is Anthropic.ToolUseBlock => block.type === "tool_use",
+			);
+			if (message.stop_reason !== "tool_use" || uses.length === 0) {
 				break;
 			}
-			// 止まったところまでの返答を渡すと、その続きから始まる
 			messages.push({ role: "assistant", content: message.content });
+			const results: Anthropic.ToolResultBlockParam[] = [];
+			for (const use of uses) {
+				const outcome =
+					toolCalls < MAX_TOOL_CALLS
+						? await runChatTool(request.tools, use.name, use.input)
+						: TOOL_LIMIT_REACHED;
+				toolCalls++;
+				results.push({
+					type: "tool_result",
+					tool_use_id: use.id,
+					content: outcome.content,
+					...(outcome.isError ? { is_error: true } : {}),
+				});
+			}
+			// 道具の結果は、まとめて1つのメッセージで返す
+			messages.push({ role: "user", content: results });
+			answerFrom = responses.length;
 		}
 	} catch (error) {
 		throw toLlmError(error);
@@ -94,7 +136,10 @@ export async function chatWithAnthropic(
 	const blocks = responses.flatMap((message) => message.content);
 	const stopReason = responses.at(-1)?.stop_reason;
 	return {
-		text: blocks
+		// 道具を呼ぶ前の前置き(「調べます」など)は、答えに入れない
+		text: responses
+			.slice(answerFrom)
+			.flatMap((message) => message.content)
 			.flatMap((block) => (block.type === "text" ? [block.text] : []))
 			.join(""),
 		stopReason:
@@ -105,6 +150,20 @@ export async function chatWithAnthropic(
 					: "end",
 		usage: sumUsage(responses.map((message) => usageOf(message.usage))),
 		sources: sourcesOf(blocks),
+		toolCalls,
+	};
+}
+
+/**
+ * Bobertの道具を、Anthropicの形にする。
+ * 入力は、生成されながら届くようにする(届いた入力は、道具の側で確かめる)。
+ */
+function toAnthropicTool(tool: ChatTool): Anthropic.Messages.ToolUnion {
+	return {
+		name: tool.name,
+		description: tool.description,
+		input_schema: tool.inputSchema,
+		eager_input_streaming: true,
 	};
 }
 
@@ -139,18 +198,6 @@ function usageOf(usage: Anthropic.Usage): TokenUsage {
 		webSearchRequests: usage.server_tool_use?.web_search_requests ?? 0,
 		costUsd: null,
 	};
-}
-
-/** 続きを頼んで、何回かに分けて呼んだときの合計 */
-function sumUsage(usages: TokenUsage[]): TokenUsage {
-	return usages.reduce((total, usage) => ({
-		inputTokens: total.inputTokens + usage.inputTokens,
-		outputTokens: total.outputTokens + usage.outputTokens,
-		cacheReadTokens: total.cacheReadTokens + usage.cacheReadTokens,
-		cacheWriteTokens: total.cacheWriteTokens + usage.cacheWriteTokens,
-		webSearchRequests: total.webSearchRequests + usage.webSearchRequests,
-		costUsd: null,
-	}));
 }
 
 /** 本文が引用したWebページ(出典)。同じURLは1つにまとめる */
