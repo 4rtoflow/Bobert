@@ -30,10 +30,11 @@ export interface DeleteJob {
 	messageIds: string[];
 }
 
-/** 過去ログの取り込み。beforeより古いメッセージを1回分(最大100件)取り込む。 */
+/** 過去ログの取り込み。beforeより古いメッセージを1回分(最大100件)取り込む。nullなら、いちばん新しいものから */
 export interface ImportJob {
 	kind: "import";
 	channelId: string;
+	guildId: string | null;
 	before: string | null;
 }
 

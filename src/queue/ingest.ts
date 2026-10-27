@@ -9,6 +9,9 @@ import {
 } from "../store/messages";
 import type { StoredMessageInput } from "./messages";
 
+/** 1回でベクトルにする文の数。過去ログの取り込みでは1回に100件届くので、分けて送る */
+const EMBED_BATCH_SIZE = 50;
+
 /** 保存とベクトル化に使うもの。テストでは偽物に差し替える */
 export interface IngestDeps {
 	db: D1Database;
@@ -55,13 +58,14 @@ export async function ingestMessages(
 		.filter(({ text, message }) => text === "" && message.editedAt !== null)
 		.map(({ message }) => message.messageId);
 
-	if (embeddable.length > 0) {
-		const values = await deps.embed(embeddable.map(({ text }) => text));
+	for (let i = 0; i < embeddable.length; i += EMBED_BATCH_SIZE) {
+		const batch = embeddable.slice(i, i + EMBED_BATCH_SIZE);
+		const values = await deps.embed(batch.map(({ text }) => text));
 		await deps.vectors.upsert(
-			embeddable.map(({ message }, i) => ({
+			batch.map(({ message }, j) => ({
 				id: message.messageId,
 				namespace: message.channelId,
-				values: values[i] as number[],
+				values: values[j] as number[],
 				metadata: {
 					author_id: message.authorId,
 					created_at: message.createdAt,
@@ -70,7 +74,7 @@ export async function ingestMessages(
 		);
 		await markEmbedded(
 			deps.db,
-			embeddable.map(({ message }) => message),
+			batch.map(({ message }) => message),
 		);
 	}
 	if (emptied.length > 0) {

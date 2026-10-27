@@ -6,6 +6,7 @@ import { env } from "cloudflare:workers";
 import type { APIUser } from "discord-api-types/v10";
 import { vi } from "vitest";
 import { handleInteraction } from "../src/interactions/handler";
+import type { IngestDeps } from "../src/queue/ingest";
 import { type Provider, saveCredential } from "../src/store/users";
 import { ALICE } from "./fixtures";
 
@@ -341,4 +342,30 @@ data: ${JSON.stringify(data)}
 			.join(""),
 		{ headers: { "Content-Type": "text/event-stream" } },
 	);
+}
+
+/** 偽物のVectorizeと埋め込み。呼ばれた内容を記録する */
+export function fakeIngestDeps(botUserId: string) {
+	const upserted: VectorizeVector[] = [];
+	const deleted: string[] = [];
+	const embedded: string[] = [];
+	const deps: IngestDeps = {
+		db: env.DB,
+		vectors: {
+			upsert: async (vectors) => {
+				upserted.push(...vectors);
+				return { mutationId: "mutation" };
+			},
+			deleteByIds: async (ids) => {
+				deleted.push(...ids);
+				return { mutationId: "mutation" };
+			},
+		},
+		embed: async (texts) => {
+			embedded.push(...texts);
+			return texts.map(() => [0.1, 0.2]);
+		},
+		botUserId,
+	};
+	return { deps, upserted, deleted, embedded };
 }

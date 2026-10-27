@@ -1,6 +1,8 @@
+import { getChannelMessages } from "../discord/api";
 import { logEvent } from "../log";
 import { handleRespondJob } from "../respond/handler";
 import { workersAiEmbedder } from "../store/embedding";
+import { IMPORT_PAGE_SIZE, importChannelPage } from "./import";
 import { deleteMessages, type IngestDeps, ingestMessages } from "./ingest";
 import type {
 	DeleteJob,
@@ -14,9 +16,6 @@ import type {
 /**
  * Queueに入った仕事を処理する。失敗した仕事は、Queueの設定の回数までやり直す。
  * 保存と削除は、まとめて処理する(D1、Workers AI、Vectorizeを呼ぶ回数を減らすため)。
- *
- * これから実装すること(仕様: docs/spec/architecture.md「過去ログの取り込み」):
- * - import: 過去ログの取り込み
  */
 export async function handleQueueBatch(
 	batch: MessageBatch<QueueMessage>,
@@ -36,6 +35,20 @@ export async function handleQueueBatch(
 				jobs.flatMap((job) => job.messageIds),
 				deps,
 			),
+		import: (job) =>
+			importChannelPage(job, {
+				...deps,
+				listMessages: (channelId, before) =>
+					getChannelMessages(env.DISCORD_BOT_TOKEN, channelId, {
+						before,
+						limit: IMPORT_PAGE_SIZE,
+					}),
+				continueImport: async (next, delaySeconds) => {
+					await env.INGEST_QUEUE.send(next satisfies QueueMessage, {
+						delaySeconds,
+					});
+				},
+			}),
 	});
 }
 
@@ -44,9 +57,10 @@ export interface JobHandlers {
 	respond: (job: RespondJob) => Promise<void>;
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
 	delete: (jobs: DeleteJob[]) => Promise<void>;
+	import: (job: ImportJob) => Promise<void>;
 }
 
-/** 仕事を種類ごとに分けて処理する。応答は1件ずつ、保存と削除はまとめて */
+/** 仕事を種類ごとに分けて処理する。応答と過去ログの取り込みは1件ずつ、保存と削除はまとめて */
 export async function processBatch(
 	messages: readonly Message<QueueMessage>[],
 	handlers: JobHandlers,
@@ -74,9 +88,12 @@ export async function processBatch(
 	}
 	await settle(ingest, (jobs) => handlers.ingest(jobs.map(withDefaults)));
 	await settle(deletion, (jobs) => handlers.delete(jobs));
-	// TODO: 過去ログの取り込み
 	for (const message of imports) {
-		message.ack();
+		await settle([message], async (jobs) => {
+			for (const job of jobs) {
+				await handlers.import(job);
+			}
+		});
 	}
 }
 

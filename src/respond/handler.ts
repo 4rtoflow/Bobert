@@ -10,6 +10,7 @@ import { findOpenRouterModel } from "../llm/model-info";
 import { chatWithOpenRouter } from "../llm/openrouter";
 import { type ChatRequest, LlmError } from "../llm/types";
 import { logEvent } from "../log";
+import { startChannelImport } from "../queue/import";
 import type {
 	QueueMessage,
 	RespondJob,
@@ -84,6 +85,7 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 		log("trigger_unavailable", { userId: job.authorId });
 		return;
 	}
+	await startImport(env, job);
 	const history: HistoryDeps = {
 		db: env.DB,
 		guildId: job.guildId,
@@ -254,6 +256,33 @@ async function postReply(
 			allowed_mentions: { parse: [], replied_user: index === 0 },
 		});
 		replyTo = posted.id;
+	}
+}
+
+/**
+ * そのチャンネルで初めてBotが使われたら、過去ログの取り込みを裏で始める
+ * (仕様: docs/spec/architecture.md「過去ログの取り込み」)。始められなくても、返答は続ける。
+ */
+async function startImport(env: Env, job: RespondJob): Promise<void> {
+	if (job.guildId === null) {
+		return;
+	}
+	try {
+		if (
+			await startChannelImport(
+				env.DB,
+				env.INGEST_QUEUE,
+				job.channelId,
+				job.guildId,
+			)
+		) {
+			log("import_started", { channelId: job.channelId });
+		}
+	} catch (error) {
+		log("import_start_failed", {
+			channelId: job.channelId,
+			error: error instanceof Error ? error.message : "unknown",
+		});
 	}
 }
 

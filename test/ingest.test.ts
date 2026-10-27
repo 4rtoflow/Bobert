@@ -1,13 +1,10 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it, type Mock, vi } from "vitest";
 import { type JobHandlers, processBatch } from "../src/queue/consumer";
-import {
-	deleteMessages,
-	type IngestDeps,
-	ingestMessages,
-} from "../src/queue/ingest";
+import { deleteMessages, ingestMessages } from "../src/queue/ingest";
 import type { QueueMessage, StoredMessageInput } from "../src/queue/messages";
 import { deleteStoredMessages } from "../src/store/messages";
+import { fakeIngestDeps } from "./helpers";
 
 const BOT_ID = "1000";
 const CREATED_AT = Date.parse("2026-10-27T00:00:00.000Z");
@@ -36,30 +33,8 @@ function storedMessage(
 	};
 }
 
-/** 偽物のVectorizeと埋め込み。呼ばれた内容を記録する */
 function fakeDeps() {
-	const upserted: VectorizeVector[] = [];
-	const deleted: string[] = [];
-	const embedded: string[] = [];
-	const deps: IngestDeps = {
-		db: env.DB,
-		vectors: {
-			upsert: async (vectors) => {
-				upserted.push(...vectors);
-				return { mutationId: "mutation" };
-			},
-			deleteByIds: async (ids) => {
-				deleted.push(...ids);
-				return { mutationId: "mutation" };
-			},
-		},
-		embed: async (texts) => {
-			embedded.push(...texts);
-			return texts.map(() => [0.1, 0.2]);
-		},
-		botUserId: BOT_ID,
-	};
-	return { deps, upserted, deleted, embedded };
+	return fakeIngestDeps(BOT_ID);
 }
 
 function storedRow(messageId: string) {
@@ -339,6 +314,7 @@ describe("Queueの仕事の振り分け", () => {
 			respond: vi.fn(async () => {}),
 			ingest: vi.fn(async () => {}),
 			delete: vi.fn(async () => {}),
+			import: vi.fn(async () => {}),
 			...overrides,
 		};
 	}

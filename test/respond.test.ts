@@ -26,15 +26,20 @@ afterEach(() => {
 	vi.restoreAllMocks();
 	clearModelInfoCache();
 	ingested.length = 0;
+	imports.length = 0;
 });
 
 /** 保存用のQueueに入れたメッセージ。テストでは、本物の保存の処理を動かさない */
 const ingested: StoredMessageInput[] = [];
+/** 保存用のQueueに入れた、過去ログの取り込みの仕事 */
+const imports: QueueMessage[] = [];
 
 const testEnv: Env = {
 	...env,
 	INGEST_QUEUE: {
-		send: async () => {},
+		send: async (body: QueueMessage) => {
+			imports.push(body);
+		},
 		sendBatch: async (batch: Iterable<MessageSendRequest<QueueMessage>>) => {
 			for (const request of batch) {
 				if (request.body.kind === "ingest") {
@@ -823,5 +828,26 @@ describe("保存したメッセージから会話を読む", () => {
 				},
 			],
 		});
+	});
+});
+
+describe("過去ログの取り込み", () => {
+	it("初めて使われたチャンネルなら、過去ログの取り込みを始める", async () => {
+		const first = discordMessage("5500", BOB, `<@${BOT.id}> こんにちは`, {
+			mentions: [BOT],
+		});
+		const second = discordMessage("5501", BOB, `<@${BOT.id}> もう一度`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([first, second]);
+
+		await handleRespondJob(respondJob(first, { channelId: "810" }), testEnv);
+		await handleRespondJob(respondJob(second, { channelId: "810" }), testEnv);
+
+		// 2回とも返信していて、取り込みの仕事は1回目にだけ入れる
+		expect(posted(calls)).toHaveLength(2);
+		expect(imports).toEqual([
+			{ kind: "import", channelId: "810", guildId: "900", before: null },
+		]);
 	});
 });
