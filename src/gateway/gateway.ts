@@ -8,6 +8,7 @@ import { getGatewayBot } from "../discord/api";
 import type { QueueMessage } from "../queue/messages";
 import {
 	type GatewayMessage,
+	memberNames,
 	shouldRespond,
 	shouldStore,
 	toStoredMessage,
@@ -293,6 +294,7 @@ export class Gateway extends DurableObject<Env> {
 						channelId: message.channel_id,
 						guildId: message.guild_id,
 						authorId: message.author.id,
+						members: memberNames(message),
 					} satisfies QueueMessage);
 				}
 				if (shouldStore(message)) {

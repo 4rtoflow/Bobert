@@ -47,6 +47,8 @@ export function messageVersion(
  * - メッセージIDで上書きする。編集が作成より先に処理されても(やり直しで順番が入れ替わる)、古い版では上書きしない
  * - 削除済みのメッセージは保存しない
  * - 本文が変わったら、ベクトルを入れ直すため、embedded_atを消す
+ * - 発言者の名前は、サーバーでの情報が付いているとき(Gatewayで届いたとき)だけ書き換える。
+ *   Discordから読み直したメッセージには、ニックネームが含まれないため
  * あわせて、サーバーで見えている名前を、人ごとに記録する。
  */
 export async function saveMessages(
@@ -55,6 +57,9 @@ export async function saveMessages(
 ): Promise<void> {
 	const statements = messages.flatMap((message) => {
 		const { guildId } = message;
+		const nameFromMember = message.members.some(
+			(member) => member.id === message.authorId,
+		);
 		return [
 			db
 				.prepare(
@@ -65,7 +70,10 @@ export async function saveMessages(
 				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
 				WHERE NOT EXISTS (SELECT 1 FROM deleted_messages WHERE message_id = ?1)
 				ON CONFLICT (message_id) DO UPDATE SET
-					author_name = excluded.author_name,
+					author_name = CASE
+						WHEN ?13 THEN excluded.author_name
+						ELSE messages.author_name
+					END,
 					content = excluded.content,
 					reply_to_id = excluded.reply_to_id,
 					mentions = excluded.mentions,
@@ -91,6 +99,7 @@ export async function saveMessages(
 					JSON.stringify(message.attachments),
 					message.createdAt,
 					message.editedAt,
+					nameFromMember ? 1 : 0,
 				),
 			...(guildId === null
 				? []
@@ -121,6 +130,93 @@ function saveMemberName(
 				AND excluded.name != guild_members.name`,
 		)
 		.bind(guildId, member.id, member.name, messageVersion(message));
+}
+
+/** 保存したメッセージの行 */
+interface MessageRow {
+	message_id: string;
+	guild_id: string | null;
+	channel_id: string;
+	author_id: string;
+	author_name: string;
+	author_is_bot: number;
+	content: string;
+	reply_to_id: string | null;
+	mentions: string | null;
+	attachments: string | null;
+	created_at: number;
+	edited_at: number | null;
+}
+
+/**
+ * 保存したメッセージを、指定したものから返信先へたどって読む。指定したものから古い方への順で返す。
+ * 保存していないメッセージに行き当たったら、そこまでを返す。
+ */
+export async function loadStoredChain(
+	db: D1Database,
+	messageId: string,
+	limit: number,
+): Promise<StoredMessageInput[]> {
+	if (limit <= 0) {
+		return [];
+	}
+	const { results } = await db
+		.prepare(
+			`WITH RECURSIVE chain (message_id, depth) AS (
+				SELECT ?1, 0
+				UNION ALL
+				SELECT messages.reply_to_id, chain.depth + 1
+				FROM chain JOIN messages ON messages.message_id = chain.message_id
+				WHERE messages.reply_to_id IS NOT NULL AND chain.depth + 1 < ?2
+			)
+			SELECT messages.*
+			FROM chain JOIN messages ON messages.message_id = chain.message_id
+			ORDER BY chain.depth`,
+		)
+		.bind(messageId, limit)
+		.all<MessageRow>();
+	return results.map(fromRow);
+}
+
+function fromRow(row: MessageRow): StoredMessageInput {
+	return {
+		messageId: row.message_id,
+		guildId: row.guild_id,
+		channelId: row.channel_id,
+		authorId: row.author_id,
+		authorName: row.author_name,
+		authorIsBot: row.author_is_bot === 1,
+		content: row.content,
+		replyToId: row.reply_to_id,
+		mentions: row.mentions ? JSON.parse(row.mentions) : [],
+		attachments: row.attachments ? JSON.parse(row.attachments) : [],
+		// サーバーで見えている名前は、guild_membersから読む
+		members: [],
+		createdAt: row.created_at,
+		editedAt: row.edited_at,
+	};
+}
+
+/** サーバーで見えている名前(人ごとに、最後に分かったもの)。分からない人は含まない */
+export async function loadMemberNames(
+	db: D1Database,
+	guildId: string,
+	userIds: readonly string[],
+): Promise<Map<string, string>> {
+	const names = new Map<string, string>();
+	for (const ids of chunks(userIds, MAX_IDS_PER_QUERY)) {
+		const { results } = await db
+			.prepare(
+				`SELECT user_id, name FROM guild_members
+				WHERE guild_id = ? AND user_id IN (${ids.map(() => "?").join(", ")})`,
+			)
+			.bind(guildId, ...ids)
+			.all<{ user_id: string; name: string }>();
+		for (const row of results) {
+			names.set(row.user_id, row.name);
+		}
+	}
+	return names;
 }
 
 /** ベクトルを入れるメッセージ */

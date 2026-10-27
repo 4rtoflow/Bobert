@@ -1,10 +1,19 @@
+import { env } from "cloudflare:workers";
 import type { APIMessage } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { chatWithAnthropic } from "../src/llm/anthropic";
 import { chatWithOpenRouter } from "../src/llm/openrouter";
 import type { ChatRequest, ChatTool } from "../src/llm/types";
+import { fromDiscord, type HistoryDeps } from "../src/respond/history";
 import { replyChainTool, startsWithReply } from "../src/respond/tools";
-import { ALICE, BOB, BOT, discordMessage, discordReply } from "./fixtures";
+import {
+	ALICE,
+	BOB,
+	BOT,
+	CHANNEL_ID,
+	discordMessage,
+	discordReply,
+} from "./fixtures";
 import { anthropicStreamOf, type FetchCall, mockFetch } from "./helpers";
 
 afterEach(() => {
@@ -313,18 +322,28 @@ describe("返信先を読む道具", () => {
 			mentions: [BOT],
 		},
 	);
-	const fetcher = async (_channelId: string, messageId: string) =>
-		([first, second, root] as APIMessage[]).find((m) => m.id === messageId) ??
-		null;
+	/** 返信先は、保存していないのでDiscordから読む */
+	const history: HistoryDeps = {
+		db: env.DB,
+		guildId: "900",
+		channelId: CHANNEL_ID,
+		fetchMessage: async (_channelId, messageId) =>
+			([first, second, root] as APIMessage[]).find(
+				(message) => message.id === messageId,
+			) ?? null,
+		ingest: async () => {},
+		knownNames: [],
+	};
+	const stored = (message: APIMessage) => fromDiscord(message, "900");
 
 	it("会話の最初のメッセージが返信のときだけ、渡す", () => {
-		expect(startsWithReply(root)).toBe(true);
-		expect(startsWithReply(first)).toBe(false);
+		expect(startsWithReply(stored(root))).toBe(true);
+		expect(startsWithReply(stored(first))).toBe(false);
 		expect(startsWithReply(undefined)).toBe(false);
 	});
 
 	it("返信先を古い方へたどって、「名前: 本文」の形で返す", async () => {
-		const tool = replyChainTool(root, fetcher, BOT.id);
+		const tool = replyChainTool(stored(root), history, BOT.id);
 
 		const result = await tool.run({});
 
@@ -337,11 +356,12 @@ describe("返信先を読む道具", () => {
 	});
 
 	it("返信先を読めなければ、そう伝える", async () => {
-		const orphan = discordReply("6004", BOB, "これは?", first, {
-			referenced_message: null,
-		});
+		const deleted = discordMessage("6000", ALICE, "消えた発言");
+		const orphan = discordReply("6004", BOB, "これは?", deleted);
 
-		const result = await replyChainTool(orphan, fetcher, BOT.id).run({});
+		const result = await replyChainTool(stored(orphan), history, BOT.id).run(
+			{},
+		);
 
 		expect(result).toBe(
 			"返信先のメッセージを読めませんでした。消されたか、読む権限がありません。",

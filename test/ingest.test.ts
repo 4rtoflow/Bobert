@@ -241,6 +241,19 @@ describe("メッセージの保存とベクトル化", () => {
 		expect(deleted).toEqual([message.messageId]);
 	});
 
+	it("Discordから読み直したメッセージ(ニックネームが分からない)では、発言者の名前を書き換えない", async () => {
+		const { deps } = fakeDeps();
+		const message = storedMessage();
+
+		await ingestMessages([message], deps);
+		await ingestMessages(
+			[{ ...message, authorName: "Alice", members: [] }],
+			deps,
+		);
+
+		expect((await storedRow(message.messageId))?.author_name).toBe("ありす");
+	});
+
 	it("サーバーで見えている名前を、人ごとに記録する。古いメッセージの名前では書き換えない", async () => {
 		const { deps } = fakeDeps();
 		const named = (name: string, createdAt: number) =>

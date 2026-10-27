@@ -1,10 +1,9 @@
-import type { APIAttachment, APIMessage, APIUser } from "discord-api-types/v10";
-import { MessageType } from "../discord/constants";
 import type { ChatMessage, ChatPart } from "../llm/types";
+import type { AttachmentInfo, StoredMessageInput } from "../queue/messages";
 
 /**
  * 返信のつながりをさかのぼる上限。
- * メッセージの保存ができるまでは、Discordから1件ずつ読むので上限を設ける。
+ * 長すぎる会話への備え。長い会話の要約ができるまでは、上限を設ける。
  */
 export const MAX_CHAIN_LENGTH = 100;
 
@@ -20,52 +19,12 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 /** 1回に渡す画像の枚数の上限。新しいものから数える */
 const MAX_IMAGES = 10;
 
-/** メッセージを1件読む。消えているか、読めなければnull */
-export type MessageFetcher = (
-	channelId: string,
-	messageId: string,
-) => Promise<APIMessage | null>;
-
-/**
- * 返信のつながりをさかのぼり、古い順に並べて返す(仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」)。
- * 返信先が消えていたら、そこで止める。
- */
-export async function fetchReplyChain(
-	start: APIMessage,
-	fetchMessage: MessageFetcher,
-): Promise<APIMessage[]> {
-	const chain = [start];
-	let current = start;
-	while (chain.length < MAX_CHAIN_LENGTH) {
-		const reference = current.message_reference;
-		// 返信だけをたどる。転送やピン留めの通知もmessage_referenceを持つため
-		if (current.type !== MessageType.Reply || !reference?.message_id) {
-			break;
-		}
-		// 返信先が消えているとnullになる
-		if (current.referenced_message === null) {
-			break;
-		}
-		// 取得したメッセージには、返信先が1段だけ含まれている
-		const parent =
-			current.referenced_message ??
-			(await fetchMessage(
-				reference.channel_id ?? current.channel_id,
-				reference.message_id,
-			));
-		if (!parent) {
-			break;
-		}
-		chain.push(parent);
-		current = parent;
-	}
-	return chain.reverse();
-}
-
 export interface ConversationOptions {
 	botUserId: string;
 	/** 画像をAIに渡すか(モデルが対応していて、本人の設定がONのとき) */
 	includeImages: boolean;
+	/** サーバーで見えている名前(人ごとに、最後に分かったもの)。なければ、メッセージに付いている名前を使う */
+	names: ReadonlyMap<string, string>;
 }
 
 export interface Conversation {
@@ -75,49 +34,35 @@ export interface Conversation {
 }
 
 /**
- * 返信のつながりを、AIに渡す会話に変換する。
+ * 返信のつながり(古い順)を、AIに渡す会話に変換する(仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」)。
  * - Bobertの発言はAIの発言、それ以外は「名前: 本文」の形の人の発言にする
  * - 画像は、新しいものから上限の枚数まで渡す。渡さない添付は、ファイル名だけを書き添える
  */
 export function toConversation(
-	chain: readonly APIMessage[],
+	chain: readonly StoredMessageInput[],
 	options: ConversationOptions,
 ): Conversation {
-	let remainingImages = options.includeImages ? MAX_IMAGES : 0;
+	const images = options.includeImages
+		? selectImages(chain, options.botUserId)
+		: new Map<string, AttachmentInfo[]>();
 	const messages: ChatMessage[] = [];
-	for (const message of [...chain].reverse()) {
-		if (message.author.id === options.botUserId) {
-			messages.unshift({
+	for (const message of chain) {
+		if (message.authorId === options.botUserId) {
+			messages.push({
 				role: "assistant",
 				parts: [{ type: "text", text: botText(message) }],
 			});
 			continue;
 		}
-		const images: ChatPart[] = [];
-		const notes: string[] = [];
-		for (const attachment of message.attachments) {
-			if (remainingImages > 0 && isReadableImage(attachment)) {
-				images.push({ type: "image", url: attachment.url });
-				remainingImages--;
-			} else {
-				notes.push(
-					isImage(attachment)
-						? `[画像: ${attachment.filename}]`
-						: `[添付ファイル: ${attachment.filename}]`,
-				);
-			}
-		}
-		const body = [
-			resolveMentions(message.content, mentionNames(message.mentions)),
-			...notes,
-		]
-			.filter((text) => text !== "")
-			.join("\n");
-		messages.unshift({
+		const passed = images.get(message.messageId) ?? [];
+		const notes = message.attachments
+			.filter((attachment) => !passed.includes(attachment))
+			.map(attachmentNote);
+		messages.push({
 			role: "user",
 			parts: [
-				{ type: "text", text: `${displayName(message.author)}: ${body}` },
-				...images,
+				{ type: "text", text: humanLine(message, options.names, notes) },
+				...passed.map((image): ChatPart => ({ type: "image", url: image.url })),
 			],
 		});
 	}
@@ -138,29 +83,72 @@ export function toConversation(
 }
 
 /**
+ * AIに渡す画像を選ぶ。新しいものから上限の枚数まで。Bobertの発言の添付は渡さない。
+ * メッセージIDごとに、渡す添付を返す
+ */
+export function selectImages(
+	chain: readonly StoredMessageInput[],
+	botUserId: string,
+): Map<string, AttachmentInfo[]> {
+	const selected = new Map<string, AttachmentInfo[]>();
+	let remaining = MAX_IMAGES;
+	for (const message of [...chain].reverse()) {
+		if (message.authorId === botUserId) {
+			continue;
+		}
+		const images: AttachmentInfo[] = [];
+		for (const attachment of message.attachments) {
+			if (remaining > 0 && isReadableImage(attachment)) {
+				images.push(attachment);
+				remaining--;
+			}
+		}
+		if (images.length > 0) {
+			selected.set(message.messageId, images);
+		}
+	}
+	return selected;
+}
+
+/**
  * メッセージを「名前: 本文」の文にする(道具の結果で使う)。添付は、ファイル名だけを書き添える。
  * Bobertの発言は、末尾の注記を外す。
  */
-export function messageLine(message: APIMessage, botUserId: string): string {
-	if (message.author.id === botUserId) {
-		return `${displayName(message.author)}: ${botText(message)}`;
+export function messageLine(
+	message: StoredMessageInput,
+	botUserId: string,
+	names: ReadonlyMap<string, string>,
+): string {
+	if (message.authorId === botUserId) {
+		return `${authorName(message, names)}: ${botText(message)}`;
 	}
-	const notes = message.attachments.map((attachment) =>
-		isImage(attachment)
-			? `[画像: ${attachment.filename}]`
-			: `[添付ファイル: ${attachment.filename}]`,
+	return humanLine(message, names, message.attachments.map(attachmentNote));
+}
+
+/** 人の発言を「名前: 本文」の文にする。notesは、本文の後に書き添える */
+function humanLine(
+	message: StoredMessageInput,
+	names: ReadonlyMap<string, string>,
+	notes: readonly string[],
+): string {
+	const mentioned = new Map(
+		message.mentions.map((user) => [user.id, names.get(user.id) ?? user.name]),
 	);
-	const body = [
-		resolveMentions(message.content, mentionNames(message.mentions)),
-		...notes,
-	]
+	const body = [resolveMentions(message.content, mentioned), ...notes]
 		.filter((text) => text !== "")
 		.join("\n");
-	return `${displayName(message.author)}: ${body}`;
+	return `${authorName(message, names)}: ${body}`;
+}
+
+function authorName(
+	message: StoredMessageInput,
+	names: ReadonlyMap<string, string>,
+): string {
+	return names.get(message.authorId) ?? message.authorName;
 }
 
 /** Bobertの発言。末尾に添えた注記は外す */
-function botText(message: APIMessage): string {
+function botText(message: StoredMessageInput): string {
 	return stripNotes(message.content) || "(本文なし)";
 }
 
@@ -171,14 +159,6 @@ export function stripNotes(content: string): string {
 		lines.pop();
 	}
 	return lines.join("\n").trimEnd();
-}
-
-function displayName(user: APIUser): string {
-	return user.global_name ?? user.username;
-}
-
-function mentionNames(mentions: readonly APIUser[]): Map<string, string> {
-	return new Map(mentions.map((user) => [user.id, displayName(user)]));
 }
 
 /** メンションなどの記法を、AIが読める形にする。namesは、メンションされた人のIDと名前 */
@@ -195,11 +175,17 @@ export function resolveMentions(
 		.replace(/<a?:(\w+):\d+>/g, ":$1:");
 }
 
-function isImage(attachment: APIAttachment): boolean {
-	return attachment.content_type?.startsWith("image/") ?? false;
+function attachmentNote(attachment: AttachmentInfo): string {
+	return isImage(attachment)
+		? `[画像: ${attachment.filename}]`
+		: `[添付ファイル: ${attachment.filename}]`;
 }
 
-function isReadableImage(attachment: APIAttachment): boolean {
-	const type = attachment.content_type?.split(";")[0]?.trim() ?? "";
+function isImage(attachment: AttachmentInfo): boolean {
+	return attachment.contentType?.startsWith("image/") ?? false;
+}
+
+function isReadableImage(attachment: AttachmentInfo): boolean {
+	const type = attachment.contentType?.split(";")[0]?.trim() ?? "";
 	return IMAGE_TYPES.has(type) && attachment.size <= MAX_IMAGE_BYTES;
 }

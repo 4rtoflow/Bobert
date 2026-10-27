@@ -1,9 +1,19 @@
-import type { APIAttachment } from "discord-api-types/v10";
+import type { APIAttachment, APIMessage } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
-import { fetchReplyChain, toConversation } from "../src/respond/conversation";
-import { ALICE, BOB, BOT, discordMessage, discordReply } from "./fixtures";
+import { toConversation } from "../src/respond/conversation";
+import { fromDiscord } from "../src/respond/history";
+import { ALICE, BOB, BOT, discordMessage } from "./fixtures";
 
-const OPTIONS = { botUserId: BOT.id, includeImages: true };
+const OPTIONS = {
+	botUserId: BOT.id,
+	includeImages: true,
+	names: new Map<string, string>(),
+};
+
+/** Discordから読んだメッセージを、会話の組み立てに使う形にする */
+function stored(...messages: APIMessage[]) {
+	return messages.map((message) => fromDiscord(message, "900"));
+}
 
 const CAT_IMAGE: APIAttachment = {
 	id: "a1",
@@ -23,49 +33,16 @@ const MEMO: APIAttachment = {
 	content_type: "text/plain; charset=utf-8",
 };
 
-describe("返信のつながりをたどる", () => {
-	it("古い順に並べる。メッセージに含まれている返信先は、読み直さない", async () => {
-		const first = discordMessage("1", ALICE, "こんにちは");
-		const second = discordReply("2", BOT, "やあ", first);
-		const third = discordReply("3", ALICE, "元気?", second, {
-			referenced_message: second,
-		});
-		const stored = new Map([first, second, third].map((m) => [m.id, m]));
-		const fetched: string[] = [];
-
-		const chain = await fetchReplyChain(third, async (_channelId, id) => {
-			fetched.push(id);
-			return stored.get(id) ?? null;
-		});
-
-		expect(chain.map((message) => message.id)).toEqual(["1", "2", "3"]);
-		expect(fetched).toEqual(["1"]);
-	});
-
-	it("返信先が消えていたら、そこで止める", async () => {
-		const deleted = discordMessage("1", BOB, "消えた発言");
-		const orphan = discordReply("2", ALICE, "これは?", deleted, {
-			referenced_message: null,
-		});
-
-		const chain = await fetchReplyChain(orphan, async () => {
-			throw new Error("読まないはず");
-		});
-
-		expect(chain.map((message) => message.id)).toEqual(["2"]);
-	});
-});
-
 describe("AIに渡す会話への変換", () => {
 	it("Bobertの発言はAIの発言に、それ以外は名前付きの人の発言にする", () => {
-		const chain = [
+		const chain = stored(
 			discordMessage("1", BOB, "<@100> これ見て", { mentions: [ALICE] }),
 			discordMessage("2", ALICE, `<@${BOT.id}> どういう意味?`, {
 				mentions: [BOT],
 			}),
 			discordMessage("3", BOT, "それはね…\n-# このモデルは画像を読めません"),
 			discordMessage("4", ALICE, "ありがとう <:smile:123>"),
-		];
+		);
 
 		expect(toConversation(chain, OPTIONS).messages).toEqual([
 			{ role: "user", parts: [{ type: "text", text: "bob: @Alice これ見て" }] },
@@ -81,10 +58,28 @@ describe("AIに渡す会話への変換", () => {
 		]);
 	});
 
+	it("名前は、サーバーで見えている名前に揃える(発言者も、メンションされた人も)", () => {
+		const chain = stored(
+			discordMessage("1", BOB, "<@100> これ見て", { mentions: [ALICE] }),
+		);
+
+		const { messages } = toConversation(chain, {
+			...OPTIONS,
+			names: new Map([
+				[ALICE.id, "ありす"],
+				[BOB.id, "ぼぶ"],
+			]),
+		});
+
+		expect(messages[0]?.parts).toEqual([
+			{ type: "text", text: "ぼぶ: @ありす これ見て" },
+		]);
+	});
+
 	it("画像はAIに渡し、画像以外の添付はファイル名だけを書き添える", () => {
-		const chain = [
+		const chain = stored(
 			discordMessage("1", ALICE, "これ何?", { attachments: [CAT_IMAGE, MEMO] }),
-		];
+		);
 
 		const conversation = toConversation(chain, OPTIONS);
 
@@ -101,9 +96,9 @@ describe("AIに渡す会話への変換", () => {
 	});
 
 	it("画像を渡さないときは、ファイル名を書き添え、渡さなかったことを知らせる", () => {
-		const chain = [
+		const chain = stored(
 			discordMessage("1", ALICE, "これ何?", { attachments: [CAT_IMAGE, MEMO] }),
-		];
+		);
 
 		const conversation = toConversation(chain, {
 			...OPTIONS,
@@ -120,10 +115,10 @@ describe("AIに渡す会話への変換", () => {
 	});
 
 	it("会話がBobertの発言から始まるときは、前に人の発言を補う", () => {
-		const chain = [
+		const chain = stored(
 			discordMessage("1", BOT, "こんにちは"),
 			discordMessage("2", ALICE, "やあ"),
-		];
+		);
 
 		const { messages } = toConversation(chain, OPTIONS);
 
