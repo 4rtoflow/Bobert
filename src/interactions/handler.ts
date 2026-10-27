@@ -34,7 +34,7 @@ import { verifyDiscordRequest } from "./verify";
  * 最初の応答は3秒以内に返す必要がある。時間のかかる処理は、保留の応答を返してから続ける。
  *
  * これから実装すること(仕様: docs/spec/behavior.md「スラッシュコマンド」):
- * /compact と、右クリックメニューの「Bobertに聞く」
+ * 右クリックメニューの「Bobertに聞く」と、会話の要約
  */
 export async function handleInteraction(
 	request: Request,
