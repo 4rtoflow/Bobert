@@ -37,18 +37,35 @@ export interface StoredMessageInput {
 	guildId: string | null;
 	channelId: string;
 	authorId: string;
+	/** 発言者の名前。サーバーのニックネームを優先する(分かるのは、Gatewayで届いたときだけ) */
 	authorName: string;
 	authorIsBot: boolean;
 	content: string;
+	/** 返信先。返信のときだけ入れる(転送やピン留めの通知も、返信先と同じ項目を持つため) */
 	replyToId: string | null;
+	/** メンションされた人。本文のメンションを名前に置き換えるのに使う */
+	mentions: UserName[];
 	attachments: AttachmentInfo[];
+	/**
+	 * このメッセージで分かった、サーバーで見えている名前(発言者と、メンションされた人)。
+	 * サーバーでの情報(ニックネームの有無)が付いていた人だけ
+	 */
+	members: UserName[];
 	/** 投稿時刻(UNIX時間のミリ秒) */
 	createdAt: number;
 	/** 編集時刻(UNIX時間のミリ秒) */
 	editedAt: number | null;
 }
 
+/** 人のIDと名前 */
+export interface UserName {
+	id: string;
+	name: string;
+}
+
 export interface AttachmentInfo {
+	filename: string;
+	/** 期限付き(約24時間)。AIに渡すときは、Discordから新しいURLを取り直す */
 	url: string;
 	contentType: string | null;
 	size: number;

@@ -107,7 +107,10 @@ export function toConversation(
 				);
 			}
 		}
-		const body = [resolveMentions(message.content, message.mentions), ...notes]
+		const body = [
+			resolveMentions(message.content, mentionNames(message.mentions)),
+			...notes,
+		]
 			.filter((text) => text !== "")
 			.join("\n");
 		messages.unshift({
@@ -147,31 +150,42 @@ export function messageLine(message: APIMessage, botUserId: string): string {
 			? `[画像: ${attachment.filename}]`
 			: `[添付ファイル: ${attachment.filename}]`,
 	);
-	const body = [resolveMentions(message.content, message.mentions), ...notes]
+	const body = [
+		resolveMentions(message.content, mentionNames(message.mentions)),
+		...notes,
+	]
 		.filter((text) => text !== "")
 		.join("\n");
 	return `${displayName(message.author)}: ${body}`;
 }
 
-/** Bobertの発言。末尾に添えた注記(「-# 」で始まる小さな文字の行)は、会話の内容ではないので外す */
+/** Bobertの発言。末尾に添えた注記は外す */
 function botText(message: APIMessage): string {
-	const lines = message.content.split("\n");
+	return stripNotes(message.content) || "(本文なし)";
+}
+
+/** Bobertの返答の末尾に添えた注記(「-# 」で始まる小さな文字の行)を外す。会話の内容ではないため */
+export function stripNotes(content: string): string {
+	const lines = content.split("\n");
 	while (lines.length > 0 && lines.at(-1)?.startsWith("-# ")) {
 		lines.pop();
 	}
-	return lines.join("\n").trimEnd() || "(本文なし)";
+	return lines.join("\n").trimEnd();
 }
 
 function displayName(user: APIUser): string {
 	return user.global_name ?? user.username;
 }
 
-/** メンションなどの記法を、AIが読める形にする */
-function resolveMentions(
+function mentionNames(mentions: readonly APIUser[]): Map<string, string> {
+	return new Map(mentions.map((user) => [user.id, displayName(user)]));
+}
+
+/** メンションなどの記法を、AIが読める形にする。namesは、メンションされた人のIDと名前 */
+export function resolveMentions(
 	content: string,
-	mentions: readonly APIUser[],
+	names: ReadonlyMap<string, string>,
 ): string {
-	const names = new Map(mentions.map((user) => [user.id, displayName(user)]));
 	return content
 		.replace(
 			/<@!?(\d+)>/g,
