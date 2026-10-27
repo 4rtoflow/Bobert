@@ -69,3 +69,11 @@ export function discordReply(
 		...extra,
 	});
 }
+
+/** fixturesのメッセージをAIに渡すときに、頭に付く時刻(投稿時刻を日本時間にしたもの) */
+export const POSTED_AT = "[2026-10-24(土) 09:00]";
+
+/** AIに渡す発言の形。頭に、fixturesのメッセージの投稿時刻を付ける */
+export function at(line: string): string {
+	return `${POSTED_AT} ${line}`;
+}

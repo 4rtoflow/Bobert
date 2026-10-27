@@ -1,7 +1,13 @@
 import type { APIMessage } from "discord-api-types/v10";
-import { toStoredMessage } from "../gateway/messages";
+import { shouldStore, toStoredMessage } from "../gateway/messages";
 import type { StoredMessageInput, UserName } from "../queue/messages";
-import { loadMemberNames, loadStoredChain } from "../store/messages";
+import { getChannelImport } from "../store/imports";
+import {
+	loadChannelMessages,
+	loadMemberNames,
+	loadStoredChain,
+	type TimelineRange,
+} from "../store/messages";
 import { MAX_CHAIN_LENGTH, selectImages } from "./conversation";
 
 /** 添付のURLの期限まで、これより短ければ取り直す。AIが画像を読みに行くまでの余裕 */
@@ -13,12 +19,19 @@ export type MessageFetcher = (
 	messageId: string,
 ) => Promise<APIMessage | null>;
 
+/** Discordから、チャンネルのメッセージの一覧を読む(新しい順で返る)。beforeとafterはメッセージID */
+export type MessageLister = (
+	channelId: string,
+	options: { before?: string; after?: string; limit: number },
+) => Promise<APIMessage[]>;
+
 /** 過去のメッセージの読み先(仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」) */
 export interface HistoryDeps {
 	db: D1Database;
 	guildId: string | null;
 	channelId: string;
 	fetchMessage: MessageFetcher;
+	listMessages: MessageLister;
 	/** Discordから読んだメッセージを、保存に回す(読んだ分だけ取り込む) */
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
 	/** 話しかけたメッセージで分かった、サーバーで見えている名前。保存したものより新しい */
@@ -148,4 +161,51 @@ function expiresSoon(url: string, now: number): boolean {
 	}
 	const expiresAt = Number.parseInt(expires, 16) * 1000;
 	return Number.isNaN(expiresAt) || expiresAt - now < URL_REFRESH_MARGIN_MS;
+}
+
+/** DiscordのメッセージIDの時刻の起点(2015-01-01) */
+const DISCORD_EPOCH = 1420070400000n;
+
+/**
+ * チャンネルの履歴を、範囲を指定して読む(時系列で読む道具)。返すのは古い順。
+ * 過去ログの取り込みが済んでいれば、保存したもの(D1)から読む。
+ * 済んでいなければ、保存していない期間があるので、Discordから読み、保存にも回す。
+ */
+export async function readChannelTimeline(
+	range: TimelineRange,
+	deps: HistoryDeps,
+): Promise<StoredMessageInput[]> {
+	const imported = await getChannelImport(deps.db, deps.channelId);
+	if (imported?.status === "done") {
+		return loadChannelMessages(deps.db, deps.channelId, range);
+	}
+	const page = await deps.listMessages(deps.channelId, {
+		...(range.newestFirst
+			? range.before === null
+				? {}
+				: { before: snowflakeAt(range.before) }
+			: { after: snowflakeAt(range.after ?? 0) }),
+		limit: range.limit,
+	});
+	const messages = page
+		.map((message) => ({ ...message, guild_id: deps.guildId ?? undefined }))
+		// 参加やピン留めの通知などのシステムのメッセージは、保存の対象と同じく外す
+		.filter((message) => shouldStore(message))
+		.map((message) => toStoredMessage(message))
+		.filter(
+			(message) =>
+				(range.after === null || message.createdAt > range.after) &&
+				(range.before === null || message.createdAt < range.before),
+		)
+		.sort((a, b) => a.createdAt - b.createdAt);
+	if (messages.length > 0) {
+		await deps.ingest(messages);
+	}
+	return messages;
+}
+
+/** その時刻のメッセージIDの下限。メッセージIDの上位のビットは、投稿された時刻 */
+function snowflakeAt(ms: number): string {
+	const time = BigInt(Math.max(0, Math.floor(ms))) - DISCORD_EPOCH;
+	return (time > 0n ? time << 22n : 0n).toString();
 }

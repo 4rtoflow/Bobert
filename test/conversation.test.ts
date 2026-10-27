@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { StoredMessageInput } from "../src/queue/messages";
 import { toConversation } from "../src/respond/conversation";
 import { fromDiscord } from "../src/respond/history";
-import { ALICE, BOB, BOT, discordMessage } from "./fixtures";
+import { ALICE, at, BOB, BOT, discordMessage } from "./fixtures";
 
 const OPTIONS = {
 	botUserId: BOT.id,
@@ -46,15 +46,18 @@ describe("AIに渡す会話への変換", () => {
 		);
 
 		expect(toConversation(chain, OPTIONS).messages).toEqual([
-			{ role: "user", parts: [{ type: "text", text: "bob: @Alice これ見て" }] },
 			{
 				role: "user",
-				parts: [{ type: "text", text: "Alice: @Bobert どういう意味?" }],
+				parts: [{ type: "text", text: at("bob: @Alice これ見て") }],
+			},
+			{
+				role: "user",
+				parts: [{ type: "text", text: at("Alice: @Bobert どういう意味?") }],
 			},
 			{ role: "assistant", parts: [{ type: "text", text: "それはね…" }] },
 			{
 				role: "user",
-				parts: [{ type: "text", text: "Alice: ありがとう :smile:" }],
+				parts: [{ type: "text", text: at("Alice: ありがとう :smile:") }],
 			},
 		]);
 	});
@@ -73,7 +76,7 @@ describe("AIに渡す会話への変換", () => {
 		});
 
 		expect(messages[0]?.parts).toEqual([
-			{ type: "text", text: "ぼぶ: @ありす これ見て" },
+			{ type: "text", text: at("ぼぶ: @ありす これ見て") },
 		]);
 	});
 
@@ -88,7 +91,10 @@ describe("AIに渡す会話への変換", () => {
 			{
 				role: "user",
 				parts: [
-					{ type: "text", text: "Alice: これ何?\n[添付ファイル: memo.txt]" },
+					{
+						type: "text",
+						text: at("Alice: これ何?\n[添付ファイル: memo.txt]"),
+					},
 					{ type: "image", url: "https://cdn.example/cat.png" },
 				],
 			},
@@ -109,7 +115,7 @@ describe("AIに渡す会話への変換", () => {
 		expect(conversation.messages[0]?.parts).toEqual([
 			{
 				type: "text",
-				text: "Alice: これ何?\n[画像: cat.png]\n[添付ファイル: memo.txt]",
+				text: at("Alice: これ何?\n[画像: cat.png]\n[添付ファイル: memo.txt]"),
 			},
 		]);
 		expect(conversation.imagesSkipped).toBe(true);
@@ -172,12 +178,14 @@ describe("AIに渡す会話への変換", () => {
 				{
 					type: "text",
 					text: [
-						"おひるん！(Bot。ありすが使った /add store への返答): [Embed] ✅ 店舗を追加しました",
+						at(
+							"おひるん！(Bot。ありすが使った /add store への返答): [Embed] ✅ 店舗を追加しました",
+						),
 						"店舗名: aaa",
 					].join("\n"),
 				},
 			],
-			[{ type: "text", text: "おひるん！(Bot): Pong!" }],
+			[{ type: "text", text: at("おひるん！(Bot): Pong!") }],
 		]);
 	});
 });

@@ -3,6 +3,7 @@ import {
 	createMessage,
 	DiscordApiError,
 	getChannelMessage,
+	getChannelMessages,
 	triggerTyping,
 } from "../discord/api";
 import { chatWithAnthropic } from "../llm/anthropic";
@@ -42,7 +43,12 @@ import {
 import { buildSystemPrompt } from "./prompt";
 import { describeLlmError, formatReply, setupGuidance } from "./replies";
 import { splitMessage } from "./split";
-import { replyChainTool, startsWithReply, toolsAvailable } from "./tools";
+import {
+	channelHistoryTool,
+	replyChainTool,
+	startsWithReply,
+	toolsAvailable,
+} from "./tools";
 import { usageNote } from "./usage";
 import { webSearchAvailable } from "./web-search";
 
@@ -91,6 +97,8 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 		guildId: job.guildId,
 		channelId: job.channelId,
 		fetchMessage,
+		listMessages: (channelId, options) =>
+			getChannelMessages(token, channelId, options),
 		ingest: (messages) => enqueueIngest(env, messages),
 		knownNames: job.members ?? [],
 	};
@@ -155,12 +163,17 @@ async function composeReply(
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
 		: false;
-	// 会話の最初のメッセージが返信なら、返信先をAIが必要なときに読めるようにする
+	// AIが必要なときに、チャンネルの履歴を読めるようにする。会話の最初のメッセージが返信なら、その返信先も読めるようにする。
+	// 道具の定義は、毎回同じ並びにする(キャッシュのため)
 	const root = chain[0];
-	const tools =
-		startsWithReply(root) && (await toolsAvailable(settings, model))
-			? [replyChainTool(root, history, botUserId)]
-			: [];
+	const tools = (await toolsAvailable(settings, model))
+		? [
+				channelHistoryTool(history, botUserId),
+				...(startsWithReply(root)
+					? [replyChainTool(root, history, botUserId)]
+					: []),
+			]
+		: [];
 	const request: ChatRequest = {
 		model: model.modelId,
 		system: buildSystemPrompt(settings.customPrompt),
