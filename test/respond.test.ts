@@ -14,6 +14,7 @@ import { saveMessages } from "../src/store/messages";
 import { saveCredential, updateUserSettings } from "../src/store/users";
 import {
 	ALICE,
+	at,
 	BOB,
 	BOT,
 	CHANNEL_ID,
@@ -265,10 +266,10 @@ describe("メンションと返信への応答", () => {
 			messages: [
 				{
 					role: "user",
-					content: [{ type: "text", text: "Alice: @Bobert やあ" }],
+					content: [{ type: "text", text: at("Alice: @Bobert やあ") }],
 				},
 				{ role: "assistant", content: [{ type: "text", text: "やあ!" }] },
-				{ role: "user", content: [{ type: "text", text: "Alice: 元気?" }] },
+				{ role: "user", content: [{ type: "text", text: at("Alice: 元気?") }] },
 			],
 		});
 		expect(posted(calls).map((reply) => reply.content)).toEqual(["元気だよ!"]);
@@ -406,7 +407,7 @@ describe("メンションと返信への応答", () => {
 				{
 					role: "user",
 					content: [
-						{ type: "text", text: "Alice: @Bobert これ何?" },
+						{ type: "text", text: at("Alice: @Bobert これ何?") },
 						{ type: "image_url", image_url: { url: CAT_URL } },
 					],
 				},
@@ -443,7 +444,10 @@ describe("メンションと返信への応答", () => {
 		expect(request?.body).toMatchObject({
 			messages: [
 				{ role: "system" },
-				{ role: "user", content: "Alice: @Bobert これ何?\n[画像: cat.png]" },
+				{
+					role: "user",
+					content: at("Alice: @Bobert これ何?\n[画像: cat.png]"),
+				},
 			],
 		});
 		expect(posted(calls)[0]?.content).toBe(
@@ -604,8 +608,12 @@ describe("メンションと返信への応答", () => {
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
 		);
+		// Bobertの道具(時系列で読む)の後に、Web検索を置く
 		expect(request?.body).toMatchObject({
-			tools: [{ type: "openrouter:web_search" }],
+			tools: [
+				{ type: "function", function: { name: "read_channel_history" } },
+				{ type: "openrouter:web_search" },
+			],
 		});
 		expect(posted(calls)[0]?.content).toBe(
 			"今日は晴れ。\n-# 出典: [example.com](<https://example.com/a>)",
@@ -696,6 +704,10 @@ describe("メンションと返信への応答", () => {
 		expect(requests[0]?.tools).toEqual([
 			expect.objectContaining({
 				type: "function",
+				function: expect.objectContaining({ name: "read_channel_history" }),
+			}),
+			expect.objectContaining({
+				type: "function",
 				function: expect.objectContaining({ name: "read_reply_chain" }),
 			}),
 		]);
@@ -708,7 +720,7 @@ describe("メンションと返信への応答", () => {
 		expect(posted(calls)[0]?.content).toBe("返信先は読めなかったよ。");
 	});
 
-	it("会話の最初のメッセージが返信でなければ、道具を渡さない", async () => {
+	it("会話の最初のメッセージが返信でなければ、返信先を読む道具は渡さない(時系列で読む道具だけ)", async () => {
 		const user = { ...ALICE, id: "127" };
 		await saveCredential(env, user.id, "openrouter", {
 			apiKey: "sk-or-test",
@@ -724,7 +736,12 @@ describe("メンションと返信への応答", () => {
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
 		);
-		expect(request?.body).not.toHaveProperty("tools");
+		const body = request?.body as
+			| { tools?: { function: { name: string } }[] }
+			| undefined;
+		expect(body?.tools?.map((tool) => tool.function.name)).toEqual([
+			"read_channel_history",
+		]);
 	});
 });
 
@@ -764,10 +781,10 @@ describe("保存したメッセージから会話を読む", () => {
 			messages: [
 				{
 					role: "user",
-					content: [{ type: "text", text: "Alice: @Bobert やあ" }],
+					content: [{ type: "text", text: at("Alice: @Bobert やあ") }],
 				},
 				{ role: "assistant", content: [{ type: "text", text: "やあ!" }] },
-				{ role: "user", content: [{ type: "text", text: "Alice: 元気?" }] },
+				{ role: "user", content: [{ type: "text", text: at("Alice: 元気?") }] },
 			],
 		});
 		expect(ingested).toEqual([]);
@@ -821,10 +838,10 @@ describe("保存したメッセージから会話を読む", () => {
 
 		expect(anthropicBody(calls)).toMatchObject({
 			messages: [
-				{ role: "user", content: [{ type: "text", text: "ぼぶ: やあ" }] },
+				{ role: "user", content: [{ type: "text", text: at("ぼぶ: やあ") }] },
 				{
 					role: "user",
-					content: [{ type: "text", text: "ありす: @Bobert これ何?" }],
+					content: [{ type: "text", text: at("ありす: @Bobert これ何?") }],
 				},
 			],
 		});

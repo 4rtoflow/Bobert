@@ -4,6 +4,7 @@ import type {
 	EmbedInfo,
 	StoredMessageInput,
 } from "../queue/messages";
+import { formatJst } from "./time";
 
 /**
  * 返信のつながりをさかのぼる上限。
@@ -39,7 +40,8 @@ export interface Conversation {
 
 /**
  * 返信のつながり(古い順)を、AIに渡す会話に変換する(仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」)。
- * - Bobertの発言はAIの発言、それ以外は「名前: 本文」の形の人の発言にする
+ * - Bobertの発言はAIの発言、それ以外は「[時刻] 名前: 本文」の形の人の発言にする。時刻は日本時間で、
+ *   話しかけた発言の時刻が今の日時にあたる。発言の形は毎回同じなので、キャッシュは崩れない
  * - 画像は、新しいものから上限の枚数まで渡す。渡さない添付は、ファイル名だけを書き添える
  */
 export function toConversation(
@@ -115,7 +117,7 @@ export function selectImages(
 }
 
 /**
- * メッセージを「名前: 本文」の文にする(道具の結果で使う)。Embedの中身と、添付のファイル名を書き添える。
+ * メッセージを「[時刻] 名前: 本文」の文にする(道具の結果で使う)。Bobertの発言にも時刻を付ける。Embedの中身と、添付のファイル名を書き添える。
  * Bobertの発言は、末尾の注記を外す。
  */
 export function messageLine(
@@ -124,13 +126,13 @@ export function messageLine(
 	names: ReadonlyMap<string, string>,
 ): string {
 	if (message.authorId === botUserId) {
-		return `${authorName(message, names)}: ${botText(message)}`;
+		return `[${formatJst(message.createdAt)}] ${authorName(message, names)}: ${botText(message)}`;
 	}
 	return humanLine(message, names, message.attachments.map(attachmentNote));
 }
 
 /**
- * Bobert以外の発言を「名前: 本文」の文にする。本文の後に、Embedの中身と、notes(添付のファイル名など)を書き添える。
+ * Bobert以外の発言を「[時刻] 名前: 本文」の文にする。本文の後に、Embedの中身と、notes(添付のファイル名など)を書き添える。
  * ほかのBotの発言は、名前にBotであることと、どのコマンドへの返答かを書き添える。
  */
 function humanLine(
@@ -152,7 +154,7 @@ function humanLine(
 	]
 		.filter((text) => text !== "")
 		.join("\n");
-	return `${speakerLabel(message, names)}: ${body}`;
+	return `[${formatJst(message.createdAt)}] ${speakerLabel(message, names)}: ${body}`;
 }
 
 /** 発言者の名前。ほかのBotなら、Botであることと、どのコマンドへの返答か(誰が使ったか)を書き添える */

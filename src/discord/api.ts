@@ -107,17 +107,21 @@ export function getChannelMessage(
 }
 
 /**
- * チャンネルのメッセージを、新しい順に最大limit件(100件まで)取得する。beforeを指定すると、それより前のもの。
+ * チャンネルのメッセージを、新しい順に最大limit件(100件まで)取得する。
+ * beforeを指定すると、それより前のもの。afterを指定すると、それより後のもの(どちらもメッセージID)。
  * 読むにはメッセージ履歴を読む権限が必要
  */
 export function getChannelMessages(
 	botToken: string,
 	channelId: string,
-	options: { before: string | null; limit: number },
+	options: { before?: string | null; after?: string | null; limit: number },
 ): Promise<APIMessage[]> {
 	const query = new URLSearchParams({ limit: String(options.limit) });
-	if (options.before !== null) {
+	if (options.before) {
 		query.set("before", options.before);
+	}
+	if (options.after) {
+		query.set("after", options.after);
 	}
 	return discordRequest(
 		"GET channel messages",

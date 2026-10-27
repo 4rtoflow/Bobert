@@ -213,6 +213,40 @@ function fromRow(row: MessageRow): StoredMessageInput {
 	};
 }
 
+/** チャンネルの履歴を読む範囲。afterより後、beforeより前(どちらもUNIX時間のミリ秒。nullなら制限しない) */
+export interface TimelineRange {
+	after: number | null;
+	before: number | null;
+	/** 新しい方からlimit件を読む。違えば、古い方からlimit件を読む */
+	newestFirst: boolean;
+	limit: number;
+}
+
+/** 保存したチャンネルのメッセージを、範囲を指定して読む。返すのは、どちらの読み方でも古い順 */
+export async function loadChannelMessages(
+	db: D1Database,
+	channelId: string,
+	range: TimelineRange,
+): Promise<StoredMessageInput[]> {
+	const order = range.newestFirst ? "DESC" : "ASC";
+	const { results } = await db
+		.prepare(
+			`SELECT * FROM messages
+			WHERE channel_id = ?1 AND created_at > ?2 AND created_at < ?3
+			ORDER BY created_at ${order}, message_id ${order}
+			LIMIT ?4`,
+		)
+		.bind(
+			channelId,
+			range.after ?? -1,
+			range.before ?? Number.MAX_SAFE_INTEGER,
+			range.limit,
+		)
+		.all<MessageRow>();
+	const messages = results.map(fromRow);
+	return range.newestFirst ? messages.reverse() : messages;
+}
+
 /** サーバーで見えている名前(人ごとに、最後に分かったもの)。分からない人は含まない */
 export async function loadMemberNames(
 	db: D1Database,
