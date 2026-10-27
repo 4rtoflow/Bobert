@@ -1,4 +1,4 @@
-import type { APIMessage } from "discord-api-types/v10";
+import type { APIEmbed, APIMessage } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
 import { MessageType } from "../src/discord/constants";
 import {
@@ -168,6 +168,8 @@ describe("toStoredMessage", () => {
 					size: 1234,
 				},
 			],
+			embeds: [],
+			command: null,
 			members: [
 				{ id: "5000", name: "ありす" },
 				{ id: BOT_ID, name: "Bobert" },
@@ -193,5 +195,75 @@ describe("toStoredMessage", () => {
 
 		expect(stored.authorName).toBe("Alice");
 		expect(stored.members).toEqual([]);
+	});
+
+	it("Embedの中身と、コマンドへの返答の情報を取り出す", () => {
+		const stored = toStoredMessage(
+			message({
+				type: MessageType.ChatInputCommand,
+				author: {
+					id: "7000",
+					username: "ohirun",
+					global_name: "おひるん！",
+					discriminator: "0",
+					avatar: null,
+					bot: true,
+				},
+				content: "",
+				interaction_metadata: {
+					id: "8000",
+					type: 2,
+					user: {
+						id: "5000",
+						username: "alice",
+						global_name: "Alice",
+						discriminator: "0",
+						avatar: null,
+					},
+					authorizing_integration_owners: {},
+					// コマンドの名前は、型の定義にはまだないが、Discordは返している
+					name: "add store",
+				} as unknown as GatewayMessage["interaction_metadata"],
+				embeds: [
+					{
+						type: "rich",
+						title: "✅ 店舗を追加しました",
+						fields: [{ name: "店舗名", value: "aaa" }],
+					},
+					// 文字のないEmbed(画像だけ)は外す
+					{ type: "image", image: { url: "https://example.com/a.png" } },
+					{
+						type: "link",
+						provider: { name: "X" },
+						author: { name: "Bob (@bob)" },
+						description: "投稿の本文",
+						footer: { text: "X" },
+					},
+				] as APIEmbed[],
+			}),
+		);
+
+		expect(stored.embeds).toEqual([
+			{
+				title: "✅ 店舗を追加しました",
+				fields: [{ name: "店舗名", value: "aaa" }],
+			},
+			{
+				provider: "X",
+				author: "Bob (@bob)",
+				description: "投稿の本文",
+				footer: "X",
+			},
+		]);
+		expect(stored.command).toEqual({
+			name: "add store",
+			contextMenu: false,
+			userId: "5000",
+			userName: "Alice",
+		});
+	});
+
+	it("コマンドへの返答でなければ、コマンドの情報は入れない", () => {
+		expect(toStoredMessage(message()).command).toBeNull();
 	});
 });

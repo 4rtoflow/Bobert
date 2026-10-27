@@ -1,4 +1,8 @@
-import { resolveMentions, stripNotes } from "../respond/conversation";
+import {
+	embedLines,
+	resolveMentions,
+	stripNotes,
+} from "../respond/conversation";
 import type { MessageToEmbed } from "./messages";
 
 /**
@@ -27,19 +31,25 @@ export function workersAiEmbedder(ai: Ai): Embedder {
 }
 
 /**
- * ベクトルにする文。メンションは名前に置き換える(会話の組み立てと同じ)。
+ * ベクトルにする文。本文の後に、Embedの中身を続ける。メンションは名前に置き換える(会話の組み立てと同じ)。
  * Bobertの返答は、末尾に添えた注記を外す。空なら、ベクトルにしない。
  */
 export function embeddingText(
-	message: Pick<MessageToEmbed, "authorId" | "content" | "mentions">,
+	message: Pick<MessageToEmbed, "authorId" | "content" | "mentions" | "embeds">,
 	botUserId: string,
 ): string {
 	const content =
 		message.authorId === botUserId
 			? stripNotes(message.content)
 			: message.content;
-	return resolveMentions(
+	const text = [
 		content,
+		...message.embeds.map((embed) => embedLines(embed).join("\n")),
+	]
+		.filter((part) => part.trim() !== "")
+		.join("\n");
+	return resolveMentions(
+		text,
 		new Map(message.mentions.map((user) => [user.id, user.name])),
 	).trim();
 }

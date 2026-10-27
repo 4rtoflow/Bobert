@@ -107,6 +107,34 @@ describe("返信のつながりを読む", () => {
 		expect(ingested).toEqual(["1102"]);
 	});
 
+	it("保存したEmbedの中身と、コマンドへの返答の情報も読む", async () => {
+		const ohirun = { ...BOB, id: "1050", bot: true };
+		const added = {
+			...stored(discordMessage("1051", ohirun, "")),
+			embeds: [{ title: "✅ 店舗を追加しました" }],
+			command: {
+				name: "add store",
+				contextMenu: false,
+				userId: ALICE.id,
+				userName: "Alice",
+			},
+		};
+		await saveMessages(env.DB, [added]);
+		const trigger = discordReply("1052", ALICE, "これは?", {
+			...discordMessage("1051", ohirun, ""),
+		});
+		const { history } = fakeHistory([]);
+
+		const [first] = await readReplyChain(stored(trigger), history);
+
+		expect(first).toMatchObject({
+			messageId: "1051",
+			authorIsBot: true,
+			embeds: added.embeds,
+			command: added.command,
+		});
+	});
+
 	it("返信先が消えていたら、そこで止める", async () => {
 		const deleted = discordMessage("1201", BOB, "消えた発言");
 		const trigger = discordReply("1202", ALICE, "これは?", deleted);

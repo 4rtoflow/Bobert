@@ -52,6 +52,10 @@ export interface StoredMessageInput {
 	/** メンションされた人。本文のメンションを名前に置き換えるのに使う */
 	mentions: UserName[];
 	attachments: AttachmentInfo[];
+	/** Embedの中身(他のBotの投稿の埋め込みや、リンクのプレビュー) */
+	embeds: EmbedInfo[];
+	/** コマンドへの返答なら、どのコマンドを誰が使ったか */
+	command: CommandInfo | null;
 	/**
 	 * このメッセージで分かった、サーバーで見えている名前(発言者と、メンションされた人)。
 	 * サーバーでの情報(ニックネームの有無)が付いていた人だけ
@@ -67,6 +71,28 @@ export interface StoredMessageInput {
 export interface UserName {
 	id: string;
 	name: string;
+}
+
+/** Embedの中身のうち、文字の部分。ないものは入れない */
+export interface EmbedInfo {
+	/** 提供元(リンクのプレビューのサイト名など) */
+	provider?: string;
+	author?: string;
+	title?: string;
+	description?: string;
+	fields?: { name: string; value: string }[];
+	footer?: string;
+}
+
+/** コマンドへの返答の情報 */
+export interface CommandInfo {
+	/** コマンドの名前。サブコマンドを含む(例: "add store")。右クリックメニューなら、項目の名前 */
+	name: string;
+	/** 右クリックメニューのコマンドか。違えばスラッシュコマンド */
+	contextMenu: boolean;
+	/** コマンドを使った人 */
+	userId: string;
+	userName: string;
 }
 
 export interface AttachmentInfo {

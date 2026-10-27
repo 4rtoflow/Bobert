@@ -26,6 +26,8 @@ function storedMessage(
 		replyToId: null,
 		mentions: [],
 		attachments: [],
+		embeds: [],
+		command: null,
 		members: [{ id: "5000", name: "ありす" }],
 		createdAt: CREATED_AT,
 		editedAt: null,
@@ -114,6 +116,51 @@ describe("メッセージの保存とベクトル化", () => {
 		);
 
 		expect([...embedded].sort()).toEqual(["10時からだよ!", "@ぼぶ 了解!"]);
+	});
+
+	it("Embedの中身もベクトルにする(本文が空でも)", async () => {
+		const { deps, embedded } = fakeDeps();
+
+		await ingestMessages(
+			[
+				storedMessage({
+					content: "",
+					embeds: [
+						{
+							title: "✅ 店舗を追加しました",
+							fields: [{ name: "店舗名", value: "aaa" }],
+						},
+					],
+				}),
+			],
+			deps,
+		);
+
+		expect(embedded).toEqual([
+			["✅ 店舗を追加しました", "店舗名: aaa"].join("\n"),
+		]);
+	});
+
+	it("本文が同じでも、Embedが変わったら(リンクのプレビューが届いたら)、ベクトルを入れ直す", async () => {
+		const { deps, embedded } = fakeDeps();
+		const message = storedMessage({
+			content: "これ見て https://x.com/bob/status/1",
+		});
+
+		await ingestMessages([message], deps);
+		await ingestMessages(
+			[{ ...message, embeds: [{ provider: "X", description: "投稿の本文" }] }],
+			deps,
+		);
+
+		expect(embedded).toEqual([
+			"これ見て https://x.com/bob/status/1",
+			["これ見て https://x.com/bob/status/1", "X", "投稿の本文"].join("\n"),
+		]);
+		const row = await storedRow(message.messageId);
+		expect(JSON.parse(row?.embeds as string)).toEqual([
+			{ provider: "X", description: "投稿の本文" },
+		]);
 	});
 
 	it("編集されたら、保存し直して、ベクトルを入れ直す", async () => {
