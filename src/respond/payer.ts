@@ -29,8 +29,10 @@ import { chargeableCost } from "./usage";
 /** 寄付した人のキーが無効か残高不足のときに、その寄付を止めておく時間 */
 export const DONATION_PAUSE_MS = 60 * 60 * 1000;
 
-/** Discordのエラーコード: サーバーのメンバーではない */
+/** Discordのエラーコード: サーバーのメンバーではない(抜けた) */
 const UNKNOWN_MEMBER = 10007;
+/** Discordのエラーコード: そのユーザーがいない(アカウントを消した) */
+const UNKNOWN_USER = 10013;
 
 /** 返答の費用を払う人。本人のキーか、サーバーに寄付した人のキー */
 export type Payer =
@@ -156,7 +158,7 @@ async function guidance(
 }
 
 /**
- * 寄付した人が、サーバーにいるか。抜けていたら、その寄付を終える。
+ * 寄付した人が、サーバーにいるか。抜けていたら(アカウントを消していたら)、その寄付を終える。
  * 確かめられなかったとき(Discordの障害など)は、この返答では使わない
  */
 async function isGuildMember(
@@ -168,9 +170,16 @@ async function isGuildMember(
 		await getGuildMember(env.DISCORD_BOT_TOKEN, guildId, donorId);
 		return true;
 	} catch (error) {
-		if (error instanceof DiscordApiError && error.code === UNKNOWN_MEMBER) {
+		if (
+			error instanceof DiscordApiError &&
+			(error.code === UNKNOWN_MEMBER || error.code === UNKNOWN_USER)
+		) {
 			await endDonation(env.DB, guildId, donorId);
-			log("donation_ended", { guildId, donorId, reason: "left_guild" });
+			log("donation_ended", {
+				guildId,
+				donorId,
+				reason: error.code === UNKNOWN_MEMBER ? "left_guild" : "unknown_user",
+			});
 			return false;
 		}
 		log("member_check_failed", {

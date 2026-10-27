@@ -136,13 +136,15 @@ function fakeQueues() {
 
 /**
  * DiscordとAIのAPIの偽物。Discordにはmessagesがあることにする。
- * leftの人は、サーバーにいない。invalidKeysのキーでAnthropicを呼ぶと、無効なキーのエラーになる。
+ * leftの人は、サーバーにいない(サーバーのメンバーを取得すると、notMemberCodeのエラーになる)。
+ * invalidKeysのキーでAnthropicを呼ぶと、無効なキーのエラーになる。
  * OpenRouterのモデル一覧は取得できない(Claudeの費用は、候補の一覧の単価で見積もる)
  */
 function mockApis(
 	messages: APIMessage[],
 	options: {
 		left?: string[];
+		notMemberCode?: number;
 		invalidKeys?: string[];
 		anthropic?: (call: FetchCall) => Response;
 	} = {},
@@ -180,7 +182,10 @@ function mockApis(
 		const member = path.match(/^\/guilds\/\d+\/members\/(\d+)$/);
 		if (call.method === "GET" && member) {
 			return options.left?.includes(member[1] ?? "")
-				? Response.json({ code: 10007 }, { status: 404 })
+				? Response.json(
+						{ code: options.notMemberCode ?? 10007 },
+						{ status: 404 },
+					)
 				: Response.json({ user: { id: member[1] }, roles: [] });
 		}
 		const read = path.match(/^\/channels\/\d+\/messages\/(\d+)$/);
@@ -619,19 +624,37 @@ describe("寄付で答える", () => {
 		expect(posted(calls)).toEqual(["答えです"]);
 	});
 
-	it("寄付した人がサーバーを抜けていたら、その寄付を終えて、本人のキーで答える", async () => {
+	// Discordは、サーバーを抜けた人には10007(Unknown Member)、アカウントを消した人には10013(Unknown User)を返す
+	it.each([10007, 10013])(
+		"寄付した人がサーバーにいなければ(%i)、その寄付を終えて、本人のキーで答える",
+		async (notMemberCode) => {
+			const guildId = newId();
+			const donor = await withAnthropicKey("donor");
+			await donate(guildId, donor, 5);
+			const alice = await withAnthropicKey("alice");
+			const { trigger, job } = mention(guildId, alice);
+			const calls = mockApis([trigger], { left: [donor.id], notMemberCode });
+
+			await handleRespondJob(job, fakeQueues().environment);
+
+			expect(anthropicKeys(calls)).toEqual([anthropicKey(alice)]);
+			expect(posted(calls)).toEqual(["答えです"]);
+			expect((await donationRow(guildId, donor.id))?.ended_at).not.toBeNull();
+		},
+	);
+
+	it("寄付した人がサーバーにいるか確かめられなければ、この返答では寄付を使わず、寄付は終えない", async () => {
 		const guildId = newId();
 		const donor = await withAnthropicKey("donor");
 		await donate(guildId, donor, 5);
 		const alice = await withAnthropicKey("alice");
 		const { trigger, job } = mention(guildId, alice);
-		const calls = mockApis([trigger], { left: [donor.id] });
+		const calls = mockApis([trigger], { left: [donor.id], notMemberCode: 0 });
 
 		await handleRespondJob(job, fakeQueues().environment);
 
 		expect(anthropicKeys(calls)).toEqual([anthropicKey(alice)]);
-		expect(posted(calls)).toEqual(["答えです"]);
-		expect((await donationRow(guildId, donor.id))?.ended_at).not.toBeNull();
+		expect((await donationRow(guildId, donor.id))?.ended_at).toBeNull();
 	});
 
 	it("寄付した人のキーが無効なら、その寄付を止めて、次の寄付で答え直す", async () => {
