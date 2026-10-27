@@ -106,6 +106,27 @@ export function getChannelMessage(
 	);
 }
 
+/**
+ * チャンネルのメッセージを、新しい順に最大limit件(100件まで)取得する。beforeを指定すると、それより前のもの。
+ * 読むにはメッセージ履歴を読む権限が必要
+ */
+export function getChannelMessages(
+	botToken: string,
+	channelId: string,
+	options: { before: string | null; limit: number },
+): Promise<APIMessage[]> {
+	const query = new URLSearchParams({ limit: String(options.limit) });
+	if (options.before !== null) {
+		query.set("before", options.before);
+	}
+	return discordRequest(
+		"GET channel messages",
+		"GET",
+		`/channels/${channelId}/messages?${query}`,
+		{ botToken },
+	);
+}
+
 /** チャンネルにメッセージを投稿する */
 export function createMessage(
 	botToken: string,
