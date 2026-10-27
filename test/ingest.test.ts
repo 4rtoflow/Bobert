@@ -359,6 +359,7 @@ describe("Queueの仕事の振り分け", () => {
 	function handlers(overrides: Partial<JobHandlers> = {}): JobHandlers {
 		return {
 			respond: vi.fn(async () => {}),
+			explain: vi.fn(async () => {}),
 			compact: vi.fn(async () => {}),
 			ingest: vi.fn(async () => {}),
 			delete: vi.fn(async () => {}),

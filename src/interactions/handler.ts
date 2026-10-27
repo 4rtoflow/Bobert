@@ -17,6 +17,7 @@ import {
 import { compactFromButton, compactFromMenu } from "./compact";
 import { confirmDelete, DELETE_CONFIRM_ID, deleteCommand } from "./delete";
 import { EFFORT_SELECT_ID, effortCommand, selectEffort } from "./effort";
+import { EXPLAIN_COMMAND_NAME, explainFromMenu } from "./explain";
 import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
 import { helpCommand } from "./help";
 import {
@@ -39,9 +40,6 @@ import { verifyDiscordRequest } from "./verify";
 /**
  * Discord Interactions(スラッシュコマンド、右クリックメニュー、ボタン、モーダル)の受け口。
  * 最初の応答は3秒以内に返す必要がある。時間のかかる処理は、保留の応答を返してから続ける。
- *
- * これから実装すること(仕様: docs/spec/behavior.md「スラッシュコマンド」):
- * 右クリックメニューの「Bobertに聞く」
  */
 export async function handleInteraction(
 	request: Request,
@@ -74,6 +72,16 @@ async function route(
 	}
 	switch (interaction.type) {
 		case InteractionType.ApplicationCommand:
+			if (
+				interaction.data.type === ApplicationCommandType.Message &&
+				interaction.data.name === EXPLAIN_COMMAND_NAME
+			) {
+				return explainFromMenu(
+					interaction as APIMessageApplicationCommandInteraction,
+					env,
+					user,
+				);
+			}
 			if (
 				interaction.data.type === ApplicationCommandType.Message &&
 				interaction.data.name === COMPACT_COMMAND_NAME

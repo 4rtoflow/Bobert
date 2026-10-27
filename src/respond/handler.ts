@@ -11,6 +11,7 @@ import { findOpenRouterModel } from "../llm/model-info";
 import { chatWithOpenRouter } from "../llm/openrouter";
 import {
 	type ChatRequest,
+	type ChatResult,
 	LlmError,
 	sumUsage,
 	type TokenUsage,
@@ -31,6 +32,7 @@ import {
 	recordReplyUsage,
 } from "../store/summaries";
 import {
+	type Credential,
 	getRegisteredProviders,
 	getUserSettings,
 	loadCredential,
@@ -110,7 +112,7 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 		log("trigger_unavailable", { userId: job.authorId });
 		return;
 	}
-	await startImport(env, job);
+	await startImport(env, job.channelId, job.guildId);
 	const history = historyFor(env, {
 		guildId: job.guildId,
 		channelId: job.channelId,
@@ -176,20 +178,32 @@ export function historyFor(
  * 投稿する返答。AIの返答なら、会話全体を渡した入力のトークン数も(会話の量の記録に使う)。
  * offerCompactionなら、要約を勧める案内を添えたので、「今すぐ要約」ボタンを付ける
  */
-interface ComposedReply {
+export interface ComposedReply {
 	text: string;
 	inputTokens: number | null;
 	offerCompaction: boolean;
 }
 
-/** 投稿する返答を作る。AIの返答のほか、登録方法の案内やエラーの理由のこともある */
-async function composeReply(
-	job: RespondJob,
+/** 返答を作るのに使う、本人の設定とモデル */
+export interface ReplyModel {
+	userId: string;
+	settings: UserSettings;
+	model: ResolvedModel;
+	credential: Credential;
+	/** 設定していなければ既定の段階、モデルが選べなければいちばん近い段階 */
+	effort: string | null;
+	callModel: (request: ChatRequest) => Promise<ChatResult>;
+}
+
+/**
+ * 本人の設定とモデルで、返答を作る(メンションへの返答と、「Bobertに聞く」で共通)。
+ * キーを登録していなければ登録方法の案内を、AIの呼び出しに失敗したら理由を返す
+ */
+export async function withReplyModel(
 	env: Env,
-	trigger: StoredMessageInput,
-	history: HistoryDeps,
+	userId: string,
+	compose: (context: ReplyModel) => Promise<ComposedReply>,
 ): Promise<ComposedReply> {
-	const userId = job.authorId;
 	const [providers, settings] = await Promise.all([
 		getRegisteredProviders(env.DB, userId),
 		getUserSettings(env.DB, userId),
@@ -197,71 +211,30 @@ async function composeReply(
 	const resolution = resolveModel(settings, providers);
 	if (!resolution.ok) {
 		log("setup_required", { userId, missing: resolution.missing });
-		return {
-			text: setupGuidance(resolution),
-			inputTokens: null,
-			offerCompaction: false,
-		};
+		return notAnswer(setupGuidance(resolution));
 	}
 	const model = resolution.model;
 	const credential = await loadCredential(env, userId, model.provider);
 	if (credential === null) {
 		// 直前に /delete された
-		return {
-			text: setupGuidance({ ok: false, missing: "credentials", label: "" }),
-			inputTokens: null,
-			offerCompaction: false,
-		};
+		return notAnswer(
+			setupGuidance({ ok: false, missing: "credentials", label: "" }),
+		);
 	}
-	const callModel = (request: ChatRequest) =>
-		model.provider === "anthropic"
-			? chatWithAnthropic(credential, request)
-			: chatWithOpenRouter(credential.apiKey, request);
-	// 設定していなければ既定の段階を、モデルが選べなければいちばん近い段階を送る
-	const effort = await replyEffort(env, userId, settings, model);
-
-	const botUserId = env.DISCORD_APPLICATION_ID;
+	const context: ReplyModel = {
+		userId,
+		settings,
+		model,
+		credential,
+		effort: await replyEffort(env, userId, settings, model),
+		callModel: (request) =>
+			model.provider === "anthropic"
+				? chatWithAnthropic(credential, request)
+				: chatWithOpenRouter(credential.apiKey, request),
+	};
 	const startedAt = Date.now();
 	try {
-		const read = await readConversation(trigger, history);
-		let summary = read.summary;
-		let loaded = read.messages;
-		// 会話が入力の上限の8割を超えていたら、新しい20件を残して、それより前を要約する
-		const summaryUsages: TokenUsage[] = [];
-		const size = await conversationSize(env.DB, loaded, botUserId);
-		if (
-			size !== null &&
-			loaded.length > KEEP_RECENT_MESSAGES &&
-			size >=
-				(await inputLimit(settings, model, credential)) * SUMMARY_THRESHOLD
-		) {
-			const result = await summarizeOlderPart({
-				db: env.DB,
-				callModel,
-				modelId: model.modelId,
-				effort,
-				userId,
-				botUserId,
-				messages: loaded,
-				previous: summary,
-				names: await namesFor(loaded.slice(0, -KEEP_RECENT_MESSAGES), history),
-			});
-			summaryUsages.push(...result.usages);
-			if (result.summary !== null) {
-				summary = result.summary;
-				loaded = loaded.slice(-KEEP_RECENT_MESSAGES);
-			}
-			log("summarized", {
-				userId,
-				provider: model.provider,
-				model: model.modelId,
-				trigger: "auto",
-				conversationTokens: size,
-				failure: result.failure,
-				...sumUsage(result.usages),
-			});
-		}
-		return await answer(loaded, summary, summaryUsages);
+		return await compose(context);
 	} catch (error) {
 		if (!(error instanceof LlmError)) {
 			throw error;
@@ -275,104 +248,177 @@ async function composeReply(
 			detail: error.detail,
 			durationMs: Date.now() - startedAt,
 		});
-		return {
-			text: describeLlmError(error, model),
-			inputTokens: null,
-			offerCompaction: false,
-		};
+		return notAnswer(describeLlmError(error, model));
 	}
+}
 
-	/** 会話(要約と、それより後の発言)を渡して、AIに答えてもらう */
-	async function answer(
-		loaded: StoredMessageInput[],
-		summary: ConversationSummary | null,
-		summaryUsages: TokenUsage[],
-	): Promise<ComposedReply> {
-		// 添付がなければ、画像を読めるかは確かめない(「その他」のモデルでは、モデル情報の取得が要るため)
-		const hasAttachments = loaded.some(
-			(message) => message.attachments.length > 0,
-		);
-		const includeImages =
-			hasAttachments &&
-			settings.featImageInput &&
-			(await readsImages(model, settings));
-		// 保存した添付のURLは期限付きなので、AIに渡す画像は、期限が近ければ取り直す
-		const chain = includeImages
-			? await refreshImageUrls(loaded, history, botUserId)
-			: loaded;
-		const conversation = toConversation(chain, {
-			botUserId,
-			includeImages,
-			names: await namesFor(chain, history),
-			summary: summary?.summary ?? null,
-		});
-		const webSearch = settings.featWebSearch
-			? await webSearchAvailable(env, userId, settings, model)
-			: false;
-		// AIが必要なときに、チャンネルの履歴を読んだり探したりできるようにする。
-		// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
-		// 道具の定義は、毎回同じ並びにする(キャッシュのため)
-		const root = chain[0];
-		const tools = (await toolsAvailable(settings, model))
-			? [
-					channelHistoryTool(history, botUserId),
-					searchMessagesTool(history, botUserId),
-					...(summary === null && startsWithReply(root)
-						? [replyChainTool(root, history, botUserId)]
-						: []),
-				]
-			: [];
-		const result = await callModel({
-			model: model.modelId,
-			system: buildSystemPrompt(settings.customPrompt),
-			messages: conversation.messages,
-			effort,
-			webSearch: webSearch === true,
-			tools,
-			maxTokens: MAX_OUTPUT_TOKENS,
-		});
-		log("responded", {
+/** AIの答えではない返答(登録方法の案内や、エラーの理由) */
+function notAnswer(text: string): ComposedReply {
+	return { text, inputTokens: null, offerCompaction: false };
+}
+
+/** 話しかけたメッセージへの返答を作る。会話を読み、長ければ古い部分を要約してから答えてもらう */
+async function composeReply(
+	job: RespondJob,
+	env: Env,
+	trigger: StoredMessageInput,
+	history: HistoryDeps,
+): Promise<ComposedReply> {
+	return withReplyModel(env, job.authorId, async (context) => {
+		const botUserId = env.DISCORD_APPLICATION_ID;
+		const read = await readConversation(trigger, history);
+		let summary = read.summary;
+		let messages = read.messages;
+		// 会話が入力の上限の8割を超えていたら、新しい20件を残して、それより前を要約する
+		const summaryUsages: TokenUsage[] = [];
+		const size = await conversationSize(env.DB, messages, botUserId);
+		if (
+			size !== null &&
+			messages.length > KEEP_RECENT_MESSAGES &&
+			size >=
+				(await inputLimit(
+					context.settings,
+					context.model,
+					context.credential,
+				)) *
+					SUMMARY_THRESHOLD
+		) {
+			const result = await summarizeOlderPart({
+				db: env.DB,
+				callModel: context.callModel,
+				modelId: context.model.modelId,
+				effort: context.effort,
+				userId: context.userId,
+				botUserId,
+				messages,
+				previous: summary,
+				names: await namesFor(
+					messages.slice(0, -KEEP_RECENT_MESSAGES),
+					history,
+				),
+			});
+			summaryUsages.push(...result.usages);
+			if (result.summary !== null) {
+				summary = result.summary;
+				messages = messages.slice(-KEEP_RECENT_MESSAGES);
+			}
+			log("summarized", {
+				userId: context.userId,
+				provider: context.model.provider,
+				model: context.model.modelId,
+				trigger: "auto",
+				conversationTokens: size,
+				failure: result.failure,
+				...sumUsage(result.usages),
+			});
+		}
+		return answer(context, env, history, { messages, summary, summaryUsages });
+	});
+}
+
+/**
+ * 会話(要約と、それより後の発言)を渡して、AIに答えてもらう。messagesは古い順で、最後がAIに答えてほしい発言
+ */
+export async function answer(
+	context: ReplyModel,
+	env: Env,
+	history: HistoryDeps,
+	conversation: {
+		messages: StoredMessageInput[];
+		summary: ConversationSummary | null;
+		/** 要約を作ったときの使用量(費用の表示に含める) */
+		summaryUsages: TokenUsage[];
+	},
+): Promise<ComposedReply> {
+	const { userId, settings, model } = context;
+	const { summary, summaryUsages } = conversation;
+	const botUserId = env.DISCORD_APPLICATION_ID;
+	const startedAt = Date.now();
+	// 添付がなければ、画像を読めるかは確かめない(「その他」のモデルでは、モデル情報の取得が要るため)
+	const hasAttachments = conversation.messages.some(
+		(message) => message.attachments.length > 0,
+	);
+	const includeImages =
+		hasAttachments &&
+		settings.featImageInput &&
+		(await readsImages(model, settings));
+	// 保存した添付のURLは期限付きなので、AIに渡す画像は、期限が近ければ取り直す
+	const chain = includeImages
+		? await refreshImageUrls(conversation.messages, history, botUserId)
+		: conversation.messages;
+	const messages = toConversation(chain, {
+		botUserId,
+		includeImages,
+		names: await namesFor(chain, history),
+		summary: summary?.summary ?? null,
+	});
+	const webSearch = settings.featWebSearch
+		? await webSearchAvailable(env, userId, settings, model)
+		: false;
+	// AIが必要なときに、チャンネルの履歴を読んだり探したりできるようにする。
+	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
+	// 道具の定義は、毎回同じ並びにする(キャッシュのため)
+	const root = chain[0];
+	const tools = (await toolsAvailable(settings, model))
+		? [
+				channelHistoryTool(history, botUserId),
+				searchMessagesTool(history, botUserId),
+				...(summary === null && startsWithReply(root)
+					? [replyChainTool(root, history, botUserId)]
+					: []),
+			]
+		: [];
+	const result = await context.callModel({
+		model: model.modelId,
+		system: buildSystemPrompt(settings.customPrompt),
+		messages: messages.messages,
+		effort: context.effort,
+		webSearch: webSearch === true,
+		tools,
+		maxTokens: MAX_OUTPUT_TOKENS,
+	});
+	log("responded", {
+		userId,
+		provider: model.provider,
+		model: model.modelId,
+		messages: chain.length,
+		summarized: summary !== null,
+		stopReason: result.stopReason,
+		durationMs: Date.now() - startedAt,
+		toolCalls: result.toolCalls,
+		...result.usage,
+	});
+	// 料金が上がる境目を超えたら(1回の呼び出しごとの入力で見る)、その会話・その人・そのモデルで1回だけ、要約を勧める
+	const threshold = await priceIncreaseThreshold(settings, model);
+	const rootMessageId = summary?.rootMessageId ?? root?.messageId;
+	const offerCompaction =
+		threshold !== null &&
+		rootMessageId !== undefined &&
+		result.requestUsages.some((usage) => usage.inputTokens >= threshold) &&
+		(await claimCompactionNotice(env.DB, {
+			rootMessageId,
 			userId,
-			provider: model.provider,
-			model: model.modelId,
-			messages: chain.length,
-			summarized: summary !== null,
-			stopReason: result.stopReason,
-			durationMs: Date.now() - startedAt,
-			toolCalls: result.toolCalls,
-			...result.usage,
-		});
-		// 料金が上がる境目を超えたら(1回の呼び出しごとの入力で見る)、その会話・その人・そのモデルで1回だけ、要約を勧める
-		const threshold = await priceIncreaseThreshold(settings, model);
-		const offerCompaction =
-			threshold !== null &&
-			result.requestUsages.some((usage) => usage.inputTokens >= threshold) &&
-			(await claimCompactionNotice(env.DB, {
-				rootMessageId:
-					summary?.rootMessageId ?? chain[0]?.messageId ?? trigger.messageId,
-				userId,
-				modelKey: model.modelId,
-			}));
-		return {
-			text: formatReply(result, {
-				// 本人が画像の読み取りをOFFにしているときは、注記しない
-				imagesSkipped: conversation.imagesSkipped && settings.featImageInput,
-				webSearchSkipped: settings.featWebSearch && webSearch === false,
-				// 要約を作ったときは、その費用も含める
-				usage: settings.featUsageDisplay
-					? await usageNote(
-							[...summaryUsages, ...result.requestUsages],
-							model,
-							selectedCandidate(settings),
-						)
-					: null,
-				compaction: offerCompaction ? threshold : null,
-			}),
-			// 道具で何回かに分けて呼んだときは、最初の1回の分(後の回には、道具の結果が入るため)
-			inputTokens: result.requestUsages[0]?.inputTokens ?? null,
-			offerCompaction,
-		};
-	}
+			modelKey: model.modelId,
+		}));
+	return {
+		text: formatReply(result, {
+			// 本人が画像の読み取りをOFFにしているときは、注記しない
+			imagesSkipped: messages.imagesSkipped && settings.featImageInput,
+			webSearchSkipped: settings.featWebSearch && webSearch === false,
+			// 要約を作ったときは、その費用も含める
+			usage: settings.featUsageDisplay
+				? await usageNote(
+						[...summaryUsages, ...result.requestUsages],
+						model,
+						selectedCandidate(settings),
+					)
+				: null,
+			compaction: offerCompaction ? threshold : null,
+		}),
+		// 道具で何回かに分けて呼んだときは、最初の1回の分(後の回には、道具の結果が入るため)
+		inputTokens: result.requestUsages[0]?.inputTokens ?? null,
+		offerCompaction,
+	};
 }
 
 /**
@@ -429,7 +475,7 @@ async function postReply(
  * 返答のときに会話全体を渡した入力のトークン数を、投稿したメッセージごとに記録する(会話の量の記録)。
  * 投稿した後なので、記録できなくても失敗にはしない(やり直すと、同じ返答をもう一度投稿してしまうため)
  */
-async function recordConversationSize(
+export async function recordConversationSize(
 	env: Env,
 	messageIds: readonly string[],
 	inputTokens: number,
@@ -447,24 +493,23 @@ async function recordConversationSize(
  * そのチャンネルで初めてBotが使われたら、過去ログの取り込みを裏で始める
  * (仕様: docs/spec/architecture.md「過去ログの取り込み」)。始められなくても、返答は続ける。
  */
-async function startImport(env: Env, job: RespondJob): Promise<void> {
-	if (job.guildId === null) {
+export async function startImport(
+	env: Env,
+	channelId: string,
+	guildId: string | null,
+): Promise<void> {
+	if (guildId === null) {
 		return;
 	}
 	try {
 		if (
-			await startChannelImport(
-				env.DB,
-				env.INGEST_QUEUE,
-				job.channelId,
-				job.guildId,
-			)
+			await startChannelImport(env.DB, env.INGEST_QUEUE, channelId, guildId)
 		) {
-			log("import_started", { channelId: job.channelId });
+			log("import_started", { channelId });
 		}
 	} catch (error) {
 		log("import_start_failed", {
-			channelId: job.channelId,
+			channelId,
 			error: error instanceof Error ? error.message : "unknown",
 		});
 	}

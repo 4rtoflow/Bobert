@@ -6,6 +6,7 @@ import {
 } from "../discord/constants";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
 import { COMMANDS } from "./commands";
+import { EXPLAIN_COMMAND_NAME } from "./explain";
 
 /** /help: 使い方を、本人にだけ見せる(仕様: docs/spec/behavior.md「スラッシュコマンド」) */
 export function helpCommand(): APIInteractionResponse {
@@ -26,6 +27,7 @@ export function helpText(): string {
 		"**Bobertの使い方**",
 		"- Bobertにメンションするか、Bobertの返答に返信すると、AIが答えます。",
 		"- メッセージに返信しながらBobertにメンションすると、そのメッセージについて聞けます。",
+		`- メッセージの右クリックメニュー(アプリ)の「${EXPLAIN_COMMAND_NAME}」: そのメッセージの意味を説明します`,
 		`- メッセージの右クリックメニュー(アプリ)の「${COMPACT_COMMAND_NAME}」: そのメッセージまでの会話を要約します。長い会話の費用を抑えられます`,
 		"- 費用は、登録した本人のアカウントに請求されます。まず `/setup` でキーを登録してください。",
 		"",

@@ -5,6 +5,7 @@ import {
 	InteractionContextType,
 } from "../discord/constants";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
+import { EXPLAIN_COMMAND_NAME } from "./explain";
 
 /** サーバー内だけで使えるコマンドにする。DMでの会話は後回しにしているため */
 const GUILD_ONLY = {
@@ -67,6 +68,10 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		description: "使い方",
 	},
 	// 右クリックメニューの項目には、説明がない
+	{
+		...MESSAGE_MENU,
+		name: EXPLAIN_COMMAND_NAME,
+	},
 	{
 		...MESSAGE_MENU,
 		name: COMPACT_COMMAND_NAME,
