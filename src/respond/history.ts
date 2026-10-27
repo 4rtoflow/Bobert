@@ -8,6 +8,7 @@ import {
 	loadStoredChain,
 	type TimelineRange,
 } from "../store/messages";
+import type { SearchOptions } from "../store/search";
 import { MAX_CHAIN_LENGTH, selectImages } from "./conversation";
 
 /** 添付のURLの期限まで、これより短ければ取り直す。AIが画像を読みに行くまでの余裕 */
@@ -32,6 +33,11 @@ export interface HistoryDeps {
 	channelId: string;
 	fetchMessage: MessageFetcher;
 	listMessages: MessageLister;
+	/** このチャンネルで、検索語に意味が近いメッセージのIDを、近い順に探す(意味で検索) */
+	searchMessages: (
+		query: string,
+		options: Omit<SearchOptions, "channelId">,
+	) => Promise<string[]>;
 	/** Discordから読んだメッセージを、保存に回す(読んだ分だけ取り込む) */
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
 	/** 話しかけたメッセージで分かった、サーバーで見えている名前。保存したものより新しい */

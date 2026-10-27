@@ -247,6 +247,52 @@ export async function loadChannelMessages(
 	return range.newestFirst ? messages.reverse() : messages;
 }
 
+/** 保存したメッセージを、IDを指定して読む。保存されていないもの(消されたものなど)は含まない。順番は決まっていない */
+export async function loadMessagesByIds(
+	db: D1Database,
+	messageIds: readonly string[],
+): Promise<StoredMessageInput[]> {
+	const found: StoredMessageInput[] = [];
+	for (const ids of chunks(messageIds, MAX_IDS_PER_QUERY)) {
+		const { results } = await db
+			.prepare(
+				`SELECT * FROM messages WHERE message_id IN (${ids.map(() => "?").join(", ")})`,
+			)
+			.bind(...ids)
+			.all<MessageRow>();
+		found.push(...results.map(fromRow));
+	}
+	return found;
+}
+
+/**
+ * 名前から、発言者のIDを探す(意味で検索の、発言者の指定)。
+ * このチャンネルで、その名前で発言した人(前に使っていた名前でも)と、サーバーで今その名前の人。
+ * 大文字と小文字は区別しない。先頭の「@」は外す。同じ名前の人が何人かいれば、全員を返す
+ */
+export async function findAuthorIds(
+	db: D1Database,
+	guildId: string | null,
+	channelId: string,
+	name: string,
+): Promise<string[]> {
+	const normalized = name.trim().replace(/^@/, "");
+	if (normalized === "") {
+		return [];
+	}
+	const { results } = await db
+		.prepare(
+			`SELECT author_id AS id FROM messages
+			WHERE channel_id = ?1 AND author_name = ?2 COLLATE NOCASE
+			UNION
+			SELECT user_id AS id FROM guild_members
+			WHERE guild_id = ?3 AND name = ?2 COLLATE NOCASE`,
+		)
+		.bind(channelId, normalized, guildId ?? "")
+		.all<{ id: string }>();
+	return results.map((row) => row.id);
+}
+
 /** サーバーで見えている名前(人ごとに、最後に分かったもの)。分からない人は含まない */
 export async function loadMemberNames(
 	db: D1Database,

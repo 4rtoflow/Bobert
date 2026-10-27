@@ -91,6 +91,7 @@ function fakeHistory(channelId: string, overrides: Partial<HistoryDeps> = {}) {
 		channelId,
 		fetchMessage: async () => null,
 		listMessages: async () => [],
+		searchMessages: async () => [],
 		ingest: async (messages) => {
 			ingested.push(...messages);
 		},

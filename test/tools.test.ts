@@ -333,6 +333,7 @@ describe("返信先を読む道具", () => {
 				(message) => message.id === messageId,
 			) ?? null,
 		listMessages: async () => [],
+		searchMessages: async () => [],
 		ingest: async () => {},
 		knownNames: [],
 	};
