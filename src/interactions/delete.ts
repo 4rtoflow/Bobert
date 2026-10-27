@@ -6,19 +6,25 @@ import {
 	MessageFlags,
 } from "../discord/constants";
 import { logEvent } from "../log";
+import { isDonating } from "../store/donations";
 import { deleteUserData } from "../store/users";
 
 /** /delete の確認のボタンのID */
 export const DELETE_CONFIRM_ID = "delete:confirm";
 
-/** /delete: 消してよいか、本人にだけ確かめる */
-export function deleteCommand(): APIInteractionResponse {
+/** /delete: 消してよいか、本人にだけ確かめる。寄付している人には、寄付も使われなくなることを書く */
+export async function deleteCommand(
+	env: Env,
+	userId: string,
+): Promise<APIInteractionResponse> {
+	const donation = (await isDonating(env.DB, userId))
+		? "寄付したクレジットも、使われなくなります。"
+		: "";
 	return {
 		type: InteractionResponseType.ChannelMessageWithSource,
 		data: {
 			flags: MessageFlags.Ephemeral,
-			content:
-				"登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。よろしいですか?",
+			content: `登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${donation}よろしいですか?`,
 			components: [
 				{
 					type: ComponentType.ActionRow,

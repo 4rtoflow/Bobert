@@ -1,4 +1,5 @@
 import type {
+	APIGuildMember,
 	APIMessage,
 	RESTGetAPIGatewayBotResult,
 	RESTPatchAPIChannelMessageJSONBody,
@@ -128,6 +129,20 @@ export function getChannelMessages(
 		"GET channel messages",
 		"GET",
 		`/channels/${channelId}/messages?${query}`,
+		{ botToken },
+	);
+}
+
+/** サーバーのメンバーを1人取得する。サーバーにいなければ、404(コード10007)のDiscordApiErrorになる */
+export function getGuildMember(
+	botToken: string,
+	guildId: string,
+	userId: string,
+): Promise<APIGuildMember> {
+	return discordRequest(
+		"GET guild member",
+		"GET",
+		`/guilds/${guildId}/members/${userId}`,
 		{ botToken },
 	);
 }

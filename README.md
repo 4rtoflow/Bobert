@@ -1,12 +1,12 @@
 # Bobert
 
-Discord上でAIと会話できるBot。Botへのメンションや返信で話しかけると、AIが答える。LLMの費用は、各ユーザーが自分のキー(AnthropicのAPIキー、またはOpenRouter)で負担する。
+Discord上でAIと会話できるBot。Botへのメンションや返信で話しかけると、AIが答える。LLMの費用は、各ユーザーが自分のキー(AnthropicのAPIキー、またはOpenRouter)で負担する。サーバーの全員が使えるクレジットを、寄付することもできる。
 
 ## 仕様
 
 | 文書                                                   | 内容                                                                    |
 | ------------------------------------------------------ | ----------------------------------------------------------------------- |
-| [docs/spec/llm-cost.md](docs/spec/llm-cost.md)         | LLMの費用の負担、資格情報の登録と保存、モデルの候補                     |
+| [docs/spec/llm-cost.md](docs/spec/llm-cost.md)         | LLMの費用の負担、資格情報の登録と保存、モデルの候補、クレジットの寄付   |
 | [docs/spec/architecture.md](docs/spec/architecture.md) | Cloudflareでの構成、Gateway接続処理の設計、会話の文脈と過去の発言の保存 |
 | [docs/spec/behavior.md](docs/spec/behavior.md)         | 公開範囲、AIの性格、返答の出し方、スラッシュコマンド                    |
 | [docs/setup.md](docs/setup.md)                         | 開発に必要なアカウントと環境の準備                                      |
@@ -15,23 +15,23 @@ Discord上でAIと会話できるBot。Botへのメンションや返信で話�
 
 Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のものをまとめている。
 
-| ファイル               | 役割                                                                                         |
-| ---------------------- | -------------------------------------------------------------------------------------------- |
-| `src/index.ts`         | エントリポイント(HTTPの受付とQueueの処理)                                                    |
-| `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)                          |
-| `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                                                    |
-| `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)                              |
-| `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認                                   |
-| `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                                         |
-| `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                        |
-| `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)                                   |
-| `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                          |
-| `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ)と、検索用のデータ化 |
-| `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                             |
-| `src/config/models.ts` | `/model`で選べるモデルの候補                                                                 |
-| `src/discord/`         | Discord APIの定数と呼び出し                                                                  |
-| `migrations/`          | D1のスキーマ                                                                                 |
-| `test/`                | テスト(Workersの実行環境で動かす)                                                            |
+| ファイル               | 役割                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------- |
+| `src/index.ts`         | エントリポイント(HTTPの受付とQueueの処理)                                                          |
+| `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)                                |
+| `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                                                          |
+| `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)                                    |
+| `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認                                         |
+| `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                                               |
+| `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                              |
+| `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)                                         |
+| `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                                |
+| `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ、寄付)と、検索用のデータ化 |
+| `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                                   |
+| `src/config/models.ts` | `/model`で選べるモデルの候補                                                                       |
+| `src/discord/`         | Discord APIの定数と呼び出し                                                                        |
+| `migrations/`          | D1のスキーマ                                                                                       |
+| `test/`                | テスト(Workersの実行環境で動かす)                                                                  |
 
 ## 必要なもの
 

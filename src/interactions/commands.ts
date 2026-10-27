@@ -59,6 +59,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	},
 	{
 		...GUILD_ONLY,
+		name: "donate",
+		description: "サーバーの全員が使えるクレジットの寄付と、残りの確認",
+	},
+	{
+		...GUILD_ONLY,
 		name: "delete",
 		description: "登録したキーと設定の削除",
 	},

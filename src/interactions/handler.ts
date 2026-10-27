@@ -16,6 +16,16 @@ import {
 } from "../respond/compact-button";
 import { compactFromButton, compactFromMenu } from "./compact";
 import { confirmDelete, DELETE_CONFIRM_ID, deleteCommand } from "./delete";
+import {
+	DONATE_GIVE_ID,
+	DONATE_MODAL_ID,
+	DONATE_STOP_ID,
+	type Donor,
+	donateCommand,
+	donationModal,
+	stopDonation,
+	submitDonation,
+} from "./donate";
 import { EFFORT_SELECT_ID, effortCommand, selectEffort } from "./effort";
 import { EXPLAIN_COMMAND_NAME, explainFromMenu } from "./explain";
 import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
@@ -70,6 +80,12 @@ async function route(
 	if (!user) {
 		return notReady();
 	}
+	// 寄付は、サーバーごと。名前は、サーバーで見えている名前
+	const guildId = interaction.guild_id;
+	const donor: Donor = {
+		id: user.id,
+		name: interaction.member?.nick ?? user.global_name ?? user.username,
+	};
 	switch (interaction.type) {
 		case InteractionType.ApplicationCommand:
 			if (
@@ -110,8 +126,11 @@ async function route(
 			if (interaction.data.name === "settings") {
 				return settingsCommand(interaction, env, ctx, user.id);
 			}
+			if (interaction.data.name === "donate" && guildId) {
+				return donateCommand(env, guildId, donor);
+			}
 			if (interaction.data.name === "delete") {
-				return deleteCommand();
+				return deleteCommand(env, user.id);
 			}
 			if (interaction.data.name === "help") {
 				return helpCommand();
@@ -146,6 +165,12 @@ async function route(
 			if (interaction.data.custom_id === DELETE_CONFIRM_ID) {
 				return confirmDelete(env, user.id);
 			}
+			if (interaction.data.custom_id === DONATE_GIVE_ID) {
+				return donationModal(env, user.id);
+			}
+			if (interaction.data.custom_id === DONATE_STOP_ID && guildId) {
+				return stopDonation(env, guildId, donor);
+			}
 			break;
 		case InteractionType.ModalSubmit:
 			if (interaction.data.custom_id === SETUP_ANTHROPIC_ID) {
@@ -156,6 +181,9 @@ async function route(
 			}
 			if (interaction.data.custom_id === PROMPT_MODAL_ID) {
 				return submitPrompt(interaction, env, user.id);
+			}
+			if (interaction.data.custom_id === DONATE_MODAL_ID && guildId) {
+				return submitDonation(interaction, env, guildId, donor);
 			}
 			break;
 	}
