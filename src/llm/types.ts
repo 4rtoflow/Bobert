@@ -147,8 +147,16 @@ export type KeyCheckResult =
 
 /** 「その他」で入力されたモデルの確認の結果。確かめられなかったときは、原因の説明を付ける */
 export type ModelCheckResult =
-	/** effortsは、選べる思考の深さ(浅い順)。空なら選べない。webSearchは、Web検索を使えるか */
-	| { status: "found"; efforts: string[]; webSearch: boolean }
+	/**
+	 * effortsは、選べる思考の深さ(浅い順)。空なら選べない。webSearchは、Web検索を使えるか。
+	 * maxInputTokensは、入力の上限(分からなければnull)
+	 */
+	| {
+			status: "found";
+			efforts: string[];
+			webSearch: boolean;
+			maxInputTokens: number | null;
+	  }
 	| { status: "not_found" }
 	/** 登録したキーが無効になっている */
 	| { status: "invalid_key" }

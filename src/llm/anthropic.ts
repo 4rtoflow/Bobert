@@ -271,6 +271,7 @@ export async function checkAnthropicModel(
 			efforts: claudeEfforts(model.capabilities),
 			webSearch:
 				model.capabilities?.server_tools?.web_search?.supported ?? true,
+			maxInputTokens: model.max_input_tokens ?? null,
 		};
 	} catch (error) {
 		// 形の正しくないIDは、404ではなく400になることがある

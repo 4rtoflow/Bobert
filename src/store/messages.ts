@@ -165,15 +165,20 @@ interface MessageRow {
 /**
  * 保存したメッセージを、指定したものから返信先へたどって読む。指定したものから古い方への順で返す。
  * 保存していないメッセージに行き当たったら、そこまでを返す。
+ * stopAtSummaryなら、要約した位置(要約の終わりのメッセージ)で止める。そのときは、reachedSummaryがtrueで、
+ * 最後のメッセージが要約の終わり。
  */
 export async function loadStoredChain(
 	db: D1Database,
 	messageId: string,
 	limit: number,
-): Promise<StoredMessageInput[]> {
+	stopAtSummary = false,
+): Promise<{ messages: StoredMessageInput[]; reachedSummary: boolean }> {
 	if (limit <= 0) {
-		return [];
+		return { messages: [], reachedSummary: false };
 	}
+	const summarized =
+		"EXISTS (SELECT 1 FROM conversation_summaries WHERE covered_until_message_id = messages.message_id)";
 	const { results } = await db
 		.prepare(
 			`WITH RECURSIVE chain (message_id, depth) AS (
@@ -182,14 +187,18 @@ export async function loadStoredChain(
 				SELECT messages.reply_to_id, chain.depth + 1
 				FROM chain JOIN messages ON messages.message_id = chain.message_id
 				WHERE messages.reply_to_id IS NOT NULL AND chain.depth + 1 < ?2
+					${stopAtSummary ? `AND NOT ${summarized}` : ""}
 			)
-			SELECT messages.*
+			SELECT messages.*, ${stopAtSummary ? summarized : "0"} AS summarized
 			FROM chain JOIN messages ON messages.message_id = chain.message_id
 			ORDER BY chain.depth`,
 		)
 		.bind(messageId, limit)
-		.all<MessageRow>();
-	return results.map(fromRow);
+		.all<MessageRow & { summarized: number }>();
+	return {
+		messages: results.map(fromRow),
+		reachedSummary: results.at(-1)?.summarized === 1,
+	};
 }
 
 function fromRow(row: MessageRow): StoredMessageInput {
