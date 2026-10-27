@@ -1,22 +1,24 @@
 import type { ModelCandidate } from "../config/models";
 import { findOpenRouterModel, type ModelPricing } from "../llm/model-info";
-import type { TokenUsage } from "../llm/types";
+import { sumUsage, type TokenUsage } from "../llm/types";
 import type { ResolvedModel } from "./model";
 
 /**
  * 利用量の表示の行(仕様: docs/spec/behavior.md「利用量の表示」)。返答の末尾に、小さな文字で添える。
+ * requestUsagesは、APIを1回呼ぶごとの使用量。トークン数は、その合計を書く。
  * 費用は、OpenRouterでは応答に含まれる費用を使う。Anthropicで直接呼ぶClaudeの候補は、
  * OpenRouterのモデル情報の単価(Anthropicと同じ単価)から計算する。分からなければ、トークン数だけを書く。
  */
 export async function usageNote(
-	usage: TokenUsage,
+	requestUsages: readonly TokenUsage[],
 	model: ResolvedModel,
 	candidate: ModelCandidate | null,
 ): Promise<string> {
+	const usage = sumUsage(requestUsages);
 	const cost =
 		usage.costUsd ??
 		(model.provider === "anthropic" && candidate !== null
-			? await claudeCost(candidate.openRouterId, usage)
+			? await claudeCost(candidate.openRouterId, requestUsages)
 			: null);
 	const cached =
 		usage.cacheReadTokens > 0
@@ -34,7 +36,8 @@ export async function usageNote(
 }
 
 /**
- * 単価から費用(USD)を計算する。入力が多いと単価が上がるモデルは、入力のトークン数(キャッシュの分を含む)で段階を選ぶ。
+ * APIを1回呼んだ分の費用(USD)を、単価から計算する。
+ * 入力が多いと単価が上がるモデルは、その回の入力のトークン数(キャッシュの分を含む)で段階を選ぶ。
  * Web検索の費用も足す。
  */
 export function costFromPricing(
@@ -56,14 +59,22 @@ export function costFromPricing(
 	);
 }
 
-/** Anthropicで直接呼んだときの費用。単価を取得できなければnull */
+/**
+ * Anthropicで直接呼んだときの費用。単価の段階は1回ごとに決まるので、1回ずつ計算して足す。
+ * 単価を取得できなければnull
+ */
 async function claudeCost(
 	openRouterId: string,
-	usage: TokenUsage,
+	requestUsages: readonly TokenUsage[],
 ): Promise<number | null> {
 	try {
 		const pricing = (await findOpenRouterModel(openRouterId))?.pricing;
-		return pricing ? costFromPricing(pricing, usage) : null;
+		return pricing
+			? requestUsages.reduce(
+					(sum, usage) => sum + costFromPricing(pricing, usage),
+					0,
+				)
+			: null;
 	} catch {
 		return null;
 	}

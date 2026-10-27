@@ -152,6 +152,7 @@ export async function chatWithOpenRouter(
 	}
 
 	const finishReason = responses.at(-1)?.choices?.[0]?.finish_reason;
+	const requestUsages = responses.map((data) => usageOf(data.usage));
 	return {
 		// 道具を呼ぶ前の前置き(「調べます」など)は、答えに入れない
 		text: responses
@@ -164,7 +165,8 @@ export async function chatWithOpenRouter(
 				: finishReason === "content_filter"
 					? "refusal"
 					: "end",
-		usage: sumUsage(responses.map((data) => usageOf(data.usage))),
+		usage: sumUsage(requestUsages),
+		requestUsages,
 		sources: sourcesOf(
 			responses.flatMap(
 				(data) => data.choices?.[0]?.message?.annotations ?? [],

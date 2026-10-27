@@ -135,6 +135,7 @@ export async function chatWithAnthropic(
 
 	const blocks = responses.flatMap((message) => message.content);
 	const stopReason = responses.at(-1)?.stop_reason;
+	const requestUsages = responses.map((message) => usageOf(message.usage));
 	return {
 		// 道具を呼ぶ前の前置き(「調べます」など)は、答えに入れない
 		text: responses
@@ -148,7 +149,8 @@ export async function chatWithAnthropic(
 				: stopReason === "refusal"
 					? "refusal"
 					: "end",
-		usage: sumUsage(responses.map((message) => usageOf(message.usage))),
+		usage: sumUsage(requestUsages),
+		requestUsages,
 		sources: sourcesOf(blocks),
 		toolCalls,
 	};

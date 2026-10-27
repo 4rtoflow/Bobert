@@ -65,7 +65,7 @@ function mockHaikuPricing() {
 describe("利用量の表示", () => {
 	it("OpenRouter経由なら、応答に含まれる費用を書く", async () => {
 		const note = await usageNote(
-			usage({ costUsd: 0.0021 }),
+			[usage({ costUsd: 0.0021 })],
 			{
 				provider: "openrouter",
 				modelId: "openai/gpt-6-luna",
@@ -83,7 +83,7 @@ describe("利用量の表示", () => {
 	it("Anthropicで直接呼ぶClaudeは、OpenRouterのモデル情報の単価から費用を計算する", async () => {
 		mockHaikuPricing();
 
-		const note = await usageNote(usage(), HAIKU_DIRECT, HAIKU);
+		const note = await usageNote([usage()], HAIKU_DIRECT, HAIKU);
 
 		// 2,345×$0.1 + 10,000×$0.01(キャッシュ) + 678×$0.5(100万トークンあたり) = 約$0.00067
 		expect(note).toBe(
@@ -109,7 +109,7 @@ describe("利用量の表示", () => {
 		);
 
 		const note = await usageNote(
-			usage({ webSearchRequests: 2 }),
+			[usage({ webSearchRequests: 2 })],
 			HAIKU_DIRECT,
 			HAIKU,
 		);
@@ -124,12 +124,14 @@ describe("利用量の表示", () => {
 		mockHaikuPricing();
 
 		const note = await usageNote(
-			usage({
-				inputTokens: 150_000,
-				cacheReadTokens: 100_000,
-				cacheWriteTokens: 50_000,
-				outputTokens: 1_000,
-			}),
+			[
+				usage({
+					inputTokens: 150_000,
+					cacheReadTokens: 100_000,
+					cacheWriteTokens: 50_000,
+					outputTokens: 1_000,
+				}),
+			],
 			HAIKU_DIRECT,
 			HAIKU,
 		);
@@ -140,10 +142,25 @@ describe("利用量の表示", () => {
 		);
 	});
 
+	it("何回かに分けて呼んだときは、1回ごとの入力で単価の段階を選ぶ", async () => {
+		mockHaikuPricing();
+		const request = usage({
+			inputTokens: 60_000,
+			cacheReadTokens: 0,
+			outputTokens: 100,
+		});
+
+		const note = await usageNote([request, request], HAIKU_DIRECT, HAIKU);
+
+		// 合計の12万トークンは境目(10万)を超えるが、1回ごとには超えないので、ふだんの単価で計算する
+		// 2回 ×(60,000×$0.1 + 100×$0.5)(100万トークンあたり) = 約$0.012
+		expect(note).toBe("-# 入力 120,000トークン・出力 200トークン・約$0.012");
+	});
+
 	it("キャッシュから読んだ分がなければ括弧を書かず、単価が分からなければ費用を書かない", async () => {
 		// 「その他」で入力したClaudeは、単価が分からない
 		const note = await usageNote(
-			usage({ cacheReadTokens: 0 }),
+			[usage({ cacheReadTokens: 0 })],
 			{
 				provider: "anthropic",
 				modelId: "claude-sonnet-4-6",
@@ -159,7 +176,7 @@ describe("利用量の表示", () => {
 	it("単価を取得できなければ、費用を書かない", async () => {
 		mockFetch(() => new Response(null, { status: 503 }));
 
-		const note = await usageNote(usage(), HAIKU_DIRECT, HAIKU);
+		const note = await usageNote([usage()], HAIKU_DIRECT, HAIKU);
 
 		expect(note).toBe(
 			"-# 入力 12,345トークン(うちキャッシュ 10,000)・出力 678トークン",

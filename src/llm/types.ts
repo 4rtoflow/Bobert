@@ -54,7 +54,13 @@ export interface ChatResult {
 	text: string;
 	/** 返答が終わった理由。end以外は、返答に注記する */
 	stopReason: "end" | "max_tokens" | "refusal";
+	/** 使ったトークン数と費用の合計 */
 	usage: TokenUsage;
+	/**
+	 * APIを1回呼ぶごとの使用量(呼んだ順)。道具やWeb検索の続きで、何回かに分けて呼ぶことがある。
+	 * 入力が多いときの単価は1回ごとの入力で決まるので、費用の計算に使う
+	 */
+	requestUsages: TokenUsage[];
 	/** 返答が引用したWebページ(出典)。引用した順 */
 	sources: Source[];
 	/** Bobertの道具を呼んだ回数 */

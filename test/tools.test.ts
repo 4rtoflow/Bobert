@@ -130,6 +130,8 @@ describe("道具のやり取り(Anthropic)", () => {
 		expect(result.text).toBe("挨拶のことです。");
 		expect(result.toolCalls).toBe(1);
 		expect(result.usage).toMatchObject({ inputTokens: 20, outputTokens: 10 });
+		// 費用は1回ごとに計算するので、1回ごとの使用量も返す
+		expect(result.requestUsages).toHaveLength(2);
 	});
 
 	it("道具の呼び出しが上限(5回)に達したら、道具を使わずに答えさせる", async () => {
@@ -271,6 +273,7 @@ describe("道具のやり取り(OpenRouter)", () => {
 			outputTokens: 30,
 		});
 		expect(result.usage.costUsd).toBeCloseTo(0.003, 10);
+		expect(result.requestUsages).toHaveLength(2);
 	});
 
 	it("道具の呼び出しが上限(5回)に達したら、道具を使わずに答えさせる", async () => {

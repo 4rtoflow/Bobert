@@ -160,7 +160,11 @@ async function composeReply(
 			imagesSkipped: conversation.imagesSkipped && settings.featImageInput,
 			webSearchSkipped: settings.featWebSearch && webSearch === false,
 			usage: settings.featUsageDisplay
-				? await usageNote(result.usage, model, selectedCandidate(settings))
+				? await usageNote(
+						result.requestUsages,
+						model,
+						selectedCandidate(settings),
+					)
 				: null,
 		});
 	} catch (error) {
