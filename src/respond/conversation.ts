@@ -147,14 +147,28 @@ function humanLine(
 		(embed) =>
 			`[Embed] ${resolveMentions(embedLines(embed).join("\n"), mentioned)}`,
 	);
+	const content = resolveMentions(message.content, mentioned);
 	const body = [
-		resolveMentions(message.content, mentioned),
+		!message.authorIsBot && looksLikeCommand(content)
+			? `${content}${TEXT_COMMAND_NOTE}`
+			: content,
 		...embeds,
 		...notes,
 	]
 		.filter((text) => text !== "")
 		.join("\n");
 	return `[${formatJst(message.createdAt)}] ${speakerLabel(message, names)}: ${body}`;
+}
+
+/**
+ * 「/」と英数字で始まる人の発言に添える一言。スラッシュコマンドを使っても使った人の発言は残らないので、
+ * こうした発言は、文字で送っただけのもの。AIが、コマンドの実行と取り違えないようにする
+ */
+const TEXT_COMMAND_NOTE = "(文字の発言で、コマンドの実行ではありません)";
+
+/** スラッシュコマンドのように見えるか(「/」と英数字で始まる) */
+function looksLikeCommand(content: string): boolean {
+	return /^\/[\p{L}\p{N}_-]+/u.test(content.trimStart());
 }
 
 /** 発言者の名前。ほかのBotなら、Botであることと、どのコマンドへの返答か(誰が使ったか)を書き添える */
