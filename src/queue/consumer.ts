@@ -142,5 +142,7 @@ function withDefaults(job: IngestJob): StoredMessageInput {
 			...attachment,
 			filename: attachment.filename ?? "",
 		})),
+		embeds: message.embeds ?? [],
+		command: message.command ?? null,
 	};
 }

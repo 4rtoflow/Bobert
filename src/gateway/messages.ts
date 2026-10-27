@@ -1,6 +1,11 @@
-import type { APIMessage, APIUser } from "discord-api-types/v10";
+import type { APIEmbed, APIMessage, APIUser } from "discord-api-types/v10";
 import { MessageType } from "../discord/constants";
-import type { StoredMessageInput, UserName } from "../queue/messages";
+import type {
+	CommandInfo,
+	EmbedInfo,
+	StoredMessageInput,
+	UserName,
+} from "../queue/messages";
 
 /** サーバーでの情報のうち、Bobertが使う部分 */
 interface GatewayMember {
@@ -20,12 +25,15 @@ export type GatewayMessage = Pick<
 	| "attachments"
 	| "message_reference"
 	| "referenced_message"
+	| "interaction_metadata"
 > & {
 	guild_id?: string;
 	/** 発言者のサーバーでの情報。サーバーの中のメッセージで、Gatewayで届いたときだけ付く */
 	member?: GatewayMember;
 	/** メンションされた人。サーバーの中では、それぞれのサーバーでの情報も付く */
 	mentions: (APIUser & { member?: GatewayMember })[];
+	/** Embed。編集の通知などで付かないことがある */
+	embeds?: APIEmbed[];
 };
 
 /** 保存するメッセージの種類。参加やピン留めの通知などのシステムのメッセージは、会話ではないので保存しない */
@@ -111,11 +119,66 @@ export function toStoredMessage(message: GatewayMessage): StoredMessageInput {
 			contentType: attachment.content_type ?? null,
 			size: attachment.size,
 		})),
+		embeds: (message.embeds ?? []).flatMap((embed) => {
+			const info = toEmbedInfo(embed);
+			return info ? [info] : [];
+		}),
+		command: toCommandInfo(message),
 		members: memberNames(message),
 		createdAt: Date.parse(message.timestamp),
 		editedAt: message.edited_timestamp
 			? Date.parse(message.edited_timestamp)
 			: null,
+	};
+}
+
+/** Embedの中身のうち、文字の部分を取り出す。文字のないEmbed(画像だけなど)は外す */
+function toEmbedInfo(embed: APIEmbed): EmbedInfo | null {
+	const info: EmbedInfo = {};
+	if (embed.provider?.name) {
+		info.provider = embed.provider.name;
+	}
+	if (embed.author?.name) {
+		info.author = embed.author.name;
+	}
+	if (embed.title) {
+		info.title = embed.title;
+	}
+	if (embed.description) {
+		info.description = embed.description;
+	}
+	const fields = (embed.fields ?? [])
+		.filter((field) => field.name !== "" || field.value !== "")
+		.map((field) => ({ name: field.name, value: field.value }));
+	if (fields.length > 0) {
+		info.fields = fields;
+	}
+	if (embed.footer?.text) {
+		info.footer = embed.footer.text;
+	}
+	return Object.keys(info).length > 0 ? info : null;
+}
+
+/** コマンドへの返答なら、どのコマンドを誰が使ったか */
+function toCommandInfo(message: GatewayMessage): CommandInfo | null {
+	const metadata = message.interaction_metadata;
+	const contextMenu = message.type === MessageType.ContextMenuCommand;
+	if (
+		!metadata ||
+		(message.type !== MessageType.ChatInputCommand && !contextMenu)
+	) {
+		return null;
+	}
+	// コマンドの名前は、Discordは返しているが、型の定義(discord-api-types)にはまだない
+	const name = (metadata as { name?: unknown }).name;
+	if (typeof name !== "string" || name === "") {
+		return null;
+	}
+	return {
+		name,
+		contextMenu,
+		userId: metadata.user.id,
+		userName: metadata.user.global_name ?? metadata.user.username,
 	};
 }
 

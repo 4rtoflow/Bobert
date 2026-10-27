@@ -1,4 +1,8 @@
-import type { StoredMessageInput, UserName } from "../queue/messages";
+import type {
+	EmbedInfo,
+	StoredMessageInput,
+	UserName,
+} from "../queue/messages";
 
 /** 削除したメッセージのIDを残しておく時間。保存のやり直しの間だけ要る */
 const DELETED_RETENTION_MS = 24 * 60 * 60 * 1000;
@@ -46,7 +50,8 @@ export function messageVersion(
  * メッセージを保存する(仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」)。
  * - メッセージIDで上書きする。編集が作成より先に処理されても(やり直しで順番が入れ替わる)、古い版では上書きしない
  * - 削除済みのメッセージは保存しない
- * - 本文が変わったら、ベクトルを入れ直すため、embedded_atを消す
+ * - 本文かEmbedが変わったら、ベクトルを入れ直すため、embedded_atを消す。
+ *   リンクのプレビューは、投稿の後に編集の通知で届くので、本文が同じでもEmbedは変わる
  * - 発言者の名前は、サーバーでの情報が付いているとき(Gatewayで届いたとき)だけ書き換える。
  *   Discordから読み直したメッセージには、ニックネームが含まれないため
  * あわせて、サーバーで見えている名前を、人ごとに記録する。
@@ -65,9 +70,10 @@ export async function saveMessages(
 				.prepare(
 					`INSERT INTO messages (
 					message_id, guild_id, channel_id, author_id, author_name, author_is_bot,
-					content, reply_to_id, mentions, attachments, created_at, edited_at
+					content, reply_to_id, mentions, attachments, created_at, edited_at,
+					embeds, command
 				)
-				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+				SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15
 				WHERE NOT EXISTS (SELECT 1 FROM deleted_messages WHERE message_id = ?1)
 				ON CONFLICT (message_id) DO UPDATE SET
 					author_name = CASE
@@ -78,9 +84,13 @@ export async function saveMessages(
 					reply_to_id = excluded.reply_to_id,
 					mentions = excluded.mentions,
 					attachments = excluded.attachments,
+					embeds = excluded.embeds,
+					command = excluded.command,
 					edited_at = excluded.edited_at,
 					embedded_at = CASE
-						WHEN messages.content = excluded.content THEN messages.embedded_at
+						WHEN messages.content = excluded.content
+							AND COALESCE(messages.embeds, '[]') = excluded.embeds
+						THEN messages.embedded_at
 						ELSE NULL
 					END
 				WHERE COALESCE(excluded.edited_at, excluded.created_at)
@@ -100,6 +110,8 @@ export async function saveMessages(
 					message.createdAt,
 					message.editedAt,
 					nameFromMember ? 1 : 0,
+					JSON.stringify(message.embeds),
+					message.command === null ? null : JSON.stringify(message.command),
 				),
 			...(guildId === null
 				? []
@@ -144,6 +156,8 @@ interface MessageRow {
 	reply_to_id: string | null;
 	mentions: string | null;
 	attachments: string | null;
+	embeds: string | null;
+	command: string | null;
 	created_at: number;
 	edited_at: number | null;
 }
@@ -190,6 +204,8 @@ function fromRow(row: MessageRow): StoredMessageInput {
 		replyToId: row.reply_to_id,
 		mentions: row.mentions ? JSON.parse(row.mentions) : [],
 		attachments: row.attachments ? JSON.parse(row.attachments) : [],
+		embeds: row.embeds ? JSON.parse(row.embeds) : [],
+		command: row.command ? JSON.parse(row.command) : null,
 		// サーバーで見えている名前は、guild_membersから読む
 		members: [],
 		createdAt: row.created_at,
@@ -226,6 +242,7 @@ export interface MessageToEmbed {
 	authorId: string;
 	content: string;
 	mentions: UserName[];
+	embeds: EmbedInfo[];
 	createdAt: number;
 	editedAt: number | null;
 }
@@ -239,7 +256,7 @@ export async function findMessagesToEmbed(
 	for (const ids of chunks(messageIds, MAX_IDS_PER_QUERY)) {
 		const { results } = await db
 			.prepare(
-				`SELECT message_id, channel_id, author_id, content, mentions, created_at, edited_at
+				`SELECT message_id, channel_id, author_id, content, mentions, embeds, created_at, edited_at
 				FROM messages
 				WHERE embedded_at IS NULL AND message_id IN (${ids.map(() => "?").join(", ")})`,
 			)
@@ -250,6 +267,7 @@ export async function findMessagesToEmbed(
 				author_id: string;
 				content: string;
 				mentions: string | null;
+				embeds: string | null;
 				created_at: number;
 				edited_at: number | null;
 			}>();
@@ -260,6 +278,7 @@ export async function findMessagesToEmbed(
 				authorId: row.author_id,
 				content: row.content,
 				mentions: row.mentions ? (JSON.parse(row.mentions) as UserName[]) : [],
+				embeds: row.embeds ? (JSON.parse(row.embeds) as EmbedInfo[]) : [],
 				createdAt: row.created_at,
 				editedAt: row.edited_at,
 			});

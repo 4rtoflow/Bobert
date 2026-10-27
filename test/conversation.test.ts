@@ -1,5 +1,6 @@
-import type { APIAttachment, APIMessage } from "discord-api-types/v10";
+import type { APIAttachment, APIMessage, APIUser } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
+import type { StoredMessageInput } from "../src/queue/messages";
 import { toConversation } from "../src/respond/conversation";
 import { fromDiscord } from "../src/respond/history";
 import { ALICE, BOB, BOT, discordMessage } from "./fixtures";
@@ -126,6 +127,57 @@ describe("AIに渡す会話への変換", () => {
 			"user",
 			"assistant",
 			"user",
+		]);
+	});
+
+	it("ほかのBotの発言は、Botであることと、どのコマンドへの返答かを書き添え、Embedの中身も渡す", () => {
+		const ohirun: APIUser = {
+			id: "300",
+			username: "ohirun",
+			global_name: "おひるん！",
+			discriminator: "0",
+			avatar: null,
+			bot: true,
+		};
+		const [added, pong] = stored(
+			discordMessage("1", ohirun, ""),
+			discordMessage("2", ohirun, "Pong!"),
+		);
+		const chain = [
+			{
+				...(added as StoredMessageInput),
+				embeds: [
+					{
+						title: "✅ 店舗を追加しました",
+						fields: [{ name: "店舗名", value: "aaa" }],
+					},
+				],
+				command: {
+					name: "add store",
+					contextMenu: false,
+					userId: ALICE.id,
+					userName: "Alice",
+				},
+			},
+			pong as StoredMessageInput,
+		];
+
+		const { messages } = toConversation(chain, {
+			...OPTIONS,
+			names: new Map([[ALICE.id, "ありす"]]),
+		});
+
+		expect(messages.map((message) => message.parts)).toEqual([
+			[
+				{
+					type: "text",
+					text: [
+						"おひるん！(Bot。ありすが使った /add store への返答): [Embed] ✅ 店舗を追加しました",
+						"店舗名: aaa",
+					].join("\n"),
+				},
+			],
+			[{ type: "text", text: "おひるん！(Bot): Pong!" }],
 		]);
 	});
 });

@@ -1,5 +1,9 @@
 import type { ChatMessage, ChatPart } from "../llm/types";
-import type { AttachmentInfo, StoredMessageInput } from "../queue/messages";
+import type {
+	AttachmentInfo,
+	EmbedInfo,
+	StoredMessageInput,
+} from "../queue/messages";
 
 /**
  * 返信のつながりをさかのぼる上限。
@@ -111,7 +115,7 @@ export function selectImages(
 }
 
 /**
- * メッセージを「名前: 本文」の文にする(道具の結果で使う)。添付は、ファイル名だけを書き添える。
+ * メッセージを「名前: 本文」の文にする(道具の結果で使う)。Embedの中身と、添付のファイル名を書き添える。
  * Bobertの発言は、末尾の注記を外す。
  */
 export function messageLine(
@@ -125,7 +129,10 @@ export function messageLine(
 	return humanLine(message, names, message.attachments.map(attachmentNote));
 }
 
-/** 人の発言を「名前: 本文」の文にする。notesは、本文の後に書き添える */
+/**
+ * Bobert以外の発言を「名前: 本文」の文にする。本文の後に、Embedの中身と、notes(添付のファイル名など)を書き添える。
+ * ほかのBotの発言は、名前にBotであることと、どのコマンドへの返答かを書き添える。
+ */
 function humanLine(
 	message: StoredMessageInput,
 	names: ReadonlyMap<string, string>,
@@ -134,10 +141,53 @@ function humanLine(
 	const mentioned = new Map(
 		message.mentions.map((user) => [user.id, names.get(user.id) ?? user.name]),
 	);
-	const body = [resolveMentions(message.content, mentioned), ...notes]
+	const embeds = message.embeds.map(
+		(embed) =>
+			`[Embed] ${resolveMentions(embedLines(embed).join("\n"), mentioned)}`,
+	);
+	const body = [
+		resolveMentions(message.content, mentioned),
+		...embeds,
+		...notes,
+	]
 		.filter((text) => text !== "")
 		.join("\n");
-	return `${authorName(message, names)}: ${body}`;
+	return `${speakerLabel(message, names)}: ${body}`;
+}
+
+/** 発言者の名前。ほかのBotなら、Botであることと、どのコマンドへの返答か(誰が使ったか)を書き添える */
+function speakerLabel(
+	message: StoredMessageInput,
+	names: ReadonlyMap<string, string>,
+): string {
+	const name = authorName(message, names);
+	if (!message.authorIsBot) {
+		return name;
+	}
+	const { command } = message;
+	if (command === null) {
+		return `${name}(Bot)`;
+	}
+	const user = names.get(command.userId) ?? command.userName;
+	const used = command.contextMenu ? `「${command.name}」` : `/${command.name}`;
+	return `${name}(Bot。${user}が使った ${used} への返答)`;
+}
+
+/**
+ * Embedの中身を、文字の行にする。提供元と作者、タイトル、説明、項目、フッターの順。
+ * 検索用のデータ化(ベクトルにする文)でも使う
+ */
+export function embedLines(embed: EmbedInfo): string[] {
+	const head = [embed.provider, embed.author]
+		.filter((part) => part !== undefined && part !== "")
+		.join(" / ");
+	return [
+		head,
+		embed.title ?? "",
+		embed.description ?? "",
+		...(embed.fields ?? []).map((field) => `${field.name}: ${field.value}`),
+		embed.footer ?? "",
+	].filter((line) => line !== "");
 }
 
 function authorName(
