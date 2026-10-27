@@ -2,9 +2,15 @@ import { env } from "cloudflare:workers";
 import type { APIAttachment, APIMessage } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearModelInfoCache } from "../src/llm/model-info";
-import type { RespondJob } from "../src/queue/messages";
+import type {
+	QueueMessage,
+	RespondJob,
+	StoredMessageInput,
+} from "../src/queue/messages";
 import { handleRespondJob } from "../src/respond/handler";
+import { fromDiscord } from "../src/respond/history";
 import { COMMON_SYSTEM_PROMPT } from "../src/respond/prompt";
+import { saveMessages } from "../src/store/messages";
 import { saveCredential, updateUserSettings } from "../src/store/users";
 import {
 	ALICE,
@@ -19,17 +25,49 @@ import { type FetchCall, mockFetch } from "./helpers";
 afterEach(() => {
 	vi.restoreAllMocks();
 	clearModelInfoCache();
+	ingested.length = 0;
 });
 
+/** 保存用のQueueに入れたメッセージ。テストでは、本物の保存の処理を動かさない */
+const ingested: StoredMessageInput[] = [];
+
+const testEnv: Env = {
+	...env,
+	INGEST_QUEUE: {
+		send: async () => {},
+		sendBatch: async (batch: Iterable<MessageSendRequest<QueueMessage>>) => {
+			for (const request of batch) {
+				if (request.body.kind === "ingest") {
+					ingested.push(request.body.message);
+				}
+			}
+		},
+	} as unknown as Queue,
+};
+
 /** messageへの応答の仕事 */
-function respondJob(message: APIMessage): RespondJob {
+function respondJob(
+	message: APIMessage,
+	extra: Partial<RespondJob> = {},
+): RespondJob {
 	return {
 		kind: "respond",
 		messageId: message.id,
 		channelId: CHANNEL_ID,
 		guildId: "900",
 		authorId: message.author.id,
+		...extra,
 	};
+}
+
+/** Discordからメッセージを読んだ回数(メッセージIDの一覧) */
+function discordReads(calls: FetchCall[]): string[] {
+	return calls.flatMap((call) => {
+		const read = call.url.pathname.match(
+			/^\/api\/v10\/channels\/\d+\/messages\/(\d+)$/,
+		);
+		return call.method === "GET" && read?.[1] ? [read[1]] : [];
+	});
 }
 
 /**
@@ -171,7 +209,7 @@ describe("メンションと返信への応答", () => {
 		});
 		const calls = mockApis([trigger]);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const [reply] = posted(calls);
 		expect(reply?.content).toContain("`/setup`");
@@ -185,8 +223,8 @@ describe("メンションと返信への応答", () => {
 		});
 		const calls = mockApis([trigger]);
 
-		await handleRespondJob(respondJob(trigger), env);
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		expect(posted(calls)).toHaveLength(1);
 	});
@@ -208,7 +246,7 @@ describe("メンションと返信への応答", () => {
 			anthropicStream("元気だよ!"),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.hostname === "api.anthropic.com",
@@ -242,7 +280,7 @@ describe("メンションと返信への応答", () => {
 		});
 		const calls = mockApis([trigger], () => anthropicStream("こんにちは!"));
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.hostname === "api.anthropic.com",
@@ -267,7 +305,7 @@ describe("メンションと返信への応答", () => {
 		});
 		const calls = mockApis([trigger], () => anthropicStream("こんにちは。"));
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.hostname === "api.anthropic.com",
@@ -292,7 +330,7 @@ describe("メンションと返信への応答", () => {
 		const longText = `${"あ".repeat(1500)}\n\n${"い".repeat(1500)}`;
 		const calls = mockApis([trigger], () => anthropicStream(longText));
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const replies = posted(calls);
 		expect(replies.map((reply) => reply.content)).toEqual([
@@ -321,7 +359,7 @@ describe("メンションと返信への応答", () => {
 			),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find((call) => call.url.hostname === "openrouter.ai");
 		expect(request?.body).toMatchObject({
@@ -351,7 +389,7 @@ describe("メンションと返信への応答", () => {
 				: openRouterChat("猫だね!"),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
@@ -392,7 +430,7 @@ describe("メンションと返信への応答", () => {
 				: openRouterChat("猫だね!"),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
@@ -419,7 +457,7 @@ describe("メンションと返信への応答", () => {
 		});
 		const calls = mockApis([trigger], () => anthropicStream("こんにちは!"));
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.hostname === "api.anthropic.com",
@@ -453,7 +491,7 @@ describe("メンションと返信への応答", () => {
 				: openRouterChat("こんにちは!"),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
@@ -487,7 +525,7 @@ describe("メンションと返信への応答", () => {
 				: anthropicStream("こんにちは!"),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		// Anthropicで直接呼んだので、費用はOpenRouterのモデル情報の単価から計算する
 		expect(posted(calls)[0]?.content).toBe(
@@ -519,7 +557,7 @@ describe("メンションと返信への応答", () => {
 			}),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		expect(posted(calls)[0]?.content).toBe(
 			"こんにちは!\n-# 入力 1,200トークン(うちキャッシュ 1,000)・出力 30トークン・約$0.00012",
@@ -556,7 +594,7 @@ describe("メンションと返信への応答", () => {
 			}),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
@@ -593,7 +631,7 @@ describe("メンションと返信への応答", () => {
 				: openRouterChat("こんにちは!"),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
@@ -645,7 +683,7 @@ describe("メンションと返信への応答", () => {
 				: openRouterChat("返信先は読めなかったよ。"),
 		);
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const requests = calls
 			.filter((call) => call.url.pathname === "/api/v1/chat/completions")
@@ -676,11 +714,114 @@ describe("メンションと返信への応答", () => {
 		});
 		const calls = mockApis([trigger], () => openRouterChat("こんにちは!"));
 
-		await handleRespondJob(respondJob(trigger), env);
+		await handleRespondJob(respondJob(trigger), testEnv);
 
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
 		);
 		expect(request?.body).not.toHaveProperty("tools");
+	});
+});
+
+describe("保存したメッセージから会話を読む", () => {
+	async function anthropicUser(id: string) {
+		const user = { ...ALICE, id };
+		await saveCredential(env, user.id, "anthropic", {
+			apiKey: "sk-ant-test",
+			workspaceId: null,
+		});
+		return user;
+	}
+
+	function anthropicBody(calls: FetchCall[]) {
+		return calls.find((call) => call.url.hostname === "api.anthropic.com")
+			?.body;
+	}
+
+	it("保存したメッセージから会話を読み、返信先はDiscordに問い合わせない", async () => {
+		const user = await anthropicUser("140");
+		const first = discordMessage("5400", user, `<@${BOT.id}> やあ`, {
+			mentions: [BOT],
+		});
+		const answer = discordReply("5401", BOT, "やあ!", first);
+		const trigger = discordReply("5402", user, "元気?", answer);
+		await saveMessages(
+			env.DB,
+			[first, answer].map((message) => fromDiscord(message, "900")),
+		);
+		const calls = mockApis([trigger], () => anthropicStream("元気だよ!"));
+
+		await handleRespondJob(respondJob(trigger), testEnv);
+
+		// 話しかけたメッセージだけを、Discordから読む
+		expect(discordReads(calls)).toEqual([trigger.id]);
+		expect(anthropicBody(calls)).toMatchObject({
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "text", text: "Alice: @Bobert やあ" }],
+				},
+				{ role: "assistant", content: [{ type: "text", text: "やあ!" }] },
+				{ role: "user", content: [{ type: "text", text: "Alice: 元気?" }] },
+			],
+		});
+		expect(ingested).toEqual([]);
+	});
+
+	it("保存していない返信先はDiscordから読み、保存用のQueueに入れる", async () => {
+		const user = await anthropicUser("141");
+		const first = discordMessage("5410", user, `<@${BOT.id}> やあ`, {
+			mentions: [BOT],
+		});
+		const answer = discordReply("5411", BOT, "やあ!", first);
+		const trigger = discordReply("5412", user, "元気?", answer);
+		const calls = mockApis([first, answer, trigger], () =>
+			anthropicStream("元気だよ!"),
+		);
+
+		await handleRespondJob(respondJob(trigger), testEnv);
+
+		expect(discordReads(calls)).toEqual(["5412", "5411", "5410"]);
+		expect(ingested.map((message) => message.messageId)).toEqual([
+			"5411",
+			"5410",
+		]);
+	});
+
+	it("名前は、サーバーで見えている名前に揃える", async () => {
+		const user = await anthropicUser("142");
+		const bob = { ...BOB, id: "143" };
+		const greeting = discordMessage("5420", bob, "やあ");
+		// Bobの名前は、前に保存したメッセージで分かっている
+		await saveMessages(env.DB, [
+			{
+				...fromDiscord(greeting, "900"),
+				members: [{ id: bob.id, name: "ぼぶ" }],
+			},
+		]);
+		const trigger = discordReply(
+			"5421",
+			user,
+			`<@${BOT.id}> これ何?`,
+			greeting,
+			{ mentions: [BOT] },
+		);
+		const calls = mockApis([trigger], () => anthropicStream("あいさつだよ"));
+
+		// 話しかけた人の名前は、Gatewayで届いたときに分かったものを使う
+		await handleRespondJob(
+			respondJob(trigger, { members: [{ id: user.id, name: "ありす" }] }),
+			testEnv,
+		);
+
+		expect(anthropicBody(calls)).toMatchObject({
+			messages: [
+				{ role: "user", content: [{ type: "text", text: "ぼぶ: やあ" }] },
+				{
+					role: "user",
+					content: [{ type: "text", text: "ありす: @Bobert これ何?" }],
+				},
+			],
+		});
 	});
 });

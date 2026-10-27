@@ -10,7 +10,11 @@ import { findOpenRouterModel } from "../llm/model-info";
 import { chatWithOpenRouter } from "../llm/openrouter";
 import { type ChatRequest, LlmError } from "../llm/types";
 import { logEvent } from "../log";
-import type { RespondJob } from "../queue/messages";
+import type {
+	QueueMessage,
+	RespondJob,
+	StoredMessageInput,
+} from "../queue/messages";
 import { claimMessage, releaseMessage } from "../store/messages";
 import {
 	getRegisteredProviders,
@@ -18,12 +22,16 @@ import {
 	loadCredential,
 	type UserSettings,
 } from "../store/users";
-import {
-	fetchReplyChain,
-	type MessageFetcher,
-	toConversation,
-} from "./conversation";
+import { toConversation } from "./conversation";
 import { replyEffort } from "./effort";
+import {
+	fromDiscord,
+	type HistoryDeps,
+	type MessageFetcher,
+	namesFor,
+	readReplyChain,
+	refreshImageUrls,
+} from "./history";
 import {
 	type ResolvedModel,
 	resolveModel,
@@ -41,6 +49,8 @@ import { webSearchAvailable } from "./web-search";
 const MAX_OUTPUT_TOKENS = 16_000;
 /** 「入力中…」を送り直す間隔。表示は約10秒で消えるため */
 const TYPING_INTERVAL_MS = 8_000;
+/** 保存用のQueueに1回で入れる仕事の数。1回で送れる大きさ(256KB)に収めるため */
+const INGEST_BATCH_SIZE = 10;
 
 /**
  * メンションや返信に、AIの返答を投稿する(Queueの応答用の仕事)。
@@ -67,16 +77,30 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 	const fetchMessage: MessageFetcher = (channelId, messageId) =>
 		getMessageOrNull(token, channelId, messageId);
 
+	// 話しかけたメッセージは、保存より先に応答の処理が動くことがあり、消されていないかも確かめたいので、Discordから読む
 	const trigger = await fetchMessage(job.channelId, job.messageId);
 	if (trigger === null) {
 		// 返答する前に消されたか、読む権限がない
 		log("trigger_unavailable", { userId: job.authorId });
 		return;
 	}
+	const history: HistoryDeps = {
+		db: env.DB,
+		guildId: job.guildId,
+		channelId: job.channelId,
+		fetchMessage,
+		ingest: (messages) => enqueueIngest(env, messages),
+		knownNames: job.members ?? [],
+	};
 
 	const stopTyping = startTyping(token, job.channelId);
 	try {
-		const reply = await composeReply(job, env, trigger, fetchMessage);
+		const reply = await composeReply(
+			job,
+			env,
+			fromDiscord(trigger, job.guildId),
+			history,
+		);
 		await postReply(token, trigger, reply);
 	} finally {
 		stopTyping();
@@ -87,8 +111,8 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 async function composeReply(
 	job: RespondJob,
 	env: Env,
-	trigger: APIMessage,
-	fetchMessage: MessageFetcher,
+	trigger: StoredMessageInput,
+	history: HistoryDeps,
 ): Promise<string> {
 	const userId = job.authorId;
 	const [providers, settings] = await Promise.all([
@@ -107,17 +131,24 @@ async function composeReply(
 		return setupGuidance({ ok: false, missing: "credentials", label: "" });
 	}
 
-	const chain = await fetchReplyChain(trigger, fetchMessage);
+	const botUserId = env.DISCORD_APPLICATION_ID;
+	const loaded = await readReplyChain(trigger, history);
 	// 添付がなければ、画像を読めるかは確かめない(「その他」のモデルでは、モデル情報の取得が要るため)
-	const hasAttachments = chain.some(
+	const hasAttachments = loaded.some(
 		(message) => message.attachments.length > 0,
 	);
+	const includeImages =
+		hasAttachments &&
+		settings.featImageInput &&
+		(await readsImages(model, settings));
+	// 保存した添付のURLは期限付きなので、AIに渡す画像は、期限が近ければ取り直す
+	const chain = includeImages
+		? await refreshImageUrls(loaded, history, botUserId)
+		: loaded;
 	const conversation = toConversation(chain, {
-		botUserId: env.DISCORD_APPLICATION_ID,
-		includeImages:
-			hasAttachments &&
-			settings.featImageInput &&
-			(await readsImages(model, settings)),
+		botUserId,
+		includeImages,
+		names: await namesFor(chain, history),
 	});
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
@@ -126,7 +157,7 @@ async function composeReply(
 	const root = chain[0];
 	const tools =
 		startsWithReply(root) && (await toolsAvailable(settings, model))
-			? [replyChainTool(root, fetchMessage, env.DISCORD_APPLICATION_ID)]
+			? [replyChainTool(root, history, botUserId)]
 			: [];
 	const request: ChatRequest = {
 		model: model.modelId,
@@ -223,6 +254,30 @@ async function postReply(
 			allowed_mentions: { parse: [], replied_user: index === 0 },
 		});
 		replyTo = posted.id;
+	}
+}
+
+/**
+ * Discordから読んだメッセージを、保存用のQueueに入れる(読んだ分だけ取り込む。
+ * 仕様: docs/spec/architecture.md「過去ログの取り込み」)。入れられなくても、返答は続ける。
+ */
+async function enqueueIngest(
+	env: Env,
+	messages: readonly StoredMessageInput[],
+): Promise<void> {
+	try {
+		for (let i = 0; i < messages.length; i += INGEST_BATCH_SIZE) {
+			await env.INGEST_QUEUE.sendBatch(
+				messages.slice(i, i + INGEST_BATCH_SIZE).map((message) => ({
+					body: { kind: "ingest", message } satisfies QueueMessage,
+				})),
+			);
+		}
+	} catch (error) {
+		log("ingest_enqueue_failed", {
+			messages: messages.length,
+			error: error instanceof Error ? error.message : "unknown",
+		});
 	}
 }
 

@@ -67,9 +67,12 @@ export function shouldStore(
 	);
 }
 
-/** 保存用の形に変換する */
-export function toStoredMessage(message: GatewayMessage): StoredMessageInput {
-	const members: UserName[] = [
+/**
+ * メッセージで分かった、サーバーで見えている名前(発言者と、メンションされた人)。
+ * サーバーでの情報が付いている人だけ。Discordから読み直したメッセージには付いていない
+ */
+export function memberNames(message: GatewayMessage): UserName[] {
+	return [
 		...(message.member
 			? [
 					{
@@ -82,6 +85,10 @@ export function toStoredMessage(message: GatewayMessage): StoredMessageInput {
 			user.member ? [{ id: user.id, name: memberName(user, user.member) }] : [],
 		),
 	];
+}
+
+/** 保存用の形に変換する。会話の組み立ても、この形で行う */
+export function toStoredMessage(message: GatewayMessage): StoredMessageInput {
 	return {
 		messageId: message.id,
 		guildId: message.guild_id ?? null,
@@ -104,7 +111,7 @@ export function toStoredMessage(message: GatewayMessage): StoredMessageInput {
 			contentType: attachment.content_type ?? null,
 			size: attachment.size,
 		})),
-		members,
+		members: memberNames(message),
 		createdAt: Date.parse(message.timestamp),
 		editedAt: message.edited_timestamp
 			? Date.parse(message.edited_timestamp)
