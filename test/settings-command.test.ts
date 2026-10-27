@@ -53,7 +53,6 @@ describe("/settings", () => {
 		});
 		expect(editedMessage(calls)).toEqual({
 			content: [
-				"今の設定です。",
 				"- Anthropic: 登録済み",
 				"- OpenRouter: 未連携",
 				"- モデル: Claude Haiku 5.5(Anthropicで直接呼ぶ)",
@@ -87,7 +86,6 @@ describe("/settings", () => {
 		await sendInteraction(settingsCommand(user));
 
 		expect(lines(calls)).toEqual([
-			"今の設定です。",
 			"- Anthropic: 登録済み",
 			"- OpenRouter: 連携済み",
 			"- モデル: GPT-6 Luna(OpenRouter経由)",

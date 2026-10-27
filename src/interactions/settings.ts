@@ -48,7 +48,6 @@ async function settingsMessage(env: Env, userId: string): Promise<MessageEdit> {
 	]);
 	const resolution = resolveModel(settings, providers);
 	const lines = [
-		"今の設定です。",
 		`- Anthropic: ${providers.has("anthropic") ? "登録済み" : "未登録"}`,
 		`- OpenRouter: ${providers.has("openrouter") ? "連携済み" : "未連携"}`,
 		`- モデル: ${modelLine(settings, resolution)}`,
