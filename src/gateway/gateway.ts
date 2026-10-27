@@ -9,6 +9,7 @@ import type { QueueMessage } from "../queue/messages";
 import {
 	type GatewayMessage,
 	shouldRespond,
+	shouldStore,
 	toStoredMessage,
 } from "./messages";
 import { isFatalCloseCode, WATCHDOG_INTERVAL_MS } from "./protocol";
@@ -283,10 +284,7 @@ export class Gateway extends DurableObject<Env> {
 				if (!message.guild_id) {
 					return;
 				}
-				await this.env.INGEST_QUEUE.send({
-					kind: "ingest",
-					message: toStoredMessage(message),
-				} satisfies QueueMessage);
+				// 応答を先に入れる。保存の側で失敗しても、応答は止めないため
 				const botUserId = this.session?.botUserId;
 				if (botUserId && shouldRespond(message, botUserId)) {
 					await this.env.RESPOND_QUEUE.send({
@@ -297,15 +295,22 @@ export class Gateway extends DurableObject<Env> {
 						authorId: message.author.id,
 					} satisfies QueueMessage);
 				}
+				if (shouldStore(message)) {
+					await this.env.INGEST_QUEUE.send({
+						kind: "ingest",
+						message: toStoredMessage(message),
+					} satisfies QueueMessage);
+				}
 				return;
 			}
 			case "MESSAGE_UPDATE": {
 				const message = data as Partial<GatewayMessage>;
 				// 本文を含まない更新(埋め込みの展開など)は保存内容に関係しない
 				if (
-					!message.guild_id ||
+					!shouldStore(message) ||
 					typeof message.content !== "string" ||
-					!message.author
+					!message.author ||
+					typeof message.timestamp !== "string"
 				) {
 					return;
 				}

@@ -73,6 +73,8 @@ export const MessageFlags = {
 export const MessageType = {
 	Default: 0 as DiscordMessageType.Default,
 	Reply: 19 as DiscordMessageType.Reply,
+	ChatInputCommand: 20 as DiscordMessageType.ChatInputCommand,
+	ContextMenuCommand: 23 as DiscordMessageType.ContextMenuCommand,
 } as const;
 
 export const ComponentType = {
