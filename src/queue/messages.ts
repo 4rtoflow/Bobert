@@ -1,5 +1,10 @@
-/** Queueで受け渡す仕事。RESPOND_QUEUEはRespondJob、INGEST_QUEUEはそれ以外を運ぶ。 */
-export type QueueMessage = RespondJob | IngestJob | DeleteJob | ImportJob;
+/** Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとCompactJob、INGEST_QUEUEはそれ以外を運ぶ。 */
+export type QueueMessage =
+	| RespondJob
+	| CompactJob
+	| IngestJob
+	| DeleteJob
+	| ImportJob;
 
 /** 応答の生成。会話の履歴を組み立ててLLMを呼び、Discordに返信する。 */
 export interface RespondJob {
@@ -15,6 +20,24 @@ export interface RespondJob {
 	 * 保存より先に応答の処理が動くことがあるので、ここで渡す。デプロイの前に入った仕事にはない
 	 */
 	members?: UserName[];
+}
+
+/**
+ * 会話の要約(要約を勧める案内の「今すぐ要約」ボタンと、右クリックメニューの「会話を要約」)。
+ * 押した人(選んだ人)のキーで要約し、保留にした応答を、結果に書き換える。
+ */
+export interface CompactJob {
+	kind: "compact";
+	/** Interactionのトークン。保留にした応答を書き換えるのに使う(15分で切れる) */
+	interactionToken: string;
+	/** 押した人(選んだ人)。この人の資格情報と設定を使う */
+	userId: string;
+	channelId: string;
+	guildId: string | null;
+	/** このメッセージまでの会話を要約する(Interactionに含まれていたもの) */
+	start: StoredMessageInput;
+	/** 案内のボタンから要約したときは、そのボタンを消すメッセージ */
+	buttonMessageId: string | null;
 }
 
 /** 受け取ったメッセージの保存とベクトル化。 */

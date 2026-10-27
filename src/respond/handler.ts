@@ -27,8 +27,8 @@ import { claimMessage, releaseMessage } from "../store/messages";
 import { searchSimilarMessages } from "../store/search";
 import {
 	type ConversationSummary,
+	claimCompactionNotice,
 	recordReplyUsage,
-	saveSummary,
 } from "../store/summaries";
 import {
 	getRegisteredProviders,
@@ -36,6 +36,7 @@ import {
 	loadCredential,
 	type UserSettings,
 } from "../store/users";
+import { compactButtonRow } from "./compact-button";
 import { toConversation } from "./conversation";
 import { replyEffort } from "./effort";
 import {
@@ -59,8 +60,9 @@ import {
 	conversationSize,
 	inputLimit,
 	KEEP_RECENT_MESSAGES,
+	priceIncreaseThreshold,
 	SUMMARY_THRESHOLD,
-	summaryRequest,
+	summarizeOlderPart,
 } from "./summary";
 import {
 	channelHistoryTool,
@@ -101,33 +103,19 @@ export async function handleRespondJob(
 
 async function respond(job: RespondJob, env: Env): Promise<void> {
 	const token = env.DISCORD_BOT_TOKEN;
-	const fetchMessage: MessageFetcher = (channelId, messageId) =>
-		getMessageOrNull(token, channelId, messageId);
-
 	// 話しかけたメッセージは、保存より先に応答の処理が動くことがあり、消されていないかも確かめたいので、Discordから読む
-	const trigger = await fetchMessage(job.channelId, job.messageId);
+	const trigger = await getMessageOrNull(token, job.channelId, job.messageId);
 	if (trigger === null) {
 		// 返答する前に消されたか、読む権限がない
 		log("trigger_unavailable", { userId: job.authorId });
 		return;
 	}
 	await startImport(env, job);
-	const history: HistoryDeps = {
-		db: env.DB,
+	const history = historyFor(env, {
 		guildId: job.guildId,
 		channelId: job.channelId,
-		fetchMessage,
-		listMessages: (channelId, options) =>
-			getChannelMessages(token, channelId, options),
-		searchMessages: (query, options) =>
-			searchSimilarMessages(
-				query,
-				{ ...options, channelId: job.channelId },
-				{ embed: workersAiEmbedder(env.AI), vectors: env.VECTORIZE },
-			),
-		ingest: (messages) => enqueueIngest(env, messages),
 		knownNames: job.members ?? [],
-	};
+	});
 
 	const stopTyping = startTyping(token, job.channelId);
 	try {
@@ -137,7 +125,12 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 			fromDiscord(trigger, job.guildId),
 			history,
 		);
-		const posted = await postReply(token, trigger, reply.text);
+		const posted = await postReply(
+			token,
+			trigger,
+			reply.text,
+			reply.offerCompaction,
+		);
 		if (reply.inputTokens !== null) {
 			await recordConversationSize(env, posted, reply.inputTokens);
 		}
@@ -146,10 +139,47 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 	}
 }
 
-/** 投稿する返答。AIの返答なら、会話全体を渡した入力のトークン数も(会話の量の記録に使う) */
+/**
+ * 過去のメッセージの読み先(保存したもの、Discord、検索)。
+ * knownNamesは、Gatewayで届いたメッセージで分かった、サーバーで見えている名前
+ */
+export function historyFor(
+	env: Env,
+	location: {
+		guildId: string | null;
+		channelId: string;
+		knownNames: HistoryDeps["knownNames"];
+	},
+): HistoryDeps {
+	const token = env.DISCORD_BOT_TOKEN;
+	const fetchMessage: MessageFetcher = (channelId, messageId) =>
+		getMessageOrNull(token, channelId, messageId);
+	return {
+		db: env.DB,
+		guildId: location.guildId,
+		channelId: location.channelId,
+		fetchMessage,
+		listMessages: (channelId, options) =>
+			getChannelMessages(token, channelId, options),
+		searchMessages: (query, options) =>
+			searchSimilarMessages(
+				query,
+				{ ...options, channelId: location.channelId },
+				{ embed: workersAiEmbedder(env.AI), vectors: env.VECTORIZE },
+			),
+		ingest: (messages) => enqueueIngest(env, messages),
+		knownNames: location.knownNames,
+	};
+}
+
+/**
+ * 投稿する返答。AIの返答なら、会話全体を渡した入力のトークン数も(会話の量の記録に使う)。
+ * offerCompactionなら、要約を勧める案内を添えたので、「今すぐ要約」ボタンを付ける
+ */
 interface ComposedReply {
 	text: string;
 	inputTokens: number | null;
+	offerCompaction: boolean;
 }
 
 /** 投稿する返答を作る。AIの返答のほか、登録方法の案内やエラーの理由のこともある */
@@ -167,7 +197,11 @@ async function composeReply(
 	const resolution = resolveModel(settings, providers);
 	if (!resolution.ok) {
 		log("setup_required", { userId, missing: resolution.missing });
-		return { text: setupGuidance(resolution), inputTokens: null };
+		return {
+			text: setupGuidance(resolution),
+			inputTokens: null,
+			offerCompaction: false,
+		};
 	}
 	const model = resolution.model;
 	const credential = await loadCredential(env, userId, model.provider);
@@ -176,6 +210,7 @@ async function composeReply(
 		return {
 			text: setupGuidance({ ok: false, missing: "credentials", label: "" }),
 			inputTokens: null,
+			offerCompaction: false,
 		};
 	}
 	const callModel = (request: ChatRequest) =>
@@ -200,43 +235,30 @@ async function composeReply(
 			size >=
 				(await inputLimit(settings, model, credential)) * SUMMARY_THRESHOLD
 		) {
-			const older = loaded.slice(0, -KEEP_RECENT_MESSAGES);
-			const result = await callModel(
-				summaryRequest({
-					modelId: model.modelId,
-					effort,
-					previous: summary?.summary ?? null,
-					messages: older,
-					botUserId,
-					names: await namesFor(older, history),
-				}),
-			);
-			summaryUsages.push(...result.requestUsages);
-			const text = result.text.trim();
-			const [first] = older;
-			const last = older.at(-1);
-			// 途中で打ち切られた要約は、大事なことが抜けているかもしれないので使わない
-			if (result.stopReason === "end" && text !== "" && first && last) {
-				summary = {
-					rootMessageId: summary?.rootMessageId ?? first.messageId,
-					coveredUntilMessageId: last.messageId,
-					summary: text,
-				};
-				await saveSummary(env.DB, {
-					...summary,
-					modelKey: model.modelId,
-					createdByUserId: userId,
-				});
+			const result = await summarizeOlderPart({
+				db: env.DB,
+				callModel,
+				modelId: model.modelId,
+				effort,
+				userId,
+				botUserId,
+				messages: loaded,
+				previous: summary,
+				names: await namesFor(loaded.slice(0, -KEEP_RECENT_MESSAGES), history),
+			});
+			summaryUsages.push(...result.usages);
+			if (result.summary !== null) {
+				summary = result.summary;
 				loaded = loaded.slice(-KEEP_RECENT_MESSAGES);
 			}
 			log("summarized", {
 				userId,
 				provider: model.provider,
 				model: model.modelId,
+				trigger: "auto",
 				conversationTokens: size,
-				messages: older.length,
-				saved: loaded.length === KEEP_RECENT_MESSAGES,
-				...sumUsage(result.requestUsages),
+				failure: result.failure,
+				...sumUsage(result.usages),
 			});
 		}
 		return await answer(loaded, summary, summaryUsages);
@@ -253,7 +275,11 @@ async function composeReply(
 			detail: error.detail,
 			durationMs: Date.now() - startedAt,
 		});
-		return { text: describeLlmError(error, model), inputTokens: null };
+		return {
+			text: describeLlmError(error, model),
+			inputTokens: null,
+			offerCompaction: false,
+		};
 	}
 
 	/** 会話(要約と、それより後の発言)を渡して、AIに答えてもらう */
@@ -316,6 +342,17 @@ async function composeReply(
 			toolCalls: result.toolCalls,
 			...result.usage,
 		});
+		// 料金が上がる境目を超えたら(1回の呼び出しごとの入力で見る)、その会話・その人・そのモデルで1回だけ、要約を勧める
+		const threshold = await priceIncreaseThreshold(settings, model);
+		const offerCompaction =
+			threshold !== null &&
+			result.requestUsages.some((usage) => usage.inputTokens >= threshold) &&
+			(await claimCompactionNotice(env.DB, {
+				rootMessageId:
+					summary?.rootMessageId ?? chain[0]?.messageId ?? trigger.messageId,
+				userId,
+				modelKey: model.modelId,
+			}));
 		return {
 			text: formatReply(result, {
 				// 本人が画像の読み取りをOFFにしているときは、注記しない
@@ -329,9 +366,11 @@ async function composeReply(
 							selectedCandidate(settings),
 						)
 					: null,
+				compaction: offerCompaction ? threshold : null,
 			}),
 			// 道具で何回かに分けて呼んだときは、最初の1回の分(後の回には、道具の結果が入るため)
 			inputTokens: result.requestUsages[0]?.inputTokens ?? null,
+			offerCompaction,
 		};
 	}
 }
@@ -365,15 +404,20 @@ async function postReply(
 	token: string,
 	trigger: APIMessage,
 	text: string,
+	offerCompaction: boolean,
 ): Promise<string[]> {
 	const posted: string[] = [];
 	let replyTo = trigger.id;
-	for (const [index, content] of splitMessage(text).entries()) {
+	const parts = splitMessage(text);
+	for (const [index, content] of parts.entries()) {
+		const last = index === parts.length - 1;
 		const message = await createMessage(token, trigger.channel_id, {
 			content,
 			message_reference: { message_id: replyTo, fail_if_not_exists: false },
 			// 返答に含まれるメンションでは通知しない。話しかけた人にだけ、最初の返信で通知する
 			allowed_mentions: { parse: [], replied_user: index === 0 },
+			// 要約を勧める案内は最後のメッセージの末尾にあるので、ボタンもそこに付ける
+			...(offerCompaction && last ? { components: [compactButtonRow()] } : {}),
 		});
 		posted.push(message.id);
 		replyTo = message.id;

@@ -1,6 +1,7 @@
 import type {
 	APIMessage,
 	RESTGetAPIGatewayBotResult,
+	RESTPatchAPIChannelMessageJSONBody,
 	RESTPatchAPIWebhookWithTokenMessageJSONBody,
 	RESTPostAPIChannelMessageJSONBody,
 	RESTPutAPIApplicationCommandsJSONBody,
@@ -141,6 +142,21 @@ export function createMessage(
 		"POST channel message",
 		"POST",
 		`/channels/${channelId}/messages`,
+		{ botToken, body },
+	);
+}
+
+/** チャンネルのメッセージを書き換える(Bot自身のメッセージだけ) */
+export async function editChannelMessage(
+	botToken: string,
+	channelId: string,
+	messageId: string,
+	body: RESTPatchAPIChannelMessageJSONBody,
+): Promise<void> {
+	await discordRequest(
+		"PATCH channel message",
+		"PATCH",
+		`/channels/${channelId}/messages/${messageId}`,
 		{ botToken, body },
 	);
 }

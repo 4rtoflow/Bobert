@@ -100,6 +100,7 @@ export const TextInputStyle = {
 
 export const ApplicationCommandType = {
 	ChatInput: 1 as DiscordApplicationCommandType.ChatInput,
+	Message: 3 as DiscordApplicationCommandType.Message,
 } as const;
 
 export const InteractionContextType = {

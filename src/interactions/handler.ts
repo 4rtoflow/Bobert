@@ -1,13 +1,20 @@
 import type {
 	APIInteraction,
 	APIInteractionResponse,
+	APIMessageApplicationCommandInteraction,
 } from "discord-api-types/v10";
 import {
+	ApplicationCommandType,
 	ComponentType,
 	InteractionResponseType,
 	InteractionType,
 	MessageFlags,
 } from "../discord/constants";
+import {
+	COMPACT_BUTTON_ID,
+	COMPACT_COMMAND_NAME,
+} from "../respond/compact-button";
+import { compactFromButton, compactFromMenu } from "./compact";
 import { confirmDelete, DELETE_CONFIRM_ID, deleteCommand } from "./delete";
 import { EFFORT_SELECT_ID, effortCommand, selectEffort } from "./effort";
 import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
@@ -30,11 +37,11 @@ import {
 import { verifyDiscordRequest } from "./verify";
 
 /**
- * Discord Interactions(スラッシュコマンド、ボタン、モーダル)の受け口。
+ * Discord Interactions(スラッシュコマンド、右クリックメニュー、ボタン、モーダル)の受け口。
  * 最初の応答は3秒以内に返す必要がある。時間のかかる処理は、保留の応答を返してから続ける。
  *
  * これから実装すること(仕様: docs/spec/behavior.md「スラッシュコマンド」):
- * 右クリックメニューの「Bobertに聞く」と、会話の要約
+ * 右クリックメニューの「Bobertに聞く」
  */
 export async function handleInteraction(
 	request: Request,
@@ -67,6 +74,16 @@ async function route(
 	}
 	switch (interaction.type) {
 		case InteractionType.ApplicationCommand:
+			if (
+				interaction.data.type === ApplicationCommandType.Message &&
+				interaction.data.name === COMPACT_COMMAND_NAME
+			) {
+				return compactFromMenu(
+					interaction as APIMessageApplicationCommandInteraction,
+					env,
+					user.id,
+				);
+			}
 			if (interaction.data.name === "setup") {
 				return setupCommand(env, origin, user);
 			}
@@ -93,6 +110,9 @@ async function route(
 			}
 			break;
 		case InteractionType.MessageComponent:
+			if (interaction.data.custom_id === COMPACT_BUTTON_ID) {
+				return compactFromButton(interaction, env, user.id);
+			}
 			if (interaction.data.custom_id === SETUP_ANTHROPIC_ID) {
 				return anthropicKeyModal();
 			}
