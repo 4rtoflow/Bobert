@@ -1,17 +1,18 @@
 # LLM利用コスト
 
-最終更新: 2026-10-25
+最終更新: 2026-10-28
 
 ## 方針
 
 - LLMの利用料は、使ったユーザー本人が自分の分を負担する。Botの運営者は負担しない。
 - 例外として、会話の検索(RAG)のための埋め込みの費用は運営者が負担する。Cloudflare Workers AIを使い、少額で済む(bge-m3なら100万トークンあたり約$0.012)。
-- 各ユーザーは自分の資格情報をBotに登録する。Botはそれを登録したユーザー本人のリクエストにだけ使い、他人の資格情報で応答することはない。
+- もう1つの例外として、ユーザーは、サーバーの全員が使えるクレジットを寄付できる。寄付された額までは、寄付した人が、ほかの人の分を負担する(「クレジットの寄付」を参照)。
+- 各ユーザーは自分の資格情報をBotに登録する。Botはそれを、登録したユーザー本人のリクエストに使う。寄付した人の資格情報は、寄付された額まで、同じサーバーのほかの人のリクエストにも使う。それ以外で、他人の資格情報で応答することはない。
 - 資格情報を登録していないユーザーのために、運営者の資格情報でLLMを呼び出すことはしない。
 - サブスクリプションの利用枠(Claude Pro/Max、ChatGPT、Google AI Pro/Ultra、GitHub Copilotなど)は使わない。
-- 例: AさんとBotの会話にBさんが返信した場合、その返信への応答にはBさんの資格情報を使う。
-- 会話の履歴や検索結果に他の人の発言が含まれる場合も、そのまま文脈として、返信した人のプロバイダに送る。個別の告知はしない。上の例では、Aさんの発言もBさんのプロバイダに送られる。
-- Bot側では使用量の上限を設けない。使いすぎの防止は各ユーザーがプロバイダ側で行う(Anthropicはワークスペースごとに支出上限を設定できる)。
+- 例: AさんとBotの会話にBさんが返信した場合、その返信への応答にはBさんの資格情報を使う(サーバーに寄付があれば、寄付した人の資格情報を先に使う)。
+- 会話の履歴や検索結果に他の人の発言が含まれる場合も、そのまま文脈として、返信した人のプロバイダに送る。寄付で答えるときは、寄付した人のプロバイダに送る。個別の告知はしない。上の例では、Aさんの発言もBさんのプロバイダに送られる。
+- Bot側では使用量の上限を設けない。使いすぎの防止は各ユーザーがプロバイダ側で行う(Anthropicはワークスペースごとに支出上限を設定できる)。寄付だけは、寄付された額を上限として、Botが使った額を数える。
 
 ## 対応する資格情報
 
@@ -38,7 +39,7 @@
   - 暗号文は持ち主(ユーザーIDとプロバイダ)に結び付ける。ほかの人の行に移しても復号できない。
 - **暗号鍵の入れ替え:** 暗号化したデータに鍵の番号を付けて、鍵を入れ替えられるようにする。
 - **バックアップ:** D1標準の復元機能(Time Travel)に任せる。過去30日の任意の時点に戻せて、追加料金はかからない。
-- **削除:** 本人がスラッシュコマンド(`/delete`)で、いつでも削除できる。確認のボタンを押すと、キーと設定を消す。自動では削除しない。キーや設定は個人に紐づくので、Botがサーバーから外されても残す。OpenRouterで発行されたキーは、OpenRouterのサイトでも削除できることを案内する。
+- **削除:** 本人がスラッシュコマンド(`/delete`)で、いつでも削除できる。確認のボタンを押すと、キーと設定を消す。キーがなくなるので、寄付も消す。自動では削除しない。キーや設定は個人に紐づくので、Botがサーバーから外されても残す。OpenRouterで発行されたキーは、OpenRouterのサイトでも削除できることを案内する。
 
 ## ユーザーごとの設定
 
@@ -92,6 +93,34 @@
   - Anthropicのキーで直接使う場合: 1,000回あたり$10。
 - **一覧の管理:** 候補の一覧は設定ファイルで管理し、定期的に見直す。モデルの入れ替わりが速いため。
 
+## クレジットの寄付
+
+ユーザーは、指定した額のクレジットを、サーバーの全員が使えるように寄付できる。寄付された分は、寄付した人のキーで答える。
+- **寄付のしかた:** `/donate`で、寄付、残りの確認、寄付をやめる操作をする(画面と文言は[Botの振る舞い](behavior.md)を参照)。寄付はサーバーごと。
+  - 1回の寄付は$1〜$100で、小数点以下2桁まで。打ち間違いで大きな額を寄付しないよう、上限を付ける。何度でも足せる。
+  - 寄付するには、キーの登録が必要。
+  - 寄付をやめると、残りは使われない。やめた後に寄付し直したら、その額から数え直す。
+- **使う順番:** 寄付があれば、キーのない人も使える。キーを登録している人の返答にも、先に寄付を使う。寄付が複数あれば、古い順に使う。
+  - 寄付した本人の返答には、本人の寄付は使わない。同じキーなので、寄付が減るだけのため。
+- **モデル:** 使う人の設定のモデルで答える。キーのない人は、既定のモデル(Claude Haiku 5.5)で答える。
+  - 寄付した人のキーで呼べないモデルには使わず、本人のキーで答える。例えば、Anthropicのキーだけの人の寄付では、GPTやGeminiは呼べない。
+  - 「その他」で入力したモデルには使わない。費用が分からないことがあり、単価に上限もないため。
+- **対象:** メンションへの返答、「Bobertに聞く」、要約(自動と今すぐ)。
+- **差し引き:** APIを呼ぶたびに、その分の費用を寄付から差し引く。
+  - 費用は、利用量の表示と同じ計算で出す。それでも分からない回(単価を取得できなかったときなど)は、候補の一覧の単価で見積もる。
+  - 費用は呼んだ後に分かるので、使い切る直前の返答の分だけ、寄付した額を少し超えることがある。同時にいくつか返答していると、超える分が増える。超えた分は、次に寄付したときの額から引かない。
+- **チャンネル:** 寄付した人がサーバーにいれば、どのチャンネルでも使う。寄付した人が見られないチャンネルの会話も、寄付した人のアカウントに送られる。
+  - 寄付を使う前に、寄付した人がサーバーにいるかをDiscordに問い合わせる。抜けていたら(アカウントを消していたら)、その寄付を終える。確かめられなかったとき(Discordの障害など)は、その返答では使わない。
+- **キーが使えないとき:** 寄付した人のキーが無効か残高不足なら、その寄付を1時間止めて、次の寄付か本人のキーで答え直す。1時間たつか、寄付した人が寄付を足すと、また使う。
+- **上限:** 1人あたりの上限は付けない。寄付した人は、残りを見て、いつでも寄付をやめられる。
+- **削除:** `/delete`でキーを消すと、その人の寄付も消す。
+- **規約(2026-10-28時点):** AnthropicもOpenRouterも、クレジットを他人に譲ることや売ることを禁じている。Anthropicは「クレジットは、アカウントの持ち主だけが使える」としている。
+  - 寄付では、クレジットは寄付した人のアカウントに残り、Bobertは寄付した人のキーで呼ぶ。このため、譲渡ではなく、持ち主の利用と考える。
+  - ただし、ほかの人への返答に使うことを、はっきり認めた記述はない。
+  - キーでの利用は、すべてキーの持ち主の責任になる(OpenRouterの規約3.2)。
+- **会話の扱い:** 寄付で答えた会話は、寄付した人のプロバイダに送られる。OpenRouterで入力と出力の記録(Input & Output Logging)をONにした人が寄付すると、寄付で答えた会話を、その人が読める。
+  - 寄付するときの説明に、このことと、費用が概算であることを書く。
+
 ## 採用しない方式と理由
 
 | 方式                                    | 理由                                                                                                                                                                                           |
@@ -109,8 +138,8 @@
 
 ## 参考(2026-10時点の調査)
 
-- Anthropic: [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance) / [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview) / [API credits for Max and Team plans](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers) / [Commercial Terms](https://www.anthropic.com/legal/commercial-terms)
-- OpenRouter: [OAuth PKCE](https://openrouter.ai/docs/guides/overview/auth/oauth) / [モデル一覧API](https://openrouter.ai/api/v1/models) / [プロバイダの選択(data_collection)](https://openrouter.ai/docs/guides/routing/provider-selection) / [Web検索](https://openrouter.ai/docs/guides/features/server-tools/web-search) / [推論(reasoning)の指定](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens)
+- Anthropic: [Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance) / [Agent SDK overview](https://code.claude.com/docs/en/agent-sdk/overview) / [API credits for Max and Team plans](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers) / [Commercial Terms](https://www.anthropic.com/legal/commercial-terms) / [クレジットの規約](https://www.anthropic.com/legal/credit-terms)
+- OpenRouter: [OAuth PKCE](https://openrouter.ai/docs/guides/overview/auth/oauth) / [モデル一覧API](https://openrouter.ai/api/v1/models) / [プロバイダの選択(data_collection)](https://openrouter.ai/docs/guides/routing/provider-selection) / [Web検索](https://openrouter.ai/docs/guides/features/server-tools/web-search) / [推論(reasoning)の指定](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens) / [規約](https://openrouter.ai/terms) / [Input & Output Logging](https://openrouter.ai/docs/guides/features/input-output-logging)
 - OpenAI: [Sign in with ChatGPT: Request a client ID](https://developers.openai.com/siwc/request-client-id) / [ChatGPT plan usage](https://developers.openai.com/siwc/token-sharing-open-source) / [Services Agreement](https://openai.com/policies/services-agreement/)
 - Google: [Gemini Code Assist release notes](https://docs.cloud.google.com/gemini/docs/codeassist/release-notes) / [Antigravity terms](https://antigravity.google/terms) / [Google APIs Terms of Service](https://developers.google.com/terms) / [Gemini API Additional Terms](https://ai.google.dev/gemini-api/terms)
 - GitHub: [Copilot SDK: GitHub OAuth](https://docs.github.com/en/copilot/how-tos/copilot-sdk/set-up-copilot-sdk/github-oauth)

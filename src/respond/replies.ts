@@ -1,6 +1,7 @@
 import type { ChatResult, LlmError } from "../llm/types";
 import type { Provider } from "../store/users";
 import type { ModelResolution, ResolvedModel } from "./model";
+import { formatCost } from "./usage";
 import { sourcesNote } from "./web-search";
 
 /** キーを登録していない人などへの、登録方法の案内(仕様: docs/spec/architecture.md「決定事項」) */
@@ -15,6 +16,18 @@ export function setupGuidance(
 		case "openrouter":
 			return `モデル「${resolution.label}」を使うには、OpenRouterとの連携が必要です。\`/setup\` から連携してください。`;
 	}
+}
+
+/**
+ * キーのない人への案内の先頭に足す文(仕様: docs/spec/llm-cost.md「クレジットの寄付」)。
+ * 寄付されたことがあるサーバーで、いま使える寄付がないときに足す
+ */
+export const DONATIONS_UNAVAILABLE =
+	"このサーバーに寄付されたクレジットは、いまは使えません。";
+
+/** 寄付で答えた返答の末尾に添える行。残りは、サーバー全体の寄付の残り(USD) */
+export function donationNote(remainingUsd: number): string {
+	return `-# 寄付されたクレジットで答えました(残り 約$${formatCost(remainingUsd)})`;
 }
 
 /** AIに内容を断られたときの返答 */
@@ -70,6 +83,8 @@ export interface ReplyNotes {
 	webSearchSkipped: boolean;
 	/** 利用量の表示の行。表示しないならnull */
 	usage: string | null;
+	/** 寄付で答えたときの行。寄付で答えなかったらnull */
+	donation?: string | null;
 	/**
 	 * 要約を勧める案内を添えるなら、料金が上がる境目(入力のトークン数)。添えないならnull。
 	 * 案内には「今すぐ要約」ボタンを付ける(投稿するときに付ける)
@@ -80,10 +95,18 @@ export interface ReplyNotes {
 /** AIの返答に、出典と必要な注記を添えて、投稿する本文にする */
 export function formatReply(
 	result: ChatResult,
-	{ imagesSkipped, webSearchSkipped, usage, compaction = null }: ReplyNotes,
+	{
+		imagesSkipped,
+		webSearchSkipped,
+		usage,
+		donation = null,
+		compaction = null,
+	}: ReplyNotes,
 ): string {
+	// 利用量の行の下に、寄付で答えたことを書く
+	const costLines = [usage, donation].filter((line) => line !== null);
 	if (result.stopReason === "refusal") {
-		return [REFUSAL_TEXT, ...(usage === null ? [] : [usage])].join("\n");
+		return [REFUSAL_TEXT, ...costLines].join("\n");
 	}
 	const notes: string[] = [];
 	if (result.stopReason === "max_tokens") {
@@ -99,9 +122,7 @@ export function formatReply(
 	if (webSearchSkipped) {
 		notes.push("-# このモデルはWeb検索を使えません");
 	}
-	if (usage !== null) {
-		notes.push(usage);
-	}
+	notes.push(...costLines);
 	if (compaction !== null) {
 		notes.push(compactionNote(compaction));
 	}

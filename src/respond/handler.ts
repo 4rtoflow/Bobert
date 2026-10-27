@@ -33,9 +33,7 @@ import {
 } from "../store/summaries";
 import {
 	type Credential,
-	getRegisteredProviders,
 	getUserSettings,
-	loadCredential,
 	type UserSettings,
 } from "../store/users";
 import { compactButtonRow } from "./compact-button";
@@ -51,12 +49,19 @@ import {
 } from "./history";
 import {
 	type ResolvedModel,
-	resolveModel,
 	selectedCandidate,
 	usesCustomModel,
 } from "./model";
+import {
+	chargeDonationFor,
+	type PaidModel,
+	type Payer,
+	paidNote,
+	pauseIfDonorKeyFailed,
+	resolvePaidModel,
+} from "./payer";
 import { buildSystemPrompt } from "./prompt";
-import { describeLlmError, formatReply, setupGuidance } from "./replies";
+import { describeLlmError, formatReply } from "./replies";
 import { splitMessage } from "./split";
 import {
 	conversationSize,
@@ -189,71 +194,107 @@ export interface ReplyModel {
 	userId: string;
 	settings: UserSettings;
 	model: ResolvedModel;
+	/** 費用を払う人のキー(寄付で答えるときは、寄付した人のキー) */
 	credential: Credential;
+	/** 費用を払う人(本人か、サーバーに寄付した人) */
+	payer: Payer;
 	/** 設定していなければ既定の段階、モデルが選べなければいちばん近い段階 */
 	effort: string | null;
+	/** AIを呼ぶ。寄付で答えるときは、呼んだ分の費用を寄付から差し引く */
 	callModel: (request: ChatRequest) => Promise<ChatResult>;
 }
 
 /**
- * 本人の設定とモデルで、返答を作る(メンションへの返答と、「Bobertに聞く」で共通)。
- * キーを登録していなければ登録方法の案内を、AIの呼び出しに失敗したら理由を返す
+ * 本人の設定とモデルで、返答を作る(メンションへの返答、「Bobertに聞く」、要約で共通)。
+ * サーバーに寄付があれば、寄付した人のキーで答える(仕様: docs/spec/llm-cost.md「クレジットの寄付」)。
+ * キーを登録していなければ登録方法の案内を、AIの呼び出しに失敗したら理由を、notAnswerで返す。
+ * 寄付した人のキーが無効か残高不足なら、その寄付を止めて、次の寄付か本人のキーで答え直す
  */
-export async function withReplyModel(
+export async function withReplyModel<T>(
 	env: Env,
-	userId: string,
-	compose: (context: ReplyModel) => Promise<ComposedReply>,
-): Promise<ComposedReply> {
-	const [providers, settings] = await Promise.all([
-		getRegisteredProviders(env.DB, userId),
-		getUserSettings(env.DB, userId),
-	]);
-	const resolution = resolveModel(settings, providers);
-	if (!resolution.ok) {
-		log("setup_required", { userId, missing: resolution.missing });
-		return notAnswer(setupGuidance(resolution));
-	}
-	const model = resolution.model;
-	const credential = await loadCredential(env, userId, model.provider);
-	if (credential === null) {
-		// 直前に /delete された
-		return notAnswer(
-			setupGuidance({ ok: false, missing: "credentials", label: "" }),
-		);
-	}
-	const context: ReplyModel = {
-		userId,
-		settings,
-		model,
-		credential,
-		effort: await replyEffort(env, userId, settings, model),
-		callModel: (request) =>
-			model.provider === "anthropic"
-				? chatWithAnthropic(credential, request)
-				: chatWithOpenRouter(credential.apiKey, request),
-	};
-	const startedAt = Date.now();
-	try {
-		return await compose(context);
-	} catch (error) {
-		if (!(error instanceof LlmError)) {
-			throw error;
-		}
-		log("llm_failed", {
+	requester: { userId: string; guildId: string | null },
+	compose: (context: ReplyModel) => Promise<T>,
+	notAnswer: (text: string) => T,
+): Promise<T> {
+	const { userId, guildId } = requester;
+	const settings = await getUserSettings(env.DB, userId);
+	// キーが使えなかった寄付は、止めたうえで、この返答ではもう使わない(答え直しが必ず終わるように)
+	const failedDonors = new Set<string>();
+	for (;;) {
+		const paid = await resolvePaidModel(env, {
 			userId,
-			provider: model.provider,
-			model: model.modelId,
-			kind: error.kind,
-			status: error.status,
-			detail: error.detail,
-			durationMs: Date.now() - startedAt,
+			guildId,
+			settings,
+			checkMembership: true,
+			skipDonors: failedDonors,
 		});
-		return notAnswer(describeLlmError(error, model));
+		if (!paid.ok) {
+			log("setup_required", { userId, missing: paid.missing });
+			return notAnswer(paid.guidance);
+		}
+		const { model, payer } = paid;
+		const context: ReplyModel = {
+			userId,
+			settings,
+			model,
+			credential: paid.credential,
+			payer,
+			effort: await replyEffort(env, userId, settings, model),
+			callModel: paidCall(env, paid, settings),
+		};
+		const startedAt = Date.now();
+		try {
+			return await compose(context);
+		} catch (error) {
+			if (!(error instanceof LlmError)) {
+				throw error;
+			}
+			log("llm_failed", {
+				userId,
+				provider: model.provider,
+				model: model.modelId,
+				payer: payer.kind,
+				kind: error.kind,
+				status: error.status,
+				detail: error.detail,
+				durationMs: Date.now() - startedAt,
+			});
+			const pausedDonor = await pauseIfDonorKeyFailed(env, payer, error);
+			if (pausedDonor !== null) {
+				failedDonors.add(pausedDonor);
+				continue;
+			}
+			return notAnswer(describeLlmError(error, model));
+		}
 	}
 }
 
+/** 費用を払う人のキーでAIを呼ぶ関数。寄付で答えるときは、呼ぶたびに、その分の費用を寄付から差し引く */
+function paidCall(
+	env: Env,
+	{ payer, model, credential }: PaidModel,
+	settings: UserSettings,
+): (request: ChatRequest) => Promise<ChatResult> {
+	return async (request) => {
+		const result =
+			model.provider === "anthropic"
+				? await chatWithAnthropic(credential, request)
+				: await chatWithOpenRouter(credential.apiKey, request);
+		if (payer.kind === "donation") {
+			await chargeDonationFor(
+				env,
+				payer,
+				result.requestUsages,
+				model,
+				settings,
+			);
+		}
+		return result;
+	};
+}
+
 /** AIの答えではない返答(登録方法の案内や、エラーの理由) */
-function notAnswer(text: string): ComposedReply {
+export function notAnswer(text: string): ComposedReply {
 	return { text, inputTokens: null, offerCompaction: false };
 }
 
@@ -264,56 +305,63 @@ async function composeReply(
 	trigger: StoredMessageInput,
 	history: HistoryDeps,
 ): Promise<ComposedReply> {
-	return withReplyModel(env, job.authorId, async (context) => {
-		const botUserId = env.DISCORD_APPLICATION_ID;
-		const read = await readConversation(trigger, history);
-		let summary = read.summary;
-		let messages = read.messages;
-		// 会話が入力の上限の8割を超えていたら、新しい20件を残して、それより前を要約する
-		const summaryUsages: TokenUsage[] = [];
-		const size = await conversationSize(env.DB, messages, botUserId);
-		if (
-			size !== null &&
-			messages.length > KEEP_RECENT_MESSAGES &&
-			size >=
-				(await inputLimit(
-					context.settings,
-					context.model,
-					context.credential,
-				)) *
-					SUMMARY_THRESHOLD
-		) {
-			const result = await summarizeOlderPart({
-				db: env.DB,
-				callModel: context.callModel,
-				modelId: context.model.modelId,
-				effort: context.effort,
-				userId: context.userId,
-				botUserId,
-				messages,
-				previous: summary,
-				names: await namesFor(
-					messages.slice(0, -KEEP_RECENT_MESSAGES),
-					history,
-				),
-			});
-			summaryUsages.push(...result.usages);
-			if (result.summary !== null) {
-				summary = result.summary;
-				messages = messages.slice(-KEEP_RECENT_MESSAGES);
-			}
-			log("summarized", {
-				userId: context.userId,
-				provider: context.model.provider,
-				model: context.model.modelId,
-				trigger: "auto",
-				conversationTokens: size,
-				failure: result.failure,
-				...sumUsage(result.usages),
-			});
+	return withReplyModel(
+		env,
+		{ userId: job.authorId, guildId: job.guildId },
+		(context) => composeAnswer(context, env, trigger, history),
+		notAnswer,
+	);
+}
+
+/** 会話を読み、長ければ古い部分を要約してから、AIに答えてもらう */
+async function composeAnswer(
+	context: ReplyModel,
+	env: Env,
+	trigger: StoredMessageInput,
+	history: HistoryDeps,
+): Promise<ComposedReply> {
+	const botUserId = env.DISCORD_APPLICATION_ID;
+	const read = await readConversation(trigger, history);
+	let summary = read.summary;
+	let messages = read.messages;
+	// 会話が入力の上限の8割を超えていたら、新しい20件を残して、それより前を要約する
+	const summaryUsages: TokenUsage[] = [];
+	const size = await conversationSize(env.DB, messages, botUserId);
+	if (
+		size !== null &&
+		messages.length > KEEP_RECENT_MESSAGES &&
+		size >=
+			(await inputLimit(context.settings, context.model, context.credential)) *
+				SUMMARY_THRESHOLD
+	) {
+		const result = await summarizeOlderPart({
+			db: env.DB,
+			callModel: context.callModel,
+			modelId: context.model.modelId,
+			effort: context.effort,
+			userId: context.userId,
+			botUserId,
+			messages,
+			previous: summary,
+			names: await namesFor(messages.slice(0, -KEEP_RECENT_MESSAGES), history),
+		});
+		summaryUsages.push(...result.usages);
+		if (result.summary !== null) {
+			summary = result.summary;
+			messages = messages.slice(-KEEP_RECENT_MESSAGES);
 		}
-		return answer(context, env, history, { messages, summary, summaryUsages });
-	});
+		log("summarized", {
+			userId: context.userId,
+			provider: context.model.provider,
+			model: context.model.modelId,
+			payer: context.payer.kind,
+			trigger: "auto",
+			conversationTokens: size,
+			failure: result.failure,
+			...sumUsage(result.usages),
+		});
+	}
+	return answer(context, env, history, { messages, summary, summaryUsages });
 }
 
 /**
@@ -381,6 +429,7 @@ export async function answer(
 		userId,
 		provider: model.provider,
 		model: model.modelId,
+		payer: context.payer.kind,
 		messages: chain.length,
 		summarized: summary !== null,
 		stopReason: result.stopReason,
@@ -413,6 +462,8 @@ export async function answer(
 						selectedCandidate(settings),
 					)
 				: null,
+			// 寄付で答えたら、毎回書く(費用は、呼んだときに寄付から差し引いてある)
+			donation: await paidNote(env, context.payer),
 			compaction: offerCompaction ? threshold : null,
 		}),
 		// 道具で何回かに分けて呼んだときは、最初の1回の分(後の回には、道具の結果が入るため)

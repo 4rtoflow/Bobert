@@ -8,6 +8,7 @@ import {
 	answer,
 	type ComposedReply,
 	historyFor,
+	notAnswer,
 	recordConversationSize,
 	startImport,
 	withReplyModel,
@@ -66,12 +67,16 @@ async function explain(job: ExplainJob, env: Env): Promise<void> {
 		createdAt: job.requestedAt,
 		editedAt: null,
 	};
-	const reply = await withReplyModel(env, job.userId, (context) =>
-		answer(context, env, history, {
-			messages: [job.target, request],
-			summary: null,
-			summaryUsages: [],
-		}),
+	const reply = await withReplyModel(
+		env,
+		{ userId: job.userId, guildId: job.guildId },
+		(context) =>
+			answer(context, env, history, {
+				messages: [job.target, request],
+				summary: null,
+				summaryUsages: [],
+			}),
+		notAnswer,
 	);
 	const posted = await postExplanation(env, job, reply);
 	const [first] = posted;
