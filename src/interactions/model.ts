@@ -357,6 +357,7 @@ async function checkCustomModel(
 					status: "found",
 					efforts: openRouterEfforts(info),
 					webSearch: info.supportsTools,
+					maxInputTokens: info.contextLength,
 				};
 	} catch (error) {
 		return { status: "unavailable", detail: describeError(error) };

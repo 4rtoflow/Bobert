@@ -5,6 +5,7 @@ import {
 	fromDiscord,
 	type HistoryDeps,
 	namesFor,
+	readConversation,
 	readReplyChain,
 	refreshImageUrls,
 } from "../src/respond/history";
@@ -78,7 +79,10 @@ describe("返信のつながりを読む", () => {
 		await saveMessages(env.DB, [stored(first), stored(second)]);
 		const { history, fetched, ingested } = fakeHistory([]);
 
-		const chain = await readReplyChain(stored(trigger), history);
+		const { messages: chain } = await readConversation(
+			stored(trigger),
+			history,
+		);
 
 		expect(chain.map((message) => message.messageId)).toEqual([
 			"1001",
@@ -97,7 +101,10 @@ describe("返信のつながりを読む", () => {
 		await saveMessages(env.DB, [stored(first), stored(third)]);
 		const { history, fetched, ingested } = fakeHistory([second]);
 
-		const chain = await readReplyChain(stored(trigger), history);
+		const { messages: chain } = await readConversation(
+			stored(trigger),
+			history,
+		);
 
 		expect(chain.map((message) => message.messageId)).toEqual([
 			"1101",
@@ -127,7 +134,9 @@ describe("返信のつながりを読む", () => {
 		});
 		const { history } = fakeHistory([]);
 
-		const [first] = await readReplyChain(stored(trigger), history);
+		const {
+			messages: [first],
+		} = await readConversation(stored(trigger), history);
 
 		expect(first).toMatchObject({
 			messageId: "1051",
@@ -142,7 +151,10 @@ describe("返信のつながりを読む", () => {
 		const trigger = discordReply("1202", ALICE, "これは?", deleted);
 		const { history, ingested } = fakeHistory([]);
 
-		const chain = await readReplyChain(stored(trigger), history);
+		const { messages: chain } = await readConversation(
+			stored(trigger),
+			history,
+		);
 
 		expect(chain.map((message) => message.messageId)).toEqual(["1202"]);
 		expect(ingested).toEqual([]);

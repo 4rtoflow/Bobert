@@ -9,7 +9,12 @@ import {
 import { chatWithAnthropic } from "../llm/anthropic";
 import { findOpenRouterModel } from "../llm/model-info";
 import { chatWithOpenRouter } from "../llm/openrouter";
-import { type ChatRequest, LlmError } from "../llm/types";
+import {
+	type ChatRequest,
+	LlmError,
+	sumUsage,
+	type TokenUsage,
+} from "../llm/types";
 import { logEvent } from "../log";
 import { startChannelImport } from "../queue/import";
 import type {
@@ -20,6 +25,11 @@ import type {
 import { workersAiEmbedder } from "../store/embedding";
 import { claimMessage, releaseMessage } from "../store/messages";
 import { searchSimilarMessages } from "../store/search";
+import {
+	type ConversationSummary,
+	recordReplyUsage,
+	saveSummary,
+} from "../store/summaries";
 import {
 	getRegisteredProviders,
 	getUserSettings,
@@ -33,7 +43,7 @@ import {
 	type HistoryDeps,
 	type MessageFetcher,
 	namesFor,
-	readReplyChain,
+	readConversation,
 	refreshImageUrls,
 } from "./history";
 import {
@@ -45,6 +55,13 @@ import {
 import { buildSystemPrompt } from "./prompt";
 import { describeLlmError, formatReply, setupGuidance } from "./replies";
 import { splitMessage } from "./split";
+import {
+	conversationSize,
+	inputLimit,
+	KEEP_RECENT_MESSAGES,
+	SUMMARY_THRESHOLD,
+	summaryRequest,
+} from "./summary";
 import {
 	channelHistoryTool,
 	replyChainTool,
@@ -120,10 +137,19 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 			fromDiscord(trigger, job.guildId),
 			history,
 		);
-		await postReply(token, trigger, reply);
+		const posted = await postReply(token, trigger, reply.text);
+		if (reply.inputTokens !== null) {
+			await recordConversationSize(env, posted, reply.inputTokens);
+		}
 	} finally {
 		stopTyping();
 	}
+}
+
+/** 投稿する返答。AIの返答なら、会話全体を渡した入力のトークン数も(会話の量の記録に使う) */
+interface ComposedReply {
+	text: string;
+	inputTokens: number | null;
 }
 
 /** 投稿する返答を作る。AIの返答のほか、登録方法の案内やエラーの理由のこともある */
@@ -132,7 +158,7 @@ async function composeReply(
 	env: Env,
 	trigger: StoredMessageInput,
 	history: HistoryDeps,
-): Promise<string> {
+): Promise<ComposedReply> {
 	const userId = job.authorId;
 	const [providers, settings] = await Promise.all([
 		getRegisteredProviders(env.DB, userId),
@@ -141,88 +167,79 @@ async function composeReply(
 	const resolution = resolveModel(settings, providers);
 	if (!resolution.ok) {
 		log("setup_required", { userId, missing: resolution.missing });
-		return setupGuidance(resolution);
+		return { text: setupGuidance(resolution), inputTokens: null };
 	}
 	const model = resolution.model;
 	const credential = await loadCredential(env, userId, model.provider);
 	if (credential === null) {
 		// 直前に /delete された
-		return setupGuidance({ ok: false, missing: "credentials", label: "" });
+		return {
+			text: setupGuidance({ ok: false, missing: "credentials", label: "" }),
+			inputTokens: null,
+		};
 	}
+	const callModel = (request: ChatRequest) =>
+		model.provider === "anthropic"
+			? chatWithAnthropic(credential, request)
+			: chatWithOpenRouter(credential.apiKey, request);
+	// 設定していなければ既定の段階を、モデルが選べなければいちばん近い段階を送る
+	const effort = await replyEffort(env, userId, settings, model);
 
 	const botUserId = env.DISCORD_APPLICATION_ID;
-	const loaded = await readReplyChain(trigger, history);
-	// 添付がなければ、画像を読めるかは確かめない(「その他」のモデルでは、モデル情報の取得が要るため)
-	const hasAttachments = loaded.some(
-		(message) => message.attachments.length > 0,
-	);
-	const includeImages =
-		hasAttachments &&
-		settings.featImageInput &&
-		(await readsImages(model, settings));
-	// 保存した添付のURLは期限付きなので、AIに渡す画像は、期限が近ければ取り直す
-	const chain = includeImages
-		? await refreshImageUrls(loaded, history, botUserId)
-		: loaded;
-	const conversation = toConversation(chain, {
-		botUserId,
-		includeImages,
-		names: await namesFor(chain, history),
-	});
-	const webSearch = settings.featWebSearch
-		? await webSearchAvailable(env, userId, settings, model)
-		: false;
-	// AIが必要なときに、チャンネルの履歴を読んだり探したりできるようにする。
-	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする。道具の定義は、毎回同じ並びにする(キャッシュのため)
-	const root = chain[0];
-	const tools = (await toolsAvailable(settings, model))
-		? [
-				channelHistoryTool(history, botUserId),
-				searchMessagesTool(history, botUserId),
-				...(startsWithReply(root)
-					? [replyChainTool(root, history, botUserId)]
-					: []),
-			]
-		: [];
-	const request: ChatRequest = {
-		model: model.modelId,
-		system: buildSystemPrompt(settings.customPrompt),
-		messages: conversation.messages,
-		// 設定していなければ既定の段階を、モデルが選べなければいちばん近い段階を送る
-		effort: await replyEffort(env, userId, settings, model),
-		webSearch: webSearch === true,
-		tools,
-		maxTokens: MAX_OUTPUT_TOKENS,
-	};
-
 	const startedAt = Date.now();
 	try {
-		const result =
-			model.provider === "anthropic"
-				? await chatWithAnthropic(credential, request)
-				: await chatWithOpenRouter(credential.apiKey, request);
-		log("responded", {
-			userId,
-			provider: model.provider,
-			model: model.modelId,
-			messages: chain.length,
-			stopReason: result.stopReason,
-			durationMs: Date.now() - startedAt,
-			toolCalls: result.toolCalls,
-			...result.usage,
-		});
-		return formatReply(result, {
-			// 本人が画像の読み取りをOFFにしているときは、注記しない
-			imagesSkipped: conversation.imagesSkipped && settings.featImageInput,
-			webSearchSkipped: settings.featWebSearch && webSearch === false,
-			usage: settings.featUsageDisplay
-				? await usageNote(
-						result.requestUsages,
-						model,
-						selectedCandidate(settings),
-					)
-				: null,
-		});
+		const read = await readConversation(trigger, history);
+		let summary = read.summary;
+		let loaded = read.messages;
+		// 会話が入力の上限の8割を超えていたら、新しい20件を残して、それより前を要約する
+		const summaryUsages: TokenUsage[] = [];
+		const size = await conversationSize(env.DB, loaded, botUserId);
+		if (
+			size !== null &&
+			loaded.length > KEEP_RECENT_MESSAGES &&
+			size >=
+				(await inputLimit(settings, model, credential)) * SUMMARY_THRESHOLD
+		) {
+			const older = loaded.slice(0, -KEEP_RECENT_MESSAGES);
+			const result = await callModel(
+				summaryRequest({
+					modelId: model.modelId,
+					effort,
+					previous: summary?.summary ?? null,
+					messages: older,
+					botUserId,
+					names: await namesFor(older, history),
+				}),
+			);
+			summaryUsages.push(...result.requestUsages);
+			const text = result.text.trim();
+			const [first] = older;
+			const last = older.at(-1);
+			// 途中で打ち切られた要約は、大事なことが抜けているかもしれないので使わない
+			if (result.stopReason === "end" && text !== "" && first && last) {
+				summary = {
+					rootMessageId: summary?.rootMessageId ?? first.messageId,
+					coveredUntilMessageId: last.messageId,
+					summary: text,
+				};
+				await saveSummary(env.DB, {
+					...summary,
+					modelKey: model.modelId,
+					createdByUserId: userId,
+				});
+				loaded = loaded.slice(-KEEP_RECENT_MESSAGES);
+			}
+			log("summarized", {
+				userId,
+				provider: model.provider,
+				model: model.modelId,
+				conversationTokens: size,
+				messages: older.length,
+				saved: loaded.length === KEEP_RECENT_MESSAGES,
+				...sumUsage(result.requestUsages),
+			});
+		}
+		return await answer(loaded, summary, summaryUsages);
 	} catch (error) {
 		if (!(error instanceof LlmError)) {
 			throw error;
@@ -236,7 +253,86 @@ async function composeReply(
 			detail: error.detail,
 			durationMs: Date.now() - startedAt,
 		});
-		return describeLlmError(error, model);
+		return { text: describeLlmError(error, model), inputTokens: null };
+	}
+
+	/** 会話(要約と、それより後の発言)を渡して、AIに答えてもらう */
+	async function answer(
+		loaded: StoredMessageInput[],
+		summary: ConversationSummary | null,
+		summaryUsages: TokenUsage[],
+	): Promise<ComposedReply> {
+		// 添付がなければ、画像を読めるかは確かめない(「その他」のモデルでは、モデル情報の取得が要るため)
+		const hasAttachments = loaded.some(
+			(message) => message.attachments.length > 0,
+		);
+		const includeImages =
+			hasAttachments &&
+			settings.featImageInput &&
+			(await readsImages(model, settings));
+		// 保存した添付のURLは期限付きなので、AIに渡す画像は、期限が近ければ取り直す
+		const chain = includeImages
+			? await refreshImageUrls(loaded, history, botUserId)
+			: loaded;
+		const conversation = toConversation(chain, {
+			botUserId,
+			includeImages,
+			names: await namesFor(chain, history),
+			summary: summary?.summary ?? null,
+		});
+		const webSearch = settings.featWebSearch
+			? await webSearchAvailable(env, userId, settings, model)
+			: false;
+		// AIが必要なときに、チャンネルの履歴を読んだり探したりできるようにする。
+		// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
+		// 道具の定義は、毎回同じ並びにする(キャッシュのため)
+		const root = chain[0];
+		const tools = (await toolsAvailable(settings, model))
+			? [
+					channelHistoryTool(history, botUserId),
+					searchMessagesTool(history, botUserId),
+					...(summary === null && startsWithReply(root)
+						? [replyChainTool(root, history, botUserId)]
+						: []),
+				]
+			: [];
+		const result = await callModel({
+			model: model.modelId,
+			system: buildSystemPrompt(settings.customPrompt),
+			messages: conversation.messages,
+			effort,
+			webSearch: webSearch === true,
+			tools,
+			maxTokens: MAX_OUTPUT_TOKENS,
+		});
+		log("responded", {
+			userId,
+			provider: model.provider,
+			model: model.modelId,
+			messages: chain.length,
+			summarized: summary !== null,
+			stopReason: result.stopReason,
+			durationMs: Date.now() - startedAt,
+			toolCalls: result.toolCalls,
+			...result.usage,
+		});
+		return {
+			text: formatReply(result, {
+				// 本人が画像の読み取りをOFFにしているときは、注記しない
+				imagesSkipped: conversation.imagesSkipped && settings.featImageInput,
+				webSearchSkipped: settings.featWebSearch && webSearch === false,
+				// 要約を作ったときは、その費用も含める
+				usage: settings.featUsageDisplay
+					? await usageNote(
+							[...summaryUsages, ...result.requestUsages],
+							model,
+							selectedCandidate(settings),
+						)
+					: null,
+			}),
+			// 道具で何回かに分けて呼んだときは、最初の1回の分(後の回には、道具の結果が入るため)
+			inputTokens: result.requestUsages[0]?.inputTokens ?? null,
+		};
 	}
 }
 
@@ -269,16 +365,37 @@ async function postReply(
 	token: string,
 	trigger: APIMessage,
 	text: string,
-): Promise<void> {
+): Promise<string[]> {
+	const posted: string[] = [];
 	let replyTo = trigger.id;
 	for (const [index, content] of splitMessage(text).entries()) {
-		const posted = await createMessage(token, trigger.channel_id, {
+		const message = await createMessage(token, trigger.channel_id, {
 			content,
 			message_reference: { message_id: replyTo, fail_if_not_exists: false },
 			// 返答に含まれるメンションでは通知しない。話しかけた人にだけ、最初の返信で通知する
 			allowed_mentions: { parse: [], replied_user: index === 0 },
 		});
-		replyTo = posted.id;
+		posted.push(message.id);
+		replyTo = message.id;
+	}
+	return posted;
+}
+
+/**
+ * 返答のときに会話全体を渡した入力のトークン数を、投稿したメッセージごとに記録する(会話の量の記録)。
+ * 投稿した後なので、記録できなくても失敗にはしない(やり直すと、同じ返答をもう一度投稿してしまうため)
+ */
+async function recordConversationSize(
+	env: Env,
+	messageIds: readonly string[],
+	inputTokens: number,
+): Promise<void> {
+	try {
+		await recordReplyUsage(env.DB, messageIds, inputTokens);
+	} catch (error) {
+		log("record_usage_failed", {
+			error: error instanceof Error ? error.message : "unknown",
+		});
 	}
 }
 

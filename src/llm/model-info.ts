@@ -3,7 +3,8 @@
  * - OpenRouterのモデル一覧: 「その他」で入力されたモデルの存在の確認、画像を読めるかの判断、選べる思考の深さ、
  *   Web検索を使えるかの判断、利用量の表示の費用(Anthropicで直接呼ぶClaude)に使う。
  *   一覧は大きい(数百件、約800KB)
- * - Anthropicのモデル情報: 「その他」で入力したClaudeで選べる思考の深さと、Web検索を使えるかに使う
+ * - Anthropicのモデル情報: 「その他」で入力したClaudeで選べる思考の深さと、Web検索を使えるか、入力の上限に使う
+ * 入力の上限は、長い会話の自動要約に使う
  */
 import { type AnthropicCredential, checkAnthropicModel } from "./anthropic";
 
@@ -23,6 +24,8 @@ export interface OpenRouterModelInfo {
 	supportsTools: boolean;
 	/** 単価。分からなければnull */
 	pricing: ModelPricing | null;
+	/** 入力と出力を合わせた、扱えるトークン数の上限。分からなければnull */
+	contextLength: number | null;
 }
 
 /** 「その他」で入力したClaudeについて、Anthropicのモデル情報から分かること */
@@ -31,6 +34,8 @@ export interface ClaudeModelInfo {
 	efforts: string[];
 	/** Web検索を使えるか */
 	webSearch: boolean;
+	/** 入力の上限(トークン)。分からなければnull */
+	maxInputTokens: number | null;
 }
 
 /** モデルの単価 */
@@ -70,6 +75,7 @@ interface ModelsResponse {
 		reasoning?: { supported_efforts?: unknown };
 		supported_parameters?: unknown;
 		pricing?: PricingResponse;
+		context_length?: unknown;
 	}[];
 }
 
@@ -111,7 +117,11 @@ export async function findClaudeModel(
 	if (check.status !== "found") {
 		throw new Error(`Anthropic model check failed: ${check.status}`);
 	}
-	const info = { efforts: check.efforts, webSearch: check.webSearch };
+	const info = {
+		efforts: check.efforts,
+		webSearch: check.webSearch,
+		maxInputTokens: check.maxInputTokens,
+	};
 	claudeModelCache.set(modelId, {
 		info,
 		expiresAt: Date.now() + CACHE_TTL_MS,
@@ -158,6 +168,8 @@ async function fetchModels(): Promise<Map<string, OpenRouterModelInfo>> {
 				: [],
 			supportsTools: Array.isArray(parameters) && parameters.includes("tools"),
 			pricing: model.pricing ? parsePricing(model.pricing) : null,
+			contextLength:
+				typeof model.context_length === "number" ? model.context_length : null,
 		});
 	}
 	return models;

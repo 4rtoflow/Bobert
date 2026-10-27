@@ -9,10 +9,16 @@ import {
 	type TimelineRange,
 } from "../store/messages";
 import type { SearchOptions } from "../store/search";
-import { MAX_CHAIN_LENGTH, selectImages } from "./conversation";
+import {
+	type ConversationSummary,
+	findSummaryEndingAt,
+} from "../store/summaries";
+import { selectImages } from "./conversation";
 
 /** 添付のURLの期限まで、これより短ければ取り直す。AIが画像を読みに行くまでの余裕 */
 const URL_REFRESH_MARGIN_MS = 10 * 60 * 1000;
+/** 返信のつながりをたどるときに、1回でDiscordから読むメッセージの数の上限。保存したもの(D1)から読む分には上限はない */
+const MAX_DISCORD_FETCHES = 100;
 
 /** Discordからメッセージを1件読む。消えているか、読めなければnull */
 export type MessageFetcher = (
@@ -52,26 +58,84 @@ export function fromDiscord(
 	return toStoredMessage({ ...message, guild_id: guildId ?? undefined });
 }
 
+/** 会話(返信のつながり) */
+export interface Conversation {
+	/** 発言(古い順)。要約があれば、要約した位置より後の発言だけ */
+	messages: StoredMessageInput[];
+	/** 会話の古い部分を要約してあれば、その要約 */
+	summary: ConversationSummary | null;
+}
+
+/**
+ * 会話(返信のつながり)を、話しかけたメッセージから古い方へたどって読む
+ * (仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」「長い会話の自動要約」)。
+ * 件数の上限はない。要約した位置に行き当たったら、そこで止め、それより前は要約で渡す。
+ */
+export async function readConversation(
+	start: StoredMessageInput,
+	deps: HistoryDeps,
+): Promise<Conversation> {
+	const { chain, summary } = await walkReplyChain(start, deps, {
+		limit: Number.MAX_SAFE_INTEGER,
+		stopAtSummary: true,
+	});
+	// 要約した位置(要約の終わりのメッセージ)と、それより前は、要約に含まれている
+	return { messages: summary ? chain.slice(1) : chain, summary };
+}
+
 /**
  * 返信のつながりを、startから古い方へたどって読み、古い順に並べて返す(startを含めて、最大limit件)。
- * 保存したメッセージ(D1)から読む。保存していないもの(Botが動き出す前のものや、保存の処理がまだ済んでいないもの)は、
- * Discordから読み、保存にも回す。返信先が消えていたら、そこで止める。
+ * 要約した位置でも止めない(返信先を読む道具で使う)
  */
 export async function readReplyChain(
 	start: StoredMessageInput,
 	deps: HistoryDeps,
-	limit = MAX_CHAIN_LENGTH,
+	limit: number,
 ): Promise<StoredMessageInput[]> {
+	const { chain } = await walkReplyChain(start, deps, {
+		limit,
+		stopAtSummary: false,
+	});
+	return chain;
+}
+
+/**
+ * 返信のつながりをたどる。保存したメッセージ(D1)から読む。
+ * 保存していないもの(Botが動き出す前のものや、保存の処理がまだ済んでいないもの)は、Discordから読み、保存にも回す。
+ * Discordから読むのは、1回で100件まで。返信先が消えていたら、そこで止める。
+ * stopAtSummaryなら、要約した位置で止め、その要約を返す。
+ */
+async function walkReplyChain(
+	start: StoredMessageInput,
+	deps: HistoryDeps,
+	options: { limit: number; stopAtSummary: boolean },
+): Promise<{
+	chain: StoredMessageInput[];
+	summary: ConversationSummary | null;
+}> {
 	const chain = [start];
 	const fetched: StoredMessageInput[] = [];
+	let summary: ConversationSummary | null = null;
 	let nextId = start.replyToId;
-	while (nextId !== null && chain.length < limit) {
-		const stored = await loadStoredChain(deps.db, nextId, limit - chain.length);
-		const last = stored.at(-1);
+	while (nextId !== null && chain.length < options.limit) {
+		const stored = await loadStoredChain(
+			deps.db,
+			nextId,
+			options.limit - chain.length,
+			options.stopAtSummary,
+		);
+		const last = stored.messages.at(-1);
 		if (last) {
-			chain.push(...stored);
+			chain.push(...stored.messages);
+			if (stored.reachedSummary) {
+				summary = await findSummaryEndingAt(deps.db, last.messageId);
+				break;
+			}
 			nextId = last.replyToId;
 			continue;
+		}
+		if (fetched.length >= MAX_DISCORD_FETCHES) {
+			break;
 		}
 		const message = await deps.fetchMessage(deps.channelId, nextId);
 		if (message === null) {
@@ -80,12 +144,18 @@ export async function readReplyChain(
 		const converted = fromDiscord(message, deps.guildId);
 		chain.push(converted);
 		fetched.push(converted);
+		if (options.stopAtSummary) {
+			summary = await findSummaryEndingAt(deps.db, converted.messageId);
+			if (summary) {
+				break;
+			}
+		}
 		nextId = converted.replyToId;
 	}
 	if (fetched.length > 0) {
 		await deps.ingest(fetched);
 	}
-	return chain.reverse();
+	return { chain: chain.reverse(), summary };
 }
 
 /**

@@ -6,12 +6,6 @@ import type {
 } from "../queue/messages";
 import { formatJst } from "./time";
 
-/**
- * 返信のつながりをさかのぼる上限。
- * 長すぎる会話への備え。長い会話の要約ができるまでは、上限を設ける。
- */
-export const MAX_CHAIN_LENGTH = 100;
-
 /** AIに渡せる画像の形式 */
 const IMAGE_TYPES = new Set([
 	"image/jpeg",
@@ -30,6 +24,8 @@ export interface ConversationOptions {
 	includeImages: boolean;
 	/** サーバーで見えている名前(人ごとに、最後に分かったもの)。なければ、メッセージに付いている名前を使う */
 	names: ReadonlyMap<string, string>;
+	/** 会話の古い部分の要約。あれば、会話の最初に渡す */
+	summary?: string | null;
 }
 
 export interface Conversation {
@@ -43,6 +39,7 @@ export interface Conversation {
  * - Bobertの発言はAIの発言、それ以外は「[時刻] 名前: 本文」の形の人の発言にする。時刻は日本時間で、
  *   話しかけた発言の時刻が今の日時にあたる。発言の形は毎回同じなので、キャッシュは崩れない
  * - 画像は、新しいものから上限の枚数まで渡す。渡さない添付は、ファイル名だけを書き添える
+ * - 古い部分の要約があれば、会話の最初に、人の発言として渡す
  */
 export function toConversation(
 	chain: readonly StoredMessageInput[],
@@ -69,6 +66,17 @@ export function toConversation(
 			parts: [
 				{ type: "text", text: humanLine(message, options.names, notes) },
 				...passed.map((image): ChatPart => ({ type: "image", url: image.url })),
+			],
+		});
+	}
+	if (options.summary) {
+		messages.unshift({
+			role: "user",
+			parts: [
+				{
+					type: "text",
+					text: `(これより前の会話の要約です)\n${options.summary}`,
+				},
 			],
 		});
 	}
