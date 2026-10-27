@@ -1,6 +1,7 @@
 import type { APIMessage } from "discord-api-types/v10";
 import { shouldStore, toStoredMessage } from "../gateway/messages";
 import type { StoredMessageInput, UserName } from "../queue/messages";
+import { findExplainTarget } from "../store/explain";
 import { getChannelImport } from "../store/imports";
 import {
 	loadChannelMessages,
@@ -151,6 +152,31 @@ async function walkReplyChain(
 			}
 		}
 		nextId = converted.replyToId;
+	}
+	// 返信のつながりの始まりが「Bobertに聞く」の返答なら、説明の対象のメッセージを、会話の最初に入れる。
+	// Interactionへの返答は「返信」ではないので、返信のつながりからはたどれないため。説明の対象の返信先までは、たどらない
+	const oldest = chain.at(-1);
+	if (
+		summary === null &&
+		nextId === null &&
+		oldest !== undefined &&
+		chain.length < options.limit
+	) {
+		const targetId = await findExplainTarget(deps.db, oldest.messageId);
+		if (targetId !== null) {
+			const stored = await loadStoredChain(deps.db, targetId, 1);
+			let target = stored.messages[0] ?? null;
+			if (target === null) {
+				const message = await deps.fetchMessage(deps.channelId, targetId);
+				target = message === null ? null : fromDiscord(message, deps.guildId);
+				if (target !== null) {
+					fetched.push(target);
+				}
+			}
+			if (target !== null) {
+				chain.push(target);
+			}
+		}
 	}
 	if (fetched.length > 0) {
 		await deps.ingest(fetched);

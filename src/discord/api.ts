@@ -171,13 +171,13 @@ export async function triggerTyping(
 	});
 }
 
-/** Interactionの最初の応答(保留にしたもの)を書き換える。15分以内なら書き換えられる */
-export async function editOriginalInteractionResponse(
+/** Interactionの最初の応答(保留にしたもの)を書き換え、書き換えたメッセージを返す。15分以内なら書き換えられる */
+export function editOriginalInteractionResponse(
 	applicationId: string,
 	interactionToken: string,
 	body: RESTPatchAPIWebhookWithTokenMessageJSONBody,
-): Promise<void> {
-	await discordRequest(
+): Promise<APIMessage> {
+	return discordRequest(
 		"PATCH original interaction response",
 		"PATCH",
 		`/webhooks/${applicationId}/${interactionToken}/messages/@original`,

@@ -1,6 +1,7 @@
-/** Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとCompactJob、INGEST_QUEUEはそれ以外を運ぶ。 */
+/** Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとCompactJob、INGEST_QUEUEはそれ以外を運ぶ。 */
 export type QueueMessage =
 	| RespondJob
+	| ExplainJob
 	| CompactJob
 	| IngestJob
 	| DeleteJob
@@ -20,6 +21,28 @@ export interface RespondJob {
 	 * 保存より先に応答の処理が動くことがあるので、ここで渡す。デプロイの前に入った仕事にはない
 	 */
 	members?: UserName[];
+}
+
+/**
+ * 右クリックメニューの「Bobertに聞く」。選んだ人のキーと設定で、メッセージの意味をAIに説明してもらい、
+ * 保留にした応答(チャンネルに見える)を書き換えて投稿する。
+ */
+export interface ExplainJob {
+	kind: "explain";
+	/** InteractionのID。同じInteractionで2回投稿しないために使う */
+	interactionId: string;
+	/** Interactionのトークン。保留にした応答を書き換えるのに使う(15分で切れる) */
+	interactionToken: string;
+	/** 選んだ人。この人の資格情報と設定を使う */
+	userId: string;
+	/** 選んだ人の、サーバーで見えている名前 */
+	userName: string;
+	channelId: string;
+	guildId: string | null;
+	/** 説明するメッセージ(Interactionに含まれていたもの) */
+	target: StoredMessageInput;
+	/** 説明を頼まれた時刻(UNIX時間のミリ秒)。今の日時として、AIに伝える */
+	requestedAt: number;
 }
 
 /**
