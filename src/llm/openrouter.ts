@@ -1,12 +1,16 @@
-import { MAX_WEB_SEARCHES } from "../config/models";
+import { MAX_TOOL_CALLS, MAX_WEB_SEARCHES } from "../config/models";
+import { runChatTool, TOOL_LIMIT_REACHED } from "./tools";
 import {
 	type ChatMessage,
 	type ChatRequest,
 	type ChatResult,
+	type ChatTool,
 	describeError,
 	LlmError,
 	type LlmErrorKind,
 	type Source,
+	sumUsage,
+	type TokenUsage,
 } from "./types";
 
 const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
@@ -26,6 +30,8 @@ interface OpenRouterResponse {
 	choices?: {
 		message?: {
 			content?: string | null;
+			/** AIが呼んだBobertの道具 */
+			tool_calls?: ToolCall[];
 			/** Web検索の結果から引用したページ */
 			annotations?: {
 				type?: string;
@@ -52,41 +58,129 @@ interface OpenRouterResponse {
 	error?: OpenRouterError;
 }
 
+/** 1回の返答で、AIとやり取りする回数の上限。道具の結果を返すときに数える */
+const MAX_ROUNDS = 10;
+
+/** OpenRouterに送る会話の1件 */
+type OpenRouterMessage =
+	| ReturnType<typeof toOpenRouterMessage>
+	| { role: "system"; content: string }
+	| { role: "assistant"; content: string | null; tool_calls: ToolCall[] }
+	| { role: "tool"; tool_call_id: string; content: string };
+
+/** AIが呼んだ道具 */
+interface ToolCall {
+	id: string;
+	type?: string;
+	function?: { name?: string; arguments?: string };
+}
+
 /**
  * ユーザーのOpenRouterのキーで、モデルを呼ぶ。
  * 会話には他の人の発言も含まれるので、データを保存・学習しない提供元だけを使う
  * (仕様: docs/spec/llm-cost.md「対応する資格情報」)。
+ * Bobertの道具をAIが呼んだら、実行して結果を返し、続きを頼む。呼び出しが上限に達したら、道具を使わずに答えさせる。
  */
 export async function chatWithOpenRouter(
 	apiKey: string,
 	request: ChatRequest,
 ): Promise<ChatResult> {
-	const body = {
-		model: request.model,
-		max_tokens: request.maxTokens,
-		messages: [
-			{ role: "system", content: request.system.join("\n\n") },
-			...request.messages.map(toOpenRouterMessage),
-		],
-		provider: { data_collection: "deny" },
-		// Claudeは指定したときだけキャッシュが効く。ほかの多くのモデルは自動で効く
-		...(request.model.startsWith("anthropic/")
-			? { cache_control: { type: "ephemeral" } }
-			: {}),
-		...(request.effort !== null
-			? { reasoning: { effort: request.effort } }
-			: {}),
-		// Web検索はOpenRouterのサーバーで動く。1回の返答で使える回数に上限を設ける
+	const messages: OpenRouterMessage[] = [
+		{ role: "system", content: request.system.join("\n\n") },
+		...request.messages.map(toOpenRouterMessage),
+	];
+	// 道具の定義は、毎回同じ並びにする(キャッシュのため)。Bobertの道具、Web検索の順
+	const tools = [
+		...request.tools.map(toOpenRouterTool),
+		// Web検索はOpenRouterのサーバーで動く
 		...(request.webSearch
-			? {
-					tools: [
-						{ type: "openrouter:web_search", parameters: { max_results: 5 } },
-					],
-					max_tool_calls: MAX_WEB_SEARCHES,
-				}
-			: {}),
-	};
+			? [{ type: "openrouter:web_search", parameters: { max_results: 5 } }]
+			: []),
+	];
+	const responses: OpenRouterResponse[] = [];
+	/** 最後の答えが始まる応答。道具の結果を返したら、その次の応答から数え直す */
+	let answerFrom = 0;
+	let toolCalls = 0;
+	while (responses.length < MAX_ROUNDS) {
+		const data = await post(apiKey, {
+			model: request.model,
+			max_tokens: request.maxTokens,
+			messages,
+			provider: { data_collection: "deny" },
+			// Claudeは指定したときだけキャッシュが効く。ほかの多くのモデルは自動で効く
+			...(request.model.startsWith("anthropic/")
+				? { cache_control: { type: "ephemeral" } }
+				: {}),
+			...(request.effort !== null
+				? { reasoning: { effort: request.effort } }
+				: {}),
+			...(tools.length > 0 ? { tools } : {}),
+			// 1回の返答で、Web検索を使える回数に上限を設ける
+			...(request.webSearch ? { max_tool_calls: MAX_WEB_SEARCHES } : {}),
+			...(request.tools.length > 0 && toolCalls >= MAX_TOOL_CALLS
+				? { tool_choice: "none" }
+				: {}),
+		});
+		responses.push(data);
+		const choice = data.choices?.[0];
+		const calls = choice?.message?.tool_calls ?? [];
+		if (choice?.finish_reason !== "tool_calls" || calls.length === 0) {
+			break;
+		}
+		messages.push({
+			role: "assistant",
+			content: choice.message?.content ?? null,
+			tool_calls: calls,
+		});
+		for (const call of calls) {
+			const outcome =
+				toolCalls < MAX_TOOL_CALLS
+					? await runChatTool(
+							request.tools,
+							call.function?.name ?? "",
+							parseArguments(call.function?.arguments),
+						)
+					: TOOL_LIMIT_REACHED;
+			toolCalls++;
+			messages.push({
+				role: "tool",
+				tool_call_id: call.id,
+				content: outcome.content,
+			});
+		}
+		answerFrom = responses.length;
+	}
 
+	const finishReason = responses.at(-1)?.choices?.[0]?.finish_reason;
+	const requestUsages = responses.map((data) => usageOf(data.usage));
+	return {
+		// 道具を呼ぶ前の前置き(「調べます」など)は、答えに入れない
+		text: responses
+			.slice(answerFrom)
+			.map((data) => data.choices?.[0]?.message?.content ?? "")
+			.join(""),
+		stopReason:
+			finishReason === "length"
+				? "max_tokens"
+				: finishReason === "content_filter"
+					? "refusal"
+					: "end",
+		usage: sumUsage(requestUsages),
+		requestUsages,
+		sources: sourcesOf(
+			responses.flatMap(
+				(data) => data.choices?.[0]?.message?.annotations ?? [],
+			),
+		),
+		toolCalls,
+	};
+}
+
+/** 1回分を送る。失敗は、種類に分けて例外にする */
+async function post(
+	apiKey: string,
+	body: unknown,
+): Promise<OpenRouterResponse> {
 	let response: Response;
 	try {
 		response = await fetch(`${OPENROUTER_API_BASE}/chat/completions`, {
@@ -120,37 +214,50 @@ export async function chatWithOpenRouter(
 			`OpenRouter error ${status}`,
 		);
 	}
-	const choice = data?.choices?.[0];
-	if (!choice) {
+	if (!data?.choices?.[0]) {
 		throw new LlmError(
 			"unknown",
 			response.status,
 			"OpenRouter returned no choices",
 		);
 	}
+	return data;
+}
 
+/** 使ったトークン数と費用 */
+function usageOf(usage: OpenRouterResponse["usage"]): TokenUsage {
 	return {
-		text: choice.message?.content ?? "",
-		stopReason:
-			choice.finish_reason === "length"
-				? "max_tokens"
-				: choice.finish_reason === "content_filter"
-					? "refusal"
-					: "end",
-		usage: {
-			inputTokens: data?.usage?.prompt_tokens ?? 0,
-			outputTokens: data?.usage?.completion_tokens ?? 0,
-			cacheReadTokens: data?.usage?.prompt_tokens_details?.cached_tokens ?? 0,
-			cacheWriteTokens:
-				data?.usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
-			webSearchRequests:
-				data?.usage?.server_tool_use?.web_search_requests ??
-				data?.usage?.web_search_requests ??
-				0,
-			costUsd: typeof data?.usage?.cost === "number" ? data.usage.cost : null,
-		},
-		sources: sourcesOf(choice.message?.annotations ?? []),
+		inputTokens: usage?.prompt_tokens ?? 0,
+		outputTokens: usage?.completion_tokens ?? 0,
+		cacheReadTokens: usage?.prompt_tokens_details?.cached_tokens ?? 0,
+		cacheWriteTokens: usage?.prompt_tokens_details?.cache_write_tokens ?? 0,
+		webSearchRequests:
+			usage?.server_tool_use?.web_search_requests ??
+			usage?.web_search_requests ??
+			0,
+		costUsd: typeof usage?.cost === "number" ? usage.cost : null,
 	};
+}
+
+/** Bobertの道具を、OpenRouter(OpenAIと同じ形)の道具にする */
+function toOpenRouterTool(tool: ChatTool) {
+	return {
+		type: "function",
+		function: {
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.inputSchema,
+		},
+	};
+}
+
+/** 道具への入力(JSONの文字列)を読む。読めなければ、入力なしにする */
+function parseArguments(text: string | undefined): unknown {
+	try {
+		return text ? JSON.parse(text) : {};
+	} catch {
+		return {};
+	}
 }
 
 /** Web検索の結果から引用したページ(出典)。同じURLは1つにまとめる */

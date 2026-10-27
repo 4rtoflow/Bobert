@@ -603,4 +603,84 @@ describe("メンションと返信への応答", () => {
 			"こんにちは!\n-# このモデルはWeb検索を使えません",
 		);
 	});
+
+	it("会話の最初のメッセージが返信なら、返信先を読む道具を渡し、AIが呼んだら返信先を読む", async () => {
+		const user = { ...ALICE, id: "126" };
+		await saveCredential(env, user.id, "openrouter", {
+			apiKey: "sk-or-test",
+			workspaceId: null,
+		});
+		// 返信先が消えているので、返信のつながりはこのメッセージだけになる
+		const deleted = discordMessage("5139", BOB, "消されたメッセージ");
+		const trigger = discordReply(
+			"5140",
+			user,
+			`<@${BOT.id}> これは?`,
+			deleted,
+			{
+				mentions: [BOT],
+				referenced_message: null,
+			},
+		);
+		let round = 0;
+		const calls = mockApis([trigger], () =>
+			round++ === 0
+				? Response.json({
+						choices: [
+							{
+								message: {
+									content: null,
+									tool_calls: [
+										{
+											id: "call_1",
+											type: "function",
+											function: { name: "read_reply_chain", arguments: "{}" },
+										},
+									],
+								},
+								finish_reason: "tool_calls",
+							},
+						],
+					})
+				: openRouterChat("返信先は読めなかったよ。"),
+		);
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const requests = calls
+			.filter((call) => call.url.pathname === "/api/v1/chat/completions")
+			.map((call) => call.body as { tools?: unknown[]; messages: unknown[] });
+		expect(requests[0]?.tools).toEqual([
+			expect.objectContaining({
+				type: "function",
+				function: expect.objectContaining({ name: "read_reply_chain" }),
+			}),
+		]);
+		expect(requests[1]?.messages.at(-1)).toEqual({
+			role: "tool",
+			tool_call_id: "call_1",
+			content:
+				"返信先のメッセージを読めませんでした。消されたか、読む権限がありません。",
+		});
+		expect(posted(calls)[0]?.content).toBe("返信先は読めなかったよ。");
+	});
+
+	it("会話の最初のメッセージが返信でなければ、道具を渡さない", async () => {
+		const user = { ...ALICE, id: "127" };
+		await saveCredential(env, user.id, "openrouter", {
+			apiKey: "sk-or-test",
+			workspaceId: null,
+		});
+		const trigger = discordMessage("5150", user, `<@${BOT.id}> こんにちは`, {
+			mentions: [BOT],
+		});
+		const calls = mockApis([trigger], () => openRouterChat("こんにちは!"));
+
+		await handleRespondJob(respondJob(trigger), env);
+
+		const request = calls.find(
+			(call) => call.url.pathname === "/api/v1/chat/completions",
+		);
+		expect(request?.body).not.toHaveProperty("tools");
+	});
 });
