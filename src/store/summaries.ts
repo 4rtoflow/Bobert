@@ -107,3 +107,21 @@ export async function loadReplyUsage(
 	}
 	return usage;
 }
+
+/**
+ * 要約を勧める案内を出したことを記録する。その会話・その人・そのモデルで、すでに出していればfalse
+ * (仕様: docs/spec/architecture.md「長い会話の自動要約」の、単価が上がるモデルでの案内)
+ */
+export async function claimCompactionNotice(
+	db: D1Database,
+	notice: { rootMessageId: string; userId: string; modelKey: string },
+	now = Date.now(),
+): Promise<boolean> {
+	const result = await db
+		.prepare(
+			"INSERT OR IGNORE INTO compaction_notices (root_message_id, user_id, model_key, notified_at) VALUES (?, ?, ?, ?)",
+		)
+		.bind(notice.rootMessageId, notice.userId, notice.modelKey, now)
+		.run();
+	return result.meta.changes === 1;
+}

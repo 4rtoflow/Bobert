@@ -1,10 +1,12 @@
 import { getChannelMessages } from "../discord/api";
 import { logEvent } from "../log";
+import { handleCompactJob } from "../respond/compact";
 import { handleRespondJob } from "../respond/handler";
 import { workersAiEmbedder } from "../store/embedding";
 import { IMPORT_PAGE_SIZE, importChannelPage } from "./import";
 import { deleteMessages, type IngestDeps, ingestMessages } from "./ingest";
 import type {
+	CompactJob,
 	DeleteJob,
 	ImportJob,
 	IngestJob,
@@ -29,6 +31,7 @@ export async function handleQueueBatch(
 	};
 	await processBatch(batch.messages, {
 		respond: (job) => handleRespondJob(job, env),
+		compact: (job) => handleCompactJob(job, env),
 		ingest: (messages) => ingestMessages(messages, deps),
 		delete: (jobs) =>
 			deleteMessages(
@@ -55,12 +58,13 @@ export async function handleQueueBatch(
 /** 仕事の種類ごとの処理 */
 export interface JobHandlers {
 	respond: (job: RespondJob) => Promise<void>;
+	compact: (job: CompactJob) => Promise<void>;
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
 	delete: (jobs: DeleteJob[]) => Promise<void>;
 	import: (job: ImportJob) => Promise<void>;
 }
 
-/** 仕事を種類ごとに分けて処理する。応答と過去ログの取り込みは1件ずつ、保存と削除はまとめて */
+/** 仕事を種類ごとに分けて処理する。応答と要約と過去ログの取り込みは1件ずつ、保存と削除はまとめて */
 export async function processBatch(
 	messages: readonly Message<QueueMessage>[],
 	handlers: JobHandlers,
@@ -68,6 +72,10 @@ export async function processBatch(
 	const respond = messages.filter(
 		(message): message is Message<RespondJob> =>
 			message.body.kind === "respond",
+	);
+	const compact = messages.filter(
+		(message): message is Message<CompactJob> =>
+			message.body.kind === "compact",
 	);
 	const ingest = messages.filter(
 		(message): message is Message<IngestJob> => message.body.kind === "ingest",
@@ -83,6 +91,13 @@ export async function processBatch(
 		await settle([message], async (jobs) => {
 			for (const job of jobs) {
 				await handlers.respond(job);
+			}
+		});
+	}
+	for (const message of compact) {
+		await settle([message], async (jobs) => {
+			for (const job of jobs) {
+				await handlers.compact(job);
 			}
 		});
 	}

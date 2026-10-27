@@ -76,11 +76,14 @@ export function guildInteraction(
 }
 
 /** Interactionを送り、応答と、裏で続けた処理が終わるのを待つ */
-export async function sendInteraction(payload: unknown) {
+export async function sendInteraction(
+	payload: unknown,
+	environment: Env = env,
+) {
 	const ctx = createExecutionContext();
 	const response = await handleInteraction(
 		await signedInteractionRequest(payload),
-		env,
+		environment,
 		ctx,
 	);
 	await waitOnExecutionContext(ctx);
@@ -240,7 +243,11 @@ export type StreamBlock =
 /** AnthropicのAPIの、ストリーミングの応答(SSE)。blocksは返答の中身 */
 export function anthropicStreamOf(
 	blocks: StreamBlock[],
-	options: { stopReason?: string; webSearches?: number } = {},
+	options: {
+		stopReason?: string;
+		webSearches?: number;
+		inputTokens?: number;
+	} = {},
 ): Response {
 	const events: [string, unknown][] = [
 		[
@@ -255,7 +262,7 @@ export function anthropicStreamOf(
 					content: [],
 					stop_reason: null,
 					stop_sequence: null,
-					usage: { input_tokens: 10, output_tokens: 1 },
+					usage: { input_tokens: options.inputTokens ?? 10, output_tokens: 1 },
 				},
 			},
 		],

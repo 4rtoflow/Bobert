@@ -1,8 +1,12 @@
 import type { AnthropicCredential } from "../llm/anthropic";
 import { findClaudeModel, findOpenRouterModel } from "../llm/model-info";
-import type { ChatRequest } from "../llm/types";
+import type { ChatRequest, ChatResult, TokenUsage } from "../llm/types";
 import type { StoredMessageInput } from "../queue/messages";
-import { loadReplyUsage } from "../store/summaries";
+import {
+	type ConversationSummary,
+	loadReplyUsage,
+	saveSummary,
+} from "../store/summaries";
 import type { UserSettings } from "../store/users";
 import { messageLine } from "./conversation";
 import { type ResolvedModel, selectedCandidate } from "./model";
@@ -121,4 +125,95 @@ export function summaryRequest(options: {
 		tools: [],
 		maxTokens: SUMMARY_MAX_TOKENS,
 	};
+}
+
+/** 会話の古い部分を要約した結果 */
+export interface SummarizeResult {
+	/** 新しく保存した要約。途中で打ち切られたなどで、作れなかったらnull */
+	summary: ConversationSummary | null;
+	/** なぜ作れなかったか。断られた(refusal)、途中で切れた(max_tokens)、空だった(empty) */
+	failure: "refusal" | "max_tokens" | "empty" | null;
+	/** 要約を頼んだときの使用量(費用の表示に使う) */
+	usages: TokenUsage[];
+}
+
+/**
+ * 会話の古い部分を要約して保存する。新しい20件を残し、それより前(前の要約を含む)を、そのときのモデルと本人のキーで要約する。
+ * messagesは、要約した位置より後の発言(古い順)。KEEP_RECENT_MESSAGESより多いときに呼ぶ。
+ * 途中で打ち切られた要約は、大事なことが抜けているかもしれないので使わない
+ */
+export async function summarizeOlderPart(options: {
+	db: D1Database;
+	callModel: (request: ChatRequest) => Promise<ChatResult>;
+	modelId: string;
+	effort: string | null;
+	userId: string;
+	botUserId: string;
+	messages: readonly StoredMessageInput[];
+	previous: ConversationSummary | null;
+	names: ReadonlyMap<string, string>;
+}): Promise<SummarizeResult> {
+	const older = options.messages.slice(0, -KEEP_RECENT_MESSAGES);
+	const result = await options.callModel(
+		summaryRequest({
+			modelId: options.modelId,
+			effort: options.effort,
+			previous: options.previous?.summary ?? null,
+			messages: older,
+			botUserId: options.botUserId,
+			names: options.names,
+		}),
+	);
+	const text = result.text.trim();
+	const failure =
+		result.stopReason === "refusal"
+			? "refusal"
+			: result.stopReason === "max_tokens"
+				? "max_tokens"
+				: text === ""
+					? "empty"
+					: null;
+	const [first] = older;
+	const last = older.at(-1);
+	if (failure !== null || !first || !last) {
+		return { summary: null, failure, usages: result.requestUsages };
+	}
+	const summary: ConversationSummary = {
+		rootMessageId: options.previous?.rootMessageId ?? first.messageId,
+		coveredUntilMessageId: last.messageId,
+		summary: text,
+	};
+	await saveSummary(options.db, {
+		...summary,
+		modelKey: options.modelId,
+		createdByUserId: options.userId,
+	});
+	return { summary, failure: null, usages: result.requestUsages };
+}
+
+/**
+ * 料金が上がる境目(入力のトークン数)。要約を勧める案内に使う。
+ * 候補は、候補の一覧の値。「その他」で入力したOpenRouterのモデルは、入力のトークン数で単価が上がる段階のうち、いちばん低いもの。
+ * 「その他」で入力したClaudeは、単価が分からないので案内しない。境目がなければnull
+ */
+export async function priceIncreaseThreshold(
+	settings: UserSettings,
+	model: ResolvedModel,
+): Promise<number | null> {
+	const candidate = selectedCandidate(settings);
+	if (candidate !== null) {
+		return candidate.priceIncreaseAboveTokens ?? null;
+	}
+	if (model.provider !== "openrouter") {
+		return null;
+	}
+	try {
+		const tiers =
+			(await findOpenRouterModel(model.modelId))?.pricing?.tiers ?? [];
+		return tiers.length > 0
+			? Math.min(...tiers.map((tier) => tier.minPromptTokens))
+			: null;
+	} catch {
+		return null;
+	}
 }
