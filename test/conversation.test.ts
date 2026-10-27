@@ -121,6 +121,27 @@ describe("AIに渡す会話への変換", () => {
 		expect(conversation.imagesSkipped).toBe(true);
 	});
 
+	it("「/」と英数字で始まる人の発言には、コマンドの実行ではないと書き添える", () => {
+		const bot: APIUser = { ...BOB, id: "301", bot: true };
+		const chain = stored(
+			discordMessage("1", ALICE, "/ohiru"),
+			discordMessage("2", ALICE, "1/2はいくつ?"),
+			// ほかのBotの発言には添えない
+			discordMessage("3", bot, "/help で使い方を見られます"),
+		);
+
+		const { messages } = toConversation(chain, OPTIONS);
+
+		expect(messages.map((message) => message.parts[0])).toEqual([
+			{
+				type: "text",
+				text: at("Alice: /ohiru(文字の発言で、コマンドの実行ではありません)"),
+			},
+			{ type: "text", text: at("Alice: 1/2はいくつ?") },
+			{ type: "text", text: at("bob(Bot): /help で使い方を見られます") },
+		]);
+	});
+
 	it("会話がBobertの発言から始まるときは、前に人の発言を補う", () => {
 		const chain = stored(
 			discordMessage("1", BOT, "こんにちは"),

@@ -17,7 +17,9 @@ import type {
 	RespondJob,
 	StoredMessageInput,
 } from "../queue/messages";
+import { workersAiEmbedder } from "../store/embedding";
 import { claimMessage, releaseMessage } from "../store/messages";
+import { searchSimilarMessages } from "../store/search";
 import {
 	getRegisteredProviders,
 	getUserSettings,
@@ -46,6 +48,7 @@ import { splitMessage } from "./split";
 import {
 	channelHistoryTool,
 	replyChainTool,
+	searchMessagesTool,
 	startsWithReply,
 	toolsAvailable,
 } from "./tools";
@@ -99,6 +102,12 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 		fetchMessage,
 		listMessages: (channelId, options) =>
 			getChannelMessages(token, channelId, options),
+		searchMessages: (query, options) =>
+			searchSimilarMessages(
+				query,
+				{ ...options, channelId: job.channelId },
+				{ embed: workersAiEmbedder(env.AI), vectors: env.VECTORIZE },
+			),
 		ingest: (messages) => enqueueIngest(env, messages),
 		knownNames: job.members ?? [],
 	};
@@ -163,12 +172,13 @@ async function composeReply(
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
 		: false;
-	// AIが必要なときに、チャンネルの履歴を読めるようにする。会話の最初のメッセージが返信なら、その返信先も読めるようにする。
-	// 道具の定義は、毎回同じ並びにする(キャッシュのため)
+	// AIが必要なときに、チャンネルの履歴を読んだり探したりできるようにする。
+	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする。道具の定義は、毎回同じ並びにする(キャッシュのため)
 	const root = chain[0];
 	const tools = (await toolsAvailable(settings, model))
 		? [
 				channelHistoryTool(history, botUserId),
+				searchMessagesTool(history, botUserId),
 				...(startsWithReply(root)
 					? [replyChainTool(root, history, botUserId)]
 					: []),

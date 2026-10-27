@@ -43,6 +43,7 @@ function fakeHistory(
 			return discord.get(messageId) ?? null;
 		},
 		listMessages: async () => [],
+		searchMessages: async () => [],
 		ingest: async (saved) => {
 			ingested.push(...saved.map((message) => message.messageId));
 		},
