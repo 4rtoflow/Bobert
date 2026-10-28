@@ -21,6 +21,7 @@ Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のも�
 | `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)                                |
 | `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                                                          |
 | `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)                                    |
+| `src/import/`          | `/import`(公開チャンネルの過去ログの取り込みの始め方と、進み具合を見張るDurable Object)            |
 | `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認                                         |
 | `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                                               |
 | `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                              |
@@ -68,6 +69,7 @@ pnpm exec wrangler queues create bobert-ingest-dev
 pnpm exec wrangler vectorize create bobert-messages-dev --dimensions=1024 --metric=cosine
 pnpm exec wrangler vectorize create-metadata-index bobert-messages-dev --propertyName=author_id --type=string
 pnpm exec wrangler vectorize create-metadata-index bobert-messages-dev --propertyName=created_at --type=number
+pnpm exec wrangler vectorize create-metadata-index bobert-messages-dev --propertyName=guild_id --type=string
 
 # シークレット(.env.example にある名前をすべて設定する)
 pnpm exec wrangler secret put DISCORD_BOT_TOKEN --env=""
@@ -82,6 +84,8 @@ pnpm db:migrate:dev
 - **Gateway:** 環境ごとに最初の1回だけ、接続を始める。以降はアラームで動き続け、デプロイで切れてもResumeでつなぎ直す。
 - **スラッシュコマンド:** コマンドを追加・変更したら、登録し直す(`src/interactions/commands.ts`の一覧で丸ごと置き換える)。デプロイの直後は、古い版が応答することがある。登録の結果に新しいコマンドがなければ、少し待ってからやり直す。
 - **D1のスキーマ:** `migrations/`にファイルが増えたら、デプロイの前に`pnpm db:migrate:dev`で反映する。
+- **Gatewayのインテント:** インテントを変えたら(`src/gateway/protocol.ts`)、デプロイの後に、Gatewayを止めてから始め直す。Resumeでは反映されないため。
+- **ベクトルの入れ直し:** ベクトルのメタデータを足したら(サーバーIDを足したときなど)、メタデータ索引を作ってから、保存したメッセージのベクトルを入れ直す。
 
 ```sh
 URL=https://bobert-dev.<サブドメイン>.workers.dev
@@ -89,6 +93,7 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/start   
 curl -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/status              # 状態を見る
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/stop       # 止める
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/commands/register  # コマンドを登録する
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/vectors/reindex    # ベクトルを入れ直す
 ```
 
 ## よく使うコマンド

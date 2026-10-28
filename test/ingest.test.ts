@@ -1,10 +1,30 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it, type Mock, vi } from "vitest";
+import type { ChannelInfo } from "../src/discord/channels";
 import { type JobHandlers, processBatch } from "../src/queue/consumer";
 import { deleteMessages, ingestMessages } from "../src/queue/ingest";
 import type { QueueMessage, StoredMessageInput } from "../src/queue/messages";
+import {
+	recomputeVisibility,
+	saveChannels,
+	saveEveryonePermissions,
+} from "../src/store/channels";
 import { deleteStoredMessages } from "../src/store/messages";
-import { fakeIngestDeps } from "./helpers";
+import { EVERYONE_CAN_READ, fakeIngestDeps } from "./helpers";
+
+/** テキストチャンネルの記録 */
+function channelInfo(channelId: string, guildId: string): ChannelInfo {
+	return {
+		channelId,
+		guildId,
+		parentId: null,
+		type: 0,
+		name: `channel-${channelId}`,
+		nsfw: false,
+		everyoneAllow: null,
+		everyoneDeny: null,
+	};
+}
 
 const BOT_ID = "1000";
 const CREATED_AT = Date.parse("2026-10-27T00:00:00.000Z");
@@ -85,15 +105,82 @@ describe("メッセージの保存とベクトル化", () => {
 		expect(JSON.parse(row?.attachments as string)).toEqual(message.attachments);
 		expect(row?.embedded_at).not.toBeNull();
 		expect(embedded).toEqual(["明日は10時から集まろう"]);
-		// ベクトルのIDはメッセージID、名前空間はチャンネルID
+		// ベクトルのIDはメッセージID、名前空間はチャンネルID。サーバー全体を探せるよう、サーバーIDも付ける
 		expect(upserted).toEqual([
 			{
 				id: message.messageId,
 				namespace: "3000",
 				values: [0.1, 0.2],
-				metadata: { author_id: "5000", created_at: CREATED_AT },
+				metadata: {
+					author_id: "5000",
+					created_at: CREATED_AT,
+					guild_id: "4000",
+				},
 			},
 		]);
+	});
+
+	it("権限付きのチャンネルのメッセージは、保存しない", async () => {
+		const { deps, embedded } = fakeDeps();
+		const guildId = "4100";
+		await saveEveryonePermissions(env.DB, guildId, EVERYONE_CAN_READ, 1);
+		await saveChannels(
+			env.DB,
+			[
+				channelInfo("3101", guildId),
+				// @everyoneに「チャンネルを見る」がない
+				{ ...channelInfo("3102", guildId), everyoneDeny: String(1n << 10n) },
+			],
+			1,
+		);
+		await recomputeVisibility(env.DB, guildId);
+		const open = storedMessage({ guildId, channelId: "3101" });
+		const closed = storedMessage({ guildId, channelId: "3102" });
+
+		const saved = await ingestMessages([open, closed], deps);
+
+		expect(saved).toBe(1);
+		expect(await storedRow(open.messageId)).not.toBeNull();
+		expect(await storedRow(closed.messageId)).toBeNull();
+		expect(embedded).toEqual(["明日は10時から集まろう"]);
+	});
+
+	it("記録にないチャンネルは、DiscordのAPIで確かめる。Botが見られなければ、保存しない", async () => {
+		const { deps } = fakeDeps();
+		const asked: string[] = [];
+		const message = storedMessage({ guildId: "4200", channelId: "3201" });
+
+		const saved = await ingestMessages([message], {
+			...deps,
+			fetchChannel: async (channelId) => {
+				asked.push(channelId);
+				return null;
+			},
+		});
+
+		expect(saved).toBe(0);
+		expect(asked).toEqual(["3201"]);
+		expect(await storedRow(message.messageId)).toBeNull();
+	});
+
+	it("`/import`の進み具合のメッセージは、保存しない", async () => {
+		const { deps } = fakeDeps();
+		const progress = storedMessage({
+			authorId: BOT_ID,
+			authorName: "Bobert",
+			authorIsBot: true,
+			content: "取り込み中: 42% (ETA: 3:05)",
+			command: {
+				name: "import",
+				contextMenu: false,
+				userId: "5000",
+				userName: "ありす",
+			},
+		});
+
+		await ingestMessages([progress], deps);
+
+		expect(await storedRow(progress.messageId)).toBeNull();
 	});
 
 	it("メンションは名前に置き換え、Bobertの返答は末尾の注記を外してベクトルにする", async () => {
@@ -358,15 +445,49 @@ describe("Queueの仕事の振り分け", () => {
 
 	function handlers(overrides: Partial<JobHandlers> = {}): JobHandlers {
 		return {
+			channels: vi.fn(async () => {}),
 			respond: vi.fn(async () => {}),
 			explain: vi.fn(async () => {}),
 			compact: vi.fn(async () => {}),
+			importCommand: vi.fn(async () => {}),
 			ingest: vi.fn(async () => {}),
 			delete: vi.fn(async () => {}),
 			import: vi.fn(async () => {}),
+			reindex: vi.fn(async () => {}),
 			...overrides,
 		};
 	}
+
+	it("チャンネルの記録は、保存より先に、受け取った順に反映する", async () => {
+		const order: string[] = [];
+		const later = queueMessage({
+			kind: "channels",
+			guildId: "4000",
+			syncedAt: 2,
+			deleted: ["b"],
+		});
+		const earlier = queueMessage({
+			kind: "channels",
+			guildId: "4000",
+			syncedAt: 1,
+			deleted: ["a"],
+		});
+		const ingest = queueMessage({ kind: "ingest", message: storedMessage() });
+
+		await processBatch(
+			[ingest, later, earlier],
+			handlers({
+				channels: vi.fn(async (job) => {
+					order.push(job.deleted?.[0] ?? "");
+				}),
+				ingest: vi.fn(async () => {
+					order.push("ingest");
+				}),
+			}),
+		);
+
+		expect(order).toEqual(["a", "b", "ingest"]);
+	});
 
 	it("保存と削除は、種類ごとにまとめて処理し、成功したら完了にする", async () => {
 		const first = storedMessage();
@@ -440,7 +561,11 @@ describe("Queueの仕事の振り分け", () => {
 
 		await processBatch(
 			[message],
-			handlers({ ingest: (messages) => ingestMessages(messages, deps) }),
+			handlers({
+				ingest: async (messages) => {
+					await ingestMessages(messages, deps);
+				},
+			}),
 		);
 
 		expect(message.ack).toHaveBeenCalled();

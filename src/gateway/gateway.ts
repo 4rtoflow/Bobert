@@ -5,7 +5,9 @@ import type {
 } from "discord-api-types/v10";
 import { notifyAdmin } from "../alert";
 import { getGatewayBot } from "../discord/api";
-import type { QueueMessage } from "../queue/messages";
+import { isImportProgress } from "../queue/ingest";
+import type { QueueMessage, StoredMessageInput } from "../queue/messages";
+import { channelSyncJobs } from "./channels";
 import {
 	type GatewayMessage,
 	memberNames,
@@ -298,10 +300,7 @@ export class Gateway extends DurableObject<Env> {
 					} satisfies QueueMessage);
 				}
 				if (shouldStore(message)) {
-					await this.env.INGEST_QUEUE.send({
-						kind: "ingest",
-						message: toStoredMessage(message),
-					} satisfies QueueMessage);
+					await this.sendIngest(toStoredMessage(message));
 				}
 				return;
 			}
@@ -316,10 +315,7 @@ export class Gateway extends DurableObject<Env> {
 				) {
 					return;
 				}
-				await this.env.INGEST_QUEUE.send({
-					kind: "ingest",
-					message: toStoredMessage(message as GatewayMessage),
-				} satisfies QueueMessage);
+				await this.sendIngest(toStoredMessage(message as GatewayMessage));
 				return;
 			}
 			case "MESSAGE_DELETE": {
@@ -340,7 +336,31 @@ export class Gateway extends DurableObject<Env> {
 				} satisfies QueueMessage);
 				return;
 			}
+			default: {
+				// チャンネル・スレッド・ロールの作成・変更・削除。公開チャンネルかどうかの判定に使う
+				const jobs = channelSyncJobs(event, data, Date.now());
+				if (jobs.length > 0) {
+					await this.env.INGEST_QUEUE.sendBatch(
+						jobs.map((job) => ({ body: job satisfies QueueMessage })),
+					);
+				}
+			}
 		}
+	}
+
+	/**
+	 * メッセージを、保存用のQueueに入れる。`/import`の進み具合のメッセージは入れない。
+	 * 会話ではないうえ、5秒おきに書き換わるため
+	 */
+	private async sendIngest(message: StoredMessageInput): Promise<void> {
+		const botUserId = this.session?.botUserId;
+		if (botUserId && isImportProgress(message, botUserId)) {
+			return;
+		}
+		await this.env.INGEST_QUEUE.send({
+			kind: "ingest",
+			message,
+		} satisfies QueueMessage);
 	}
 
 	private startHeartbeat(socket: WebSocket, intervalMs: number): void {

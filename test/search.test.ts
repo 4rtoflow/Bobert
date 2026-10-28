@@ -1,11 +1,12 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { StoredMessageInput } from "../src/queue/messages";
 import { fromDiscord, type HistoryDeps } from "../src/respond/history";
 import { searchMessagesTool } from "../src/respond/tools";
 import { findAuthorIds, saveMessages } from "../src/store/messages";
 import { type SearchOptions, searchSimilarMessages } from "../src/store/search";
 import { ALICE, BOB, BOT, discordMessage } from "./fixtures";
+import { recordChannels } from "./helpers";
 
 const GUILD_ID = "900";
 
@@ -27,7 +28,7 @@ describe("意味で検索(Vectorize)", () => {
 	it("検索語をベクトルにし、そのチャンネルの名前空間から探して、近い順のIDを返す", async () => {
 		const { queries, vectors } = fakeVectors(["3", "1"]);
 		const options: SearchOptions = {
-			channelId: "3000",
+			scope: { kind: "channel", channelId: "3000" },
 			authorIds: null,
 			after: null,
 			before: null,
@@ -54,7 +55,7 @@ describe("意味で検索(Vectorize)", () => {
 		await searchSimilarMessages(
 			"お昼ごはん",
 			{
-				channelId: "3000",
+				scope: { kind: "channel", channelId: "3000" },
 				authorIds: ["100", "101"],
 				after: 1000,
 				before: 2000,
@@ -112,6 +113,9 @@ describe("発言者の名前から、IDを探す", () => {
 
 describe("意味で検索する道具", () => {
 	const channelId = "8201";
+	beforeAll(async () => {
+		await recordChannels(GUILD_ID, [{ channelId }]);
+	});
 	const lunch = discordMessage("82010", ALICE, "お昼はラーメンにしよう", {
 		channel_id: channelId,
 		timestamp: "2026-10-01T03:00:00.000Z",
@@ -161,7 +165,13 @@ describe("意味で検索する道具", () => {
 		expect(searched).toEqual([
 			{
 				query: "ごはんの話",
-				options: { authorIds: null, after: null, before: null, topK: 10 },
+				options: {
+					authorIds: null,
+					after: null,
+					before: null,
+					topK: 10,
+					scope: "channel",
+				},
 			},
 		]);
 	});
@@ -182,6 +192,7 @@ describe("意味で検索する道具", () => {
 			after: Date.parse("2026-10-01T00:00:00+09:00"),
 			before: Date.parse("2026-10-03T00:00:00+09:00"),
 			topK: 10,
+			scope: "channel",
 		});
 	});
 

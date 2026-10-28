@@ -3,7 +3,9 @@ import {
 	ApplicationCommandType,
 	ApplicationIntegrationType,
 	InteractionContextType,
+	PermissionFlags,
 } from "../discord/constants";
+import { IMPORT_COMMAND_NAME } from "../import/progress";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
 
@@ -61,6 +63,14 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: "donate",
 		description: "サーバーの全員が使えるクレジットの寄付と、残りの確認",
+	},
+	{
+		...GUILD_ONLY,
+		name: IMPORT_COMMAND_NAME,
+		description:
+			"公開チャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
+		// 実行できるのは、サーバー管理の権限を持つ人(サーバー設定の「連携サービス」で変えられる)
+		default_member_permissions: String(PermissionFlags.ManageGuild),
 	},
 	{
 		...GUILD_ONLY,

@@ -6,7 +6,7 @@ import type { StoredMessageInput } from "../src/queue/messages";
 import { fromDiscord, type HistoryDeps } from "../src/respond/history";
 import { formatJst, formatJstInput, parseJst } from "../src/respond/time";
 import { channelHistoryTool } from "../src/respond/tools";
-import { claimChannelImport, finishChannelImport } from "../src/store/imports";
+import { claimImportTargets, finishChannelImport } from "../src/store/imports";
 import { saveMessages } from "../src/store/messages";
 import { ALICE, BOB, BOT, discordMessage } from "./fixtures";
 
@@ -72,10 +72,17 @@ function posted(channelId: string, id: string, content: string, i: number) {
 	});
 }
 
+/** チャンネルの過去ログの取り込みを始める(順番待ちにする) */
+async function claimChannelImport(channelId: string) {
+	await claimImportTargets(env.DB, { runId: "timeline", guildId: GUILD_ID }, [
+		channelId,
+	]);
+}
+
 /** 過去ログの取り込みが済んだチャンネル */
 async function importedChannel(channelId: string, messages: APIMessage[]) {
-	await claimChannelImport(env.DB, channelId);
-	await finishChannelImport(env.DB, channelId, null);
+	await claimChannelImport(channelId);
+	await finishChannelImport(env.DB, channelId, null, 0);
 	await saveMessages(
 		env.DB,
 		messages.map((message) => fromDiscord(message, GUILD_ID)),
@@ -170,7 +177,7 @@ describe("時系列で読む道具", () => {
 
 	it("過去ログの取り込みが済んでいなければ、Discordから読み、保存にも回す", async () => {
 		const channelId = "9105";
-		await claimChannelImport(env.DB, channelId);
+		await claimChannelImport(channelId);
 		const listed: unknown[] = [];
 		const discord = [
 			posted(channelId, "91052", "新しい発言", 2),
@@ -205,7 +212,7 @@ describe("時系列で読む道具", () => {
 
 	it("読む権限がなければ、そう伝える", async () => {
 		const channelId = "9106";
-		await claimChannelImport(env.DB, channelId);
+		await claimChannelImport(channelId);
 		const { deps } = fakeHistory(channelId, {
 			listMessages: async () => {
 				throw new DiscordApiError(403, 50001, "forbidden");

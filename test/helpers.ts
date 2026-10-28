@@ -5,8 +5,14 @@ import {
 import { env } from "cloudflare:workers";
 import type { APIUser } from "discord-api-types/v10";
 import { vi } from "vitest";
+import type { ChannelInfo } from "../src/discord/channels";
 import { handleInteraction } from "../src/interactions/handler";
 import type { IngestDeps } from "../src/queue/ingest";
+import {
+	recomputeVisibility,
+	saveChannels,
+	saveEveryonePermissions,
+} from "../src/store/channels";
 import { type Provider, saveCredential } from "../src/store/users";
 import { ALICE } from "./fixtures";
 
@@ -351,7 +357,36 @@ data: ${JSON.stringify(data)}
 	);
 }
 
-/** 偽物のVectorizeと埋め込み。呼ばれた内容を記録する */
+/** テストの@everyoneの権限(チャンネルを見る、メッセージ履歴を読む) */
+export const EVERYONE_CAN_READ = String((1n << 10n) | (1n << 16n));
+
+/** チャンネルとスレッドを記録し、公開かどうかを決める。サーバーの@everyoneは、見て読めることにする */
+export async function recordChannels(
+	guildId: string,
+	channels: (Partial<ChannelInfo> & { channelId: string })[],
+): Promise<void> {
+	await saveEveryonePermissions(env.DB, guildId, EVERYONE_CAN_READ, 1);
+	await saveChannels(
+		env.DB,
+		channels.map((channel) => ({
+			guildId,
+			parentId: null,
+			type: 0,
+			name: `channel-${channel.channelId}`,
+			nsfw: false,
+			everyoneAllow: null,
+			everyoneDeny: null,
+			...channel,
+		})),
+		1,
+	);
+	await recomputeVisibility(env.DB, guildId);
+}
+
+/**
+ * 偽物のVectorizeと埋め込み。呼ばれた内容を記録する。
+ * 記録にないチャンネルは、DiscordのAPIで確かめると、公開のテキストチャンネルだったことにする
+ */
 export function fakeIngestDeps(botUserId: string) {
 	const upserted: VectorizeVector[] = [];
 	const deleted: string[] = [];
@@ -373,6 +408,17 @@ export function fakeIngestDeps(botUserId: string) {
 			return texts.map(() => [0.1, 0.2]);
 		},
 		botUserId,
+		fetchChannel: async (channelId, guildId) => ({
+			channelId,
+			guildId,
+			parentId: null,
+			type: 0,
+			name: `channel-${channelId}`,
+			nsfw: false,
+			everyoneAllow: null,
+			everyoneDeny: null,
+		}),
+		fetchEveryonePermissions: async () => EVERYONE_CAN_READ,
 	};
 	return { deps, upserted, deleted, embedded };
 }

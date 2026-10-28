@@ -302,6 +302,32 @@ export async function findAuthorIds(
 	return results.map((row) => row.id);
 }
 
+/**
+ * 名前から、発言者のIDを、サーバー全体で探す(意味で検索で、サーバー全体を探すとき)。
+ * このサーバーで、その名前で発言した人(前に使っていた名前でも)と、サーバーで今その名前の人。探し方はfindAuthorIdsと同じ
+ */
+export async function findAuthorIdsInGuild(
+	db: D1Database,
+	guildId: string,
+	name: string,
+): Promise<string[]> {
+	const normalized = name.trim().replace(/^@/, "");
+	if (normalized === "") {
+		return [];
+	}
+	const { results } = await db
+		.prepare(
+			`SELECT author_id AS id FROM messages
+			WHERE guild_id = ?1 AND author_name = ?2 COLLATE NOCASE
+			UNION
+			SELECT user_id AS id FROM guild_members
+			WHERE guild_id = ?1 AND name = ?2 COLLATE NOCASE`,
+		)
+		.bind(guildId, normalized)
+		.all<{ id: string }>();
+	return results.map((row) => row.id);
+}
+
 /** サーバーで見えている名前(人ごとに、最後に分かったもの)。分からない人は含まない */
 export async function loadMemberNames(
 	db: D1Database,
@@ -327,6 +353,7 @@ export async function loadMemberNames(
 /** ベクトルを入れるメッセージ */
 export interface MessageToEmbed {
 	messageId: string;
+	guildId: string | null;
 	channelId: string;
 	authorId: string;
 	content: string;
@@ -345,13 +372,14 @@ export async function findMessagesToEmbed(
 	for (const ids of chunks(messageIds, MAX_IDS_PER_QUERY)) {
 		const { results } = await db
 			.prepare(
-				`SELECT message_id, channel_id, author_id, content, mentions, embeds, created_at, edited_at
+				`SELECT message_id, guild_id, channel_id, author_id, content, mentions, embeds, created_at, edited_at
 				FROM messages
 				WHERE embedded_at IS NULL AND message_id IN (${ids.map(() => "?").join(", ")})`,
 			)
 			.bind(...ids)
 			.all<{
 				message_id: string;
+				guild_id: string | null;
 				channel_id: string;
 				author_id: string;
 				content: string;
@@ -363,6 +391,7 @@ export async function findMessagesToEmbed(
 		for (const row of results) {
 			found.push({
 				messageId: row.message_id,
+				guildId: row.guild_id,
 				channelId: row.channel_id,
 				authorId: row.author_id,
 				content: row.content,
@@ -419,6 +448,64 @@ export async function deleteStoredMessages(
 			.prepare("DELETE FROM deleted_messages WHERE deleted_at < ?")
 			.bind(now - DELETED_RETENTION_MS),
 	]);
+}
+
+/**
+ * チャンネル(スレッドを含む)の保存したメッセージを、まとめて消す。権限付きになったチャンネルや、削除されたチャンネルの分。
+ * 消したメッセージのIDを返す(Vectorizeからも消すため)。
+ * 保存の処理は、公開チャンネルかどうかを確かめてから保存するので、消したメッセージのIDは残さない
+ */
+export async function deleteChannelMessages(
+	db: D1Database,
+	channelIds: readonly string[],
+): Promise<string[]> {
+	const deleted: string[] = [];
+	for (const ids of chunks([...new Set(channelIds)], MAX_IDS_PER_QUERY)) {
+		const { results } = await db
+			.prepare(
+				`DELETE FROM messages WHERE channel_id IN (${ids.map(() => "?").join(", ")})
+				RETURNING message_id`,
+			)
+			.bind(...ids)
+			.all<{ message_id: string }>();
+		deleted.push(...results.map((row) => row.message_id));
+	}
+	return deleted;
+}
+
+/** 保存したメッセージのIDを、古い順に、afterより後のものから最大limit件読む(ベクトルを少しずつ入れ直すため) */
+export async function messageIdsAfter(
+	db: D1Database,
+	after: string | null,
+	limit: number,
+): Promise<string[]> {
+	// メッセージIDは数字の文字列なので、桁数を先に比べて、数の順に並べる
+	const { results } = await db
+		.prepare(
+			`SELECT message_id FROM messages
+			WHERE ?1 IS NULL OR length(message_id) > length(?1)
+				OR (length(message_id) = length(?1) AND message_id > ?1)
+			ORDER BY length(message_id), message_id
+			LIMIT ?2`,
+		)
+		.bind(after, limit)
+		.all<{ message_id: string }>();
+	return results.map((row) => row.message_id);
+}
+
+/** ベクトルを入れ直すため、入れた記録を消す */
+export async function clearEmbedded(
+	db: D1Database,
+	messageIds: readonly string[],
+): Promise<void> {
+	for (const ids of chunks(messageIds, MAX_IDS_PER_QUERY)) {
+		await db
+			.prepare(
+				`UPDATE messages SET embedded_at = NULL WHERE message_id IN (${ids.map(() => "?").join(", ")})`,
+			)
+			.bind(...ids)
+			.run();
+	}
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {

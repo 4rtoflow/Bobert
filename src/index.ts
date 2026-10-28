@@ -15,6 +15,7 @@ import { handleQueueBatch } from "./queue/consumer";
 import type { QueueMessage } from "./queue/messages";
 
 export { Gateway } from "./gateway/gateway";
+export { ImportProgress } from "./import/progress-object";
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {

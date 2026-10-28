@@ -608,11 +608,12 @@ describe("メンションと返信への応答", () => {
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
 		);
-		// Bobertの道具(時系列で読む、意味で検索)の後に、Web検索を置く
+		// Bobertの道具(時系列で読む、意味で検索、チャンネルの一覧)の後に、Web検索を置く
 		expect(request?.body).toMatchObject({
 			tools: [
 				{ type: "function", function: { name: "read_channel_history" } },
 				{ type: "function", function: { name: "search_channel_messages" } },
+				{ type: "function", function: { name: "list_channels" } },
 				{ type: "openrouter:web_search" },
 			],
 		});
@@ -715,6 +716,10 @@ describe("メンションと返信への応答", () => {
 			}),
 			expect.objectContaining({
 				type: "function",
+				function: expect.objectContaining({ name: "list_channels" }),
+			}),
+			expect.objectContaining({
+				type: "function",
 				function: expect.objectContaining({ name: "read_reply_chain" }),
 			}),
 		]);
@@ -727,7 +732,7 @@ describe("メンションと返信への応答", () => {
 		expect(posted(calls)[0]?.content).toBe("返信先は読めなかったよ。");
 	});
 
-	it("会話の最初のメッセージが返信でなければ、返信先を読む道具は渡さない(時系列で読む道具と、意味で検索する道具だけ)", async () => {
+	it("会話の最初のメッセージが返信でなければ、返信先を読む道具は渡さない(時系列で読む道具、意味で検索する道具、チャンネルの一覧の道具だけ)", async () => {
 		const user = { ...ALICE, id: "127" };
 		await saveCredential(env, user.id, "openrouter", {
 			apiKey: "sk-or-test",
@@ -749,6 +754,7 @@ describe("メンションと返信への応答", () => {
 		expect(body?.tools?.map((tool) => tool.function.name)).toEqual([
 			"read_channel_history",
 			"search_channel_messages",
+			"list_channels",
 		]);
 	});
 });
@@ -857,7 +863,7 @@ describe("保存したメッセージから会話を読む", () => {
 });
 
 describe("過去ログの取り込み", () => {
-	it("初めて使われたチャンネルなら、過去ログの取り込みを始める", async () => {
+	it("Botが使われても、過去ログの取り込みは始めない(取り込みは/importで始める)", async () => {
 		const first = discordMessage("5500", BOB, `<@${BOT.id}> こんにちは`, {
 			mentions: [BOT],
 		});
@@ -869,10 +875,7 @@ describe("過去ログの取り込み", () => {
 		await handleRespondJob(respondJob(first, { channelId: "810" }), testEnv);
 		await handleRespondJob(respondJob(second, { channelId: "810" }), testEnv);
 
-		// 2回とも返信していて、取り込みの仕事は1回目にだけ入れる
 		expect(posted(calls)).toHaveLength(2);
-		expect(imports).toEqual([
-			{ kind: "import", channelId: "810", guildId: "900", before: null },
-		]);
+		expect(imports).toEqual([]);
 	});
 });

@@ -17,7 +17,6 @@ import {
 	type TokenUsage,
 } from "../llm/types";
 import { logEvent } from "../log";
-import { startChannelImport } from "../queue/import";
 import type {
 	QueueMessage,
 	RespondJob,
@@ -73,6 +72,7 @@ import {
 } from "./summary";
 import {
 	channelHistoryTool,
+	channelListTool,
 	replyChainTool,
 	searchMessagesTool,
 	startsWithReply,
@@ -117,7 +117,6 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 		log("trigger_unavailable", { userId: job.authorId });
 		return;
 	}
-	await startImport(env, job.channelId, job.guildId);
 	const history = historyFor(env, {
 		guildId: job.guildId,
 		channelId: job.channelId,
@@ -168,10 +167,16 @@ export function historyFor(
 		fetchMessage,
 		listMessages: (channelId, options) =>
 			getChannelMessages(token, channelId, options),
-		searchMessages: (query, options) =>
+		searchMessages: (query, { scope, ...options }) =>
 			searchSimilarMessages(
 				query,
-				{ ...options, channelId: location.channelId },
+				{
+					...options,
+					scope:
+						scope === "server" && location.guildId !== null
+							? { kind: "server", guildId: location.guildId }
+							: { kind: "channel", channelId: location.channelId },
+				},
 				{ embed: workersAiEmbedder(env.AI), vectors: env.VECTORIZE },
 			),
 		ingest: (messages) => enqueueIngest(env, messages),
@@ -403,7 +408,7 @@ export async function answer(
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
 		: false;
-	// AIが必要なときに、チャンネルの履歴を読んだり探したりできるようにする。
+	// AIが必要なときに、このチャンネルと、サーバーの公開チャンネルの履歴を読んだり探したりできるようにする。
 	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
 	// 道具の定義は、毎回同じ並びにする(キャッシュのため)
 	const root = chain[0];
@@ -411,6 +416,7 @@ export async function answer(
 		? [
 				channelHistoryTool(history, botUserId),
 				searchMessagesTool(history, botUserId),
+				channelListTool(history),
 				...(summary === null && startsWithReply(root)
 					? [replyChainTool(root, history, botUserId)]
 					: []),
@@ -535,32 +541,6 @@ export async function recordConversationSize(
 		await recordReplyUsage(env.DB, messageIds, inputTokens);
 	} catch (error) {
 		log("record_usage_failed", {
-			error: error instanceof Error ? error.message : "unknown",
-		});
-	}
-}
-
-/**
- * そのチャンネルで初めてBotが使われたら、過去ログの取り込みを裏で始める
- * (仕様: docs/spec/architecture.md「過去ログの取り込み」)。始められなくても、返答は続ける。
- */
-export async function startImport(
-	env: Env,
-	channelId: string,
-	guildId: string | null,
-): Promise<void> {
-	if (guildId === null) {
-		return;
-	}
-	try {
-		if (
-			await startChannelImport(env.DB, env.INGEST_QUEUE, channelId, guildId)
-		) {
-			log("import_started", { channelId });
-		}
-	} catch (error) {
-		log("import_start_failed", {
-			channelId,
 			error: error instanceof Error ? error.message : "unknown",
 		});
 	}

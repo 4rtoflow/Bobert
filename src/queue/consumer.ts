@@ -1,18 +1,23 @@
 import { getChannelMessages } from "../discord/api";
+import { handleImportCommandJob } from "../import/start";
 import { logEvent } from "../log";
 import { handleCompactJob } from "../respond/compact";
 import { handleExplainJob } from "../respond/explain";
 import { handleRespondJob } from "../respond/handler";
-import { workersAiEmbedder } from "../store/embedding";
+import { applyChannelSync } from "./channels";
+import { ingestDeps } from "./deps";
 import { IMPORT_PAGE_SIZE, importChannelPage } from "./import";
-import { deleteMessages, type IngestDeps, ingestMessages } from "./ingest";
+import { deleteMessages, ingestMessages, reindexPage } from "./ingest";
 import type {
+	ChannelSyncJob,
 	CompactJob,
 	DeleteJob,
 	ExplainJob,
+	ImportCommandJob,
 	ImportJob,
 	IngestJob,
 	QueueMessage,
+	ReindexJob,
 	RespondJob,
 	StoredMessageInput,
 } from "./messages";
@@ -25,17 +30,16 @@ export async function handleQueueBatch(
 	batch: MessageBatch<QueueMessage>,
 	env: Env,
 ): Promise<void> {
-	const deps: IngestDeps = {
-		db: env.DB,
-		vectors: env.VECTORIZE,
-		embed: workersAiEmbedder(env.AI),
-		botUserId: env.DISCORD_APPLICATION_ID,
-	};
+	const deps = ingestDeps(env);
 	await processBatch(batch.messages, {
+		channels: (job) => applyChannelSync(job, deps),
 		respond: (job) => handleRespondJob(job, env),
 		explain: (job) => handleExplainJob(job, env),
 		compact: (job) => handleCompactJob(job, env),
-		ingest: (messages) => ingestMessages(messages, deps),
+		importCommand: (job) => handleImportCommandJob(job, env),
+		ingest: async (messages) => {
+			await ingestMessages(messages, deps);
+		},
 		delete: (jobs) =>
 			deleteMessages(
 				jobs.flatMap((job) => job.messageIds),
@@ -55,24 +59,43 @@ export async function handleQueueBatch(
 					});
 				},
 			}),
+		reindex: (job) =>
+			reindexPage(job, {
+				...deps,
+				continueReindex: async (next) => {
+					await env.INGEST_QUEUE.send(next satisfies QueueMessage);
+				},
+			}),
 	});
 }
 
 /** 仕事の種類ごとの処理 */
 export interface JobHandlers {
+	channels: (job: ChannelSyncJob) => Promise<void>;
 	respond: (job: RespondJob) => Promise<void>;
 	explain: (job: ExplainJob) => Promise<void>;
 	compact: (job: CompactJob) => Promise<void>;
+	importCommand: (job: ImportCommandJob) => Promise<void>;
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
 	delete: (jobs: DeleteJob[]) => Promise<void>;
 	import: (job: ImportJob) => Promise<void>;
+	reindex: (job: ReindexJob) => Promise<void>;
 }
 
-/** 仕事を種類ごとに分けて処理する。応答と説明と要約と過去ログの取り込みは1件ずつ、保存と削除はまとめて */
+/**
+ * 仕事を種類ごとに分けて処理する。保存と削除はまとめて、それ以外は1件ずつ。
+ * チャンネルの記録は、保存より先に、受け取った順に反映する(保存するかどうかを、チャンネルの記録で決めるため)
+ */
 export async function processBatch(
 	messages: readonly Message<QueueMessage>[],
 	handlers: JobHandlers,
 ): Promise<void> {
+	const channels = messages
+		.filter(
+			(message): message is Message<ChannelSyncJob> =>
+				message.body.kind === "channels",
+		)
+		.sort((a, b) => a.body.syncedAt - b.body.syncedAt);
 	const respond = messages.filter(
 		(message): message is Message<RespondJob> =>
 			message.body.kind === "respond",
@@ -85,6 +108,10 @@ export async function processBatch(
 		(message): message is Message<CompactJob> =>
 			message.body.kind === "compact",
 	);
+	const importCommands = messages.filter(
+		(message): message is Message<ImportCommandJob> =>
+			message.body.kind === "import_command",
+	);
 	const ingest = messages.filter(
 		(message): message is Message<IngestJob> => message.body.kind === "ingest",
 	);
@@ -94,34 +121,31 @@ export async function processBatch(
 	const imports = messages.filter(
 		(message): message is Message<ImportJob> => message.body.kind === "import",
 	);
+	const reindex = messages.filter(
+		(message): message is Message<ReindexJob> =>
+			message.body.kind === "reindex",
+	);
 
-	for (const message of respond) {
-		await settle([message], async (jobs) => {
-			for (const job of jobs) {
-				await handlers.respond(job);
-			}
-		});
-	}
-	for (const message of explain) {
-		await settle([message], async (jobs) => {
-			for (const job of jobs) {
-				await handlers.explain(job);
-			}
-		});
-	}
-	for (const message of compact) {
-		await settle([message], async (jobs) => {
-			for (const job of jobs) {
-				await handlers.compact(job);
-			}
-		});
-	}
+	await eachOne(channels, handlers.channels);
+	await eachOne(respond, handlers.respond);
+	await eachOne(explain, handlers.explain);
+	await eachOne(compact, handlers.compact);
+	await eachOne(importCommands, handlers.importCommand);
 	await settle(ingest, (jobs) => handlers.ingest(jobs.map(withDefaults)));
 	await settle(deletion, (jobs) => handlers.delete(jobs));
-	for (const message of imports) {
+	await eachOne(imports, handlers.import);
+	await eachOne(reindex, handlers.reindex);
+}
+
+/** 1件ずつ処理する。失敗した仕事だけを、やり直しに回す */
+async function eachOne<T extends QueueMessage>(
+	messages: readonly Message<T>[],
+	handle: (job: T) => Promise<void>,
+): Promise<void> {
+	for (const message of messages) {
 		await settle([message], async (jobs) => {
 			for (const job of jobs) {
-				await handlers.import(job);
+				await handle(job);
 			}
 		});
 	}

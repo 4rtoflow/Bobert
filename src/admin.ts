@@ -1,6 +1,7 @@
 import { overwriteGlobalCommands } from "./discord/api";
 import { GATEWAY_LOCATION_HINT, GATEWAY_OBJECT_NAME } from "./gateway/protocol";
 import { COMMANDS } from "./interactions/commands";
+import type { QueueMessage } from "./queue/messages";
 
 /**
  * 管理用エンドポイント。ADMIN_TOKENで保護する。
@@ -8,6 +9,7 @@ import { COMMANDS } from "./interactions/commands";
  * - POST /admin/gateway/stop: Gatewayへの接続を止める
  * - GET /admin/gateway/status: 接続の状態を返す
  * - POST /admin/commands/register: スラッシュコマンドをDiscordに登録する(一覧で丸ごと置き換える)
+ * - POST /admin/vectors/reindex: 保存したメッセージのベクトルを、全部入れ直す(メタデータを足したときなど)
  */
 export async function handleAdminRequest(
 	request: Request,
@@ -46,6 +48,13 @@ export async function handleAdminRequest(
 			ok: true,
 			commands: registered.map((command) => command.name),
 		});
+	}
+	if (request.method === "POST" && url.pathname === "/admin/vectors/reindex") {
+		await env.INGEST_QUEUE.send({
+			kind: "reindex",
+			after: null,
+		} satisfies QueueMessage);
+		return Response.json({ ok: true });
 	}
 	return new Response("Not Found", { status: 404 });
 }

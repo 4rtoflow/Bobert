@@ -11,8 +11,13 @@ export interface VectorSearcher {
 	): Promise<{ matches: { id: string }[] }>;
 }
 
+/** 探す範囲。チャンネルなら、その名前空間から。サーバーなら、サーバーIDのメタデータで絞り込んで、全部の名前空間から */
+export type SearchScope =
+	| { kind: "channel"; channelId: string }
+	| { kind: "server"; guildId: string };
+
 export interface SearchOptions {
-	channelId: string;
+	scope: SearchScope;
 	/** 発言者で絞り込む。nullなら絞り込まない */
 	authorIds: readonly string[] | null;
 	/** この時刻より後(UNIX時間のミリ秒)。nullなら制限しない */
@@ -24,7 +29,8 @@ export interface SearchOptions {
 
 /**
  * 検索語に意味が近いメッセージのIDを、近い順に返す(仕様: docs/spec/architecture.md「過去メッセージを参照する道具」)。
- * 検索語はWorkers AIでベクトルにし、Vectorizeで、そのチャンネルの名前空間から探す。
+ * 検索語はWorkers AIでベクトルにし、Vectorizeで探す。チャンネルの中なら、そのチャンネルの名前空間から探す。
+ * サーバー全体なら、メタデータのサーバーID(guild_id)で絞り込む(保存しているのは、公開チャンネルのメッセージだけ)。
  * 発言者と期間は、メタデータ(author_id、created_at)で絞り込む。
  */
 export async function searchSimilarMessages(
@@ -36,7 +42,9 @@ export async function searchSimilarMessages(
 	if (!vector) {
 		return [];
 	}
-	const filter: VectorizeVectorMetadataFilter = {};
+	const { scope } = options;
+	const filter: VectorizeVectorMetadataFilter =
+		scope.kind === "server" ? { guild_id: scope.guildId } : {};
 	if (options.authorIds !== null) {
 		filter.author_id = { $in: [...options.authorIds] };
 	}
@@ -48,7 +56,7 @@ export async function searchSimilarMessages(
 	}
 	const result = await deps.vectors.query(vector, {
 		topK: options.topK,
-		namespace: options.channelId,
+		...(scope.kind === "channel" ? { namespace: scope.channelId } : {}),
 		returnMetadata: "none",
 		...(Object.keys(filter).length > 0 ? { filter } : {}),
 	});
