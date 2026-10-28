@@ -243,6 +243,7 @@ describe("説明の仕事", () => {
 		expect(request?.tools?.map((tool) => tool.name)).toEqual([
 			"read_channel_history",
 			"search_channel_messages",
+			"list_channels",
 		]);
 		const edit = calls.find((call) => call.method === "PATCH");
 		expect(edit?.url.pathname).toBe(
@@ -286,6 +287,7 @@ describe("説明の仕事", () => {
 		expect(request?.tools?.map((tool) => tool.name)).toEqual([
 			"read_channel_history",
 			"search_channel_messages",
+			"list_channels",
 			"read_reply_chain",
 		]);
 	});

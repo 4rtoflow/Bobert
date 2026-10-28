@@ -10,6 +10,7 @@ import {
 	InteractionType,
 	MessageFlags,
 } from "../discord/constants";
+import { IMPORT_COMMAND_NAME } from "../import/progress";
 import {
 	COMPACT_BUTTON_ID,
 	COMPACT_COMMAND_NAME,
@@ -30,6 +31,7 @@ import { EFFORT_SELECT_ID, effortCommand, selectEffort } from "./effort";
 import { EXPLAIN_COMMAND_NAME, explainFromMenu } from "./explain";
 import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
 import { helpCommand } from "./help";
+import { importCommand } from "./import";
 import {
 	MODEL_CUSTOM_ID,
 	MODEL_SELECT_ID,
@@ -128,6 +130,9 @@ async function route(
 			}
 			if (interaction.data.name === "donate" && guildId) {
 				return donateCommand(env, guildId, donor);
+			}
+			if (interaction.data.name === IMPORT_COMMAND_NAME && guildId) {
+				return importCommand(interaction, env, guildId, user.id);
 			}
 			if (interaction.data.name === "delete") {
 				return deleteCommand(env, user.id);

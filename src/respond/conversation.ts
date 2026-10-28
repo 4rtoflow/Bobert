@@ -127,26 +127,35 @@ export function selectImages(
 /**
  * メッセージを「[時刻] 名前: 本文」の文にする(道具の結果で使う)。Bobertの発言にも時刻を付ける。Embedの中身と、添付のファイル名を書き添える。
  * Bobertの発言は、末尾の注記を外す。
+ * placeを渡すと、時刻の後に書く(今いるチャンネル以外のメッセージの、チャンネルの名前。例: 「[時刻] #雑談 名前: 本文」)
  */
 export function messageLine(
 	message: StoredMessageInput,
 	botUserId: string,
 	names: ReadonlyMap<string, string>,
+	place: string | null = null,
 ): string {
+	const where = place === null ? "" : `${place} `;
 	if (message.authorId === botUserId) {
-		return `[${formatJst(message.createdAt)}] ${authorName(message, names)}: ${botText(message)}`;
+		return `[${formatJst(message.createdAt)}] ${where}${authorName(message, names)}: ${botText(message)}`;
 	}
-	return humanLine(message, names, message.attachments.map(attachmentNote));
+	return humanLine(
+		message,
+		names,
+		message.attachments.map(attachmentNote),
+		where,
+	);
 }
 
 /**
  * Bobert以外の発言を「[時刻] 名前: 本文」の文にする。本文の後に、Embedの中身と、notes(添付のファイル名など)を書き添える。
- * ほかのBotの発言は、名前にBotであることと、どのコマンドへの返答かを書き添える。
+ * ほかのBotの発言は、名前にBotであることと、どのコマンドへの返答かを書き添える。whereは、時刻の後に書く
  */
 function humanLine(
 	message: StoredMessageInput,
 	names: ReadonlyMap<string, string>,
 	notes: readonly string[],
+	where = "",
 ): string {
 	const mentioned = new Map(
 		message.mentions.map((user) => [user.id, names.get(user.id) ?? user.name]),
@@ -165,7 +174,7 @@ function humanLine(
 	]
 		.filter((text) => text !== "")
 		.join("\n");
-	return `[${formatJst(message.createdAt)}] ${speakerLabel(message, names)}: ${body}`;
+	return `[${formatJst(message.createdAt)}] ${where}${speakerLabel(message, names)}: ${body}`;
 }
 
 /**

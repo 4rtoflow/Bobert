@@ -40,10 +40,13 @@ export interface HistoryDeps {
 	channelId: string;
 	fetchMessage: MessageFetcher;
 	listMessages: MessageLister;
-	/** このチャンネルで、検索語に意味が近いメッセージのIDを、近い順に探す(意味で検索) */
+	/**
+	 * 検索語に意味が近いメッセージのIDを、近い順に探す(意味で検索)。
+	 * scopeがchannelなら、このチャンネルから。serverなら、このサーバーの公開チャンネル全体から
+	 */
 	searchMessages: (
 		query: string,
-		options: Omit<SearchOptions, "channelId">,
+		options: Omit<SearchOptions, "scope"> & { scope: "channel" | "server" },
 	) => Promise<string[]>;
 	/** Discordから読んだメッセージを、保存に回す(読んだ分だけ取り込む) */
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
@@ -270,18 +273,20 @@ const DISCORD_EPOCH = 1420070400000n;
 
 /**
  * チャンネルの履歴を、範囲を指定して読む(時系列で読む道具)。返すのは古い順。
+ * channelIdを省くと、今いるチャンネルを読む。
  * 過去ログの取り込みが済んでいれば、保存したもの(D1)から読む。
- * 済んでいなければ、保存していない期間があるので、Discordから読み、保存にも回す。
+ * 済んでいなければ、保存していない期間があるので、Discordから読み、保存にも回す(保存するのは、公開チャンネルの分だけ)。
  */
 export async function readChannelTimeline(
 	range: TimelineRange,
 	deps: HistoryDeps,
+	channelId = deps.channelId,
 ): Promise<StoredMessageInput[]> {
-	const imported = await getChannelImport(deps.db, deps.channelId);
+	const imported = await getChannelImport(deps.db, channelId);
 	if (imported?.status === "done") {
-		return loadChannelMessages(deps.db, deps.channelId, range);
+		return loadChannelMessages(deps.db, channelId, range);
 	}
-	const page = await deps.listMessages(deps.channelId, {
+	const page = await deps.listMessages(channelId, {
 		...(range.newestFirst
 			? range.before === null
 				? {}

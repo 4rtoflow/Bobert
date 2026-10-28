@@ -1,7 +1,13 @@
 import type {
 	APIGuildMember,
 	APIMessage,
+	RESTGetAPIChannelResult,
+	RESTGetAPIChannelThreadsArchivedPublicResult,
 	RESTGetAPIGatewayBotResult,
+	RESTGetAPIGuildChannelsResult,
+	RESTGetAPIGuildMessagesSearchResult,
+	RESTGetAPIGuildRolesResult,
+	RESTGetAPIGuildThreadsResult,
 	RESTPatchAPIChannelMessageJSONBody,
 	RESTPatchAPIWebhookWithTokenMessageJSONBody,
 	RESTPostAPIChannelMessageJSONBody,
@@ -131,6 +137,97 @@ export function getChannelMessages(
 		`/channels/${channelId}/messages?${query}`,
 		{ botToken },
 	);
+}
+
+/** チャンネル(スレッドを含む)の情報を取得する */
+export function getChannel(
+	botToken: string,
+	channelId: string,
+): Promise<RESTGetAPIChannelResult> {
+	return discordRequest("GET channel", "GET", `/channels/${channelId}`, {
+		botToken,
+	});
+}
+
+/** サーバーのチャンネルの一覧を取得する(スレッドは含まない) */
+export function getGuildChannels(
+	botToken: string,
+	guildId: string,
+): Promise<RESTGetAPIGuildChannelsResult> {
+	return discordRequest(
+		"GET guild channels",
+		"GET",
+		`/guilds/${guildId}/channels`,
+		{ botToken },
+	);
+}
+
+/** サーバーのロールの一覧を取得する */
+export function getGuildRoles(
+	botToken: string,
+	guildId: string,
+): Promise<RESTGetAPIGuildRolesResult> {
+	return discordRequest("GET guild roles", "GET", `/guilds/${guildId}/roles`, {
+		botToken,
+	});
+}
+
+/** サーバーの、アーカイブされていないスレッドの一覧を取得する(Botが見られるもの) */
+export function getActiveGuildThreads(
+	botToken: string,
+	guildId: string,
+): Promise<RESTGetAPIGuildThreadsResult> {
+	return discordRequest(
+		"GET active guild threads",
+		"GET",
+		`/guilds/${guildId}/threads/active`,
+		{ botToken },
+	);
+}
+
+/**
+ * チャンネルの、アーカイブされた公開スレッドを、新しい順に最大100件取得する。
+ * beforeを指定すると、その時刻(ISO 8601)より前にアーカイブされたもの。読むにはメッセージ履歴を読む権限が必要
+ */
+export function getArchivedPublicThreads(
+	botToken: string,
+	channelId: string,
+	before: string | null,
+): Promise<RESTGetAPIChannelThreadsArchivedPublicResult> {
+	const query = new URLSearchParams({ limit: "100" });
+	if (before) {
+		query.set("before", before);
+	}
+	return discordRequest(
+		"GET archived public threads",
+		"GET",
+		`/channels/${channelId}/threads/archived/public?${query}`,
+		{ botToken },
+	);
+}
+
+/**
+ * サーバーのメッセージのうち、指定したチャンネル(500個まで)のものの件数を、メッセージ検索で数える。
+ * 読むにはメッセージ履歴を読む権限と、Message Contentのインテントが必要。
+ * サーバーの検索の準備がまだなら(202)、nullを返す
+ */
+export async function countGuildMessages(
+	botToken: string,
+	guildId: string,
+	channelIds: readonly string[],
+): Promise<number | null> {
+	const query = new URLSearchParams({ limit: "1" });
+	// 配列は、同じ名前を繰り返して渡す
+	for (const channelId of channelIds) {
+		query.append("channel_id", channelId);
+	}
+	const result = await discordRequest<RESTGetAPIGuildMessagesSearchResult>(
+		"GET guild messages search",
+		"GET",
+		`/guilds/${guildId}/messages/search?${query}`,
+		{ botToken },
+	);
+	return "total_results" in result ? result.total_results : null;
 }
 
 /** サーバーのメンバーを1人取得する。サーバーにいなければ、404(コード10007)のDiscordApiErrorになる */

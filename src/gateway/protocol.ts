@@ -3,9 +3,13 @@ import { GatewayCloseCodes, GatewayIntentBits } from "../discord/constants";
 /**
  * Bobertが使うGatewayのインテント。
  * Message Contentは必須(仕様: docs/spec/architecture.md「決定事項」)。
+ * Guildsは、チャンネル・スレッド・ロールの変更を受け取り、公開チャンネルかどうかを判定するため
+ * (仕様: docs/spec/architecture.md「サーバー全体の公開チャンネル」)
  */
 export const BOBERT_INTENTS =
-	GatewayIntentBits.GuildMessages | GatewayIntentBits.MessageContent;
+	GatewayIntentBits.Guilds |
+	GatewayIntentBits.GuildMessages |
+	GatewayIntentBits.MessageContent;
 
 /** 再接続してはいけない切断コード。トークンやインテントなどの設定の誤りを表す。 */
 const FATAL_CLOSE_CODES: ReadonlySet<number> = new Set([

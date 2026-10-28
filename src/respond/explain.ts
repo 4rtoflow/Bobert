@@ -10,7 +10,6 @@ import {
 	historyFor,
 	notAnswer,
 	recordConversationSize,
-	startImport,
 	withReplyModel,
 } from "./handler";
 import { splitMessage } from "./split";
@@ -42,7 +41,6 @@ export async function handleExplainJob(
 }
 
 async function explain(job: ExplainJob, env: Env): Promise<void> {
-	await startImport(env, job.channelId, job.guildId);
 	const history = historyFor(env, {
 		guildId: job.guildId,
 		channelId: job.channelId,

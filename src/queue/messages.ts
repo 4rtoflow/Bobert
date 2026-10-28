@@ -1,11 +1,19 @@
-/** Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとCompactJob、INGEST_QUEUEはそれ以外を運ぶ。 */
+import type { ChannelInfo } from "../discord/channels";
+
+/**
+ * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとCompactJobとImportCommandJob、
+ * INGEST_QUEUEはそれ以外を運ぶ。
+ */
 export type QueueMessage =
 	| RespondJob
 	| ExplainJob
 	| CompactJob
+	| ImportCommandJob
 	| IngestJob
 	| DeleteJob
-	| ImportJob;
+	| ImportJob
+	| ChannelSyncJob
+	| ReindexJob;
 
 /** 応答の生成。会話の履歴を組み立ててLLMを呼び、Discordに返信する。 */
 export interface RespondJob {
@@ -82,6 +90,53 @@ export interface ImportJob {
 	channelId: string;
 	guildId: string | null;
 	before: string | null;
+}
+
+/**
+ * `/import`の実行。公開チャンネルと公開スレッドを列挙して、過去ログの取り込みを始め、
+ * 保留にした応答(実行したチャンネルの全員に見える)を、進み具合の表示にする。
+ */
+export interface ImportCommandJob {
+	kind: "import_command";
+	/** InteractionのID。同じInteractionで2回始めないために使う */
+	interactionId: string;
+	/** Interactionのトークン。保留にした応答を書き換えるのに使う(15分で切れる) */
+	interactionToken: string;
+	guildId: string;
+	/** 実行したチャンネル */
+	channelId: string;
+	/** 実行した人 */
+	userId: string;
+	/** 実行した時刻(UNIX時間のミリ秒)。Interactionのトークンが切れる時刻の計算に使う */
+	requestedAt: number;
+}
+
+/**
+ * チャンネル・スレッド・ロールの作成・変更・削除を、記録に反映する
+ * (仕様: docs/spec/architecture.md「サーバー全体の公開チャンネル」)。
+ */
+export interface ChannelSyncJob {
+	kind: "channels";
+	guildId: string;
+	/** 通知を受け取った時刻(UNIX時間のミリ秒)。古い通知で上書きしないため */
+	syncedAt: number;
+	/** @everyoneの権限(サーバーの情報や、ロールの変更の通知で分かったとき) */
+	everyonePermissions?: string;
+	/** 作成・変更されたチャンネルとスレッド */
+	channels?: ChannelInfo[];
+	/** 削除されたチャンネルとスレッド */
+	deleted?: string[];
+	/**
+	 * サーバーの全チャンネル(スレッドを除く)のID。サーバーの情報(GUILD_CREATE)で届いたとき。
+	 * 記録にあってここにないチャンネルは、Botが止まっていた間に削除されたとみなす
+	 */
+	allChannelIds?: string[];
+}
+
+/** 保存したメッセージのベクトルを、afterより後のものから1回分入れ直す(メタデータを足したときなど) */
+export interface ReindexJob {
+	kind: "reindex";
+	after: string | null;
 }
 
 export interface StoredMessageInput {

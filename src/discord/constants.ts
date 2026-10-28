@@ -2,6 +2,7 @@ import type {
 	ApplicationCommandType as DiscordApplicationCommandType,
 	ApplicationIntegrationType as DiscordApplicationIntegrationType,
 	ButtonStyle as DiscordButtonStyle,
+	ChannelType as DiscordChannelType,
 	ComponentType as DiscordComponentType,
 	GatewayCloseCodes as DiscordGatewayCloseCodes,
 	GatewayIntentBits as DiscordGatewayIntentBits,
@@ -33,6 +34,7 @@ export const GatewayOpcodes = {
 } as const;
 
 export const GatewayIntentBits = {
+	Guilds: 1 as DiscordGatewayIntentBits.Guilds,
 	GuildMessages: 512 as DiscordGatewayIntentBits.GuildMessages,
 	DirectMessages: 4096 as DiscordGatewayIntentBits.DirectMessages,
 	MessageContent: 32768 as DiscordGatewayIntentBits.MessageContent,
@@ -109,4 +111,25 @@ export const InteractionContextType = {
 
 export const ApplicationIntegrationType = {
 	GuildInstall: 0 as DiscordApplicationIntegrationType.GuildInstall,
+} as const;
+
+export const ChannelType = {
+	GuildText: 0 as DiscordChannelType.GuildText,
+	GuildVoice: 2 as DiscordChannelType.GuildVoice,
+	GuildCategory: 4 as DiscordChannelType.GuildCategory,
+	GuildAnnouncement: 5 as DiscordChannelType.GuildAnnouncement,
+	AnnouncementThread: 10 as DiscordChannelType.AnnouncementThread,
+	PublicThread: 11 as DiscordChannelType.PublicThread,
+	PrivateThread: 12 as DiscordChannelType.PrivateThread,
+	GuildStageVoice: 13 as DiscordChannelType.GuildStageVoice,
+	GuildForum: 15 as DiscordChannelType.GuildForum,
+	GuildMedia: 16 as DiscordChannelType.GuildMedia,
+} as const;
+
+/** 権限のビット。discord-api-types の PermissionFlagsBits は実行時の値なので、ここで持つ */
+export const PermissionFlags = {
+	Administrator: 1n << 3n,
+	ManageGuild: 1n << 5n,
+	ViewChannel: 1n << 10n,
+	ReadMessageHistory: 1n << 16n,
 } as const;

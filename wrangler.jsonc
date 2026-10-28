@@ -22,11 +22,17 @@
 			"CREDENTIAL_ENCRYPTION_KEYS"
 		]
 	},
-	// Discord Gatewayへの常時接続を持つDurable Object
+	// Discord Gatewayへの常時接続を持つDurable Objectと、/importの進み具合を見張るDurable Object
 	"durable_objects": {
-		"bindings": [{ "name": "GATEWAY", "class_name": "Gateway" }]
+		"bindings": [
+			{ "name": "GATEWAY", "class_name": "Gateway" },
+			{ "name": "IMPORT_PROGRESS", "class_name": "ImportProgress" }
+		]
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Gateway"] }],
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["Gateway"] },
+		{ "tag": "v2", "new_sqlite_classes": ["ImportProgress"] }
+	],
 	"queues": {
 		"producers": [
 			{ "binding": "RESPOND_QUEUE", "queue": "bobert-respond-dev" },
@@ -82,9 +88,15 @@
 				]
 			},
 			"durable_objects": {
-				"bindings": [{ "name": "GATEWAY", "class_name": "Gateway" }]
+				"bindings": [
+					{ "name": "GATEWAY", "class_name": "Gateway" },
+					{ "name": "IMPORT_PROGRESS", "class_name": "ImportProgress" }
+				]
 			},
-			"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Gateway"] }],
+			"migrations": [
+				{ "tag": "v1", "new_sqlite_classes": ["Gateway"] },
+				{ "tag": "v2", "new_sqlite_classes": ["ImportProgress"] }
+			],
 			"queues": {
 				"producers": [
 					{ "binding": "RESPOND_QUEUE", "queue": "bobert-respond" },
