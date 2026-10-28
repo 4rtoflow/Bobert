@@ -81,6 +81,8 @@ export interface ReplyNotes {
 	imagesSkipped: boolean;
 	/** Web検索をONにしているのに、このモデルでは使えなかった */
 	webSearchSkipped: boolean;
+	/** AIが読んだスキルの名前(読んだ順) */
+	skills?: readonly string[];
 	/** 利用量の表示の行。表示しないならnull */
 	usage: string | null;
 	/** 寄付で答えたときの行。寄付で答えなかったらnull */
@@ -98,6 +100,7 @@ export function formatReply(
 	{
 		imagesSkipped,
 		webSearchSkipped,
+		skills = [],
 		usage,
 		donation = null,
 		compaction = null,
@@ -115,6 +118,12 @@ export function formatReply(
 	const sources = sourcesNote(result.sources);
 	if (sources !== null) {
 		notes.push(sources);
+	}
+	// 誰でも編集できるスキルが答えに効いたことを、チャンネルの全員が分かるようにする
+	if (skills.length > 0) {
+		notes.push(
+			`-# スキル${skills.map((name) => `「${name}」`).join("")}を使いました`,
+		);
 	}
 	if (imagesSkipped) {
 		notes.push("-# このモデルは画像を読めません");

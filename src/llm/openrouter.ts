@@ -1,5 +1,9 @@
-import { MAX_TOOL_CALLS, MAX_WEB_SEARCHES } from "../config/models";
-import { runChatTool, TOOL_LIMIT_REACHED } from "./tools";
+import {
+	MAX_SKILL_READS,
+	MAX_TOOL_CALLS,
+	MAX_WEB_SEARCHES,
+} from "../config/models";
+import { countsTowardLimit, runChatTool, TOOL_LIMIT_REACHED } from "./tools";
 import {
 	type ChatMessage,
 	type ChatRequest,
@@ -58,8 +62,11 @@ interface OpenRouterResponse {
 	error?: OpenRouterError;
 }
 
-/** 1回の返答で、AIとやり取りする回数の上限。道具の結果を返すときに数える */
-const MAX_ROUNDS = 10;
+/**
+ * 1回の返答で、AIとやり取りする回数の上限。道具の結果を返すときに数える。
+ * スキルを読む分は、道具の呼び出しの上限とは別に数えるので、その回数を足す
+ */
+const MAX_ROUNDS = 10 + MAX_SKILL_READS;
 
 /** OpenRouterに送る会話の1件 */
 type OpenRouterMessage =
@@ -133,15 +140,20 @@ export async function chatWithOpenRouter(
 			tool_calls: calls,
 		});
 		for (const call of calls) {
+			// スキルを読む道具は、上限に数えない(道具が自分で回数を数える)
+			const name = call.function?.name ?? "";
+			const counted = countsTowardLimit(request.tools, name);
 			const outcome =
-				toolCalls < MAX_TOOL_CALLS
+				!counted || toolCalls < MAX_TOOL_CALLS
 					? await runChatTool(
 							request.tools,
-							call.function?.name ?? "",
+							name,
 							parseArguments(call.function?.arguments),
 						)
 					: TOOL_LIMIT_REACHED;
-			toolCalls++;
+			if (counted) {
+				toolCalls++;
+			}
 			messages.push({
 				role: "tool",
 				tool_call_id: call.id,

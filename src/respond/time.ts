@@ -11,6 +11,11 @@ export function formatJst(ms: number): string {
 	return `${ymd(date)}(${WEEKDAYS[date.getUTCDay()]}) ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
 
+/** 日本時間の日付。例: 2026-10-27 */
+export function formatJstDate(ms: number): string {
+	return ymd(jstDate(ms));
+}
+
 /** AIに日時を指定してもらうときの形。秒まで書く。例: 2026-10-27 14:05:09 */
 export function formatJstInput(ms: number): string {
 	const date = jstDate(ms);

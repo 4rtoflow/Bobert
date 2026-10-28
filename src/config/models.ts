@@ -206,6 +206,12 @@ export const MAX_WEB_SEARCHES = 5;
 /** 1回の返答で、Bobertの道具を呼べる回数の上限(仕様: docs/spec/architecture.md「過去メッセージを参照する道具」) */
 export const MAX_TOOL_CALLS = 5;
 
+/**
+ * 1回の返答で、スキルを読める回数の上限(仕様: docs/spec/behavior.md「スキル」)。
+ * 道具の呼び出しの上限(MAX_TOOL_CALLS)とは別に数える。スキルの手順で過去のメッセージを読むときに、その回数が減らないように
+ */
+export const MAX_SKILL_READS = 3;
+
 /** 思考の深さ(effort)を設定していない人に使う段階。モデルが選べなければ、いちばん近い段階を使う */
 export const DEFAULT_EFFORT = "low";
 

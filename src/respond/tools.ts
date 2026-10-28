@@ -1,3 +1,4 @@
+import { MAX_SKILL_READS } from "../config/models";
 import { DiscordApiError } from "../discord/api";
 import { hasMessages, hasPosts } from "../discord/channels";
 import { findOpenRouterModel } from "../llm/model-info";
@@ -13,6 +14,7 @@ import {
 	findAuthorIdsInGuild,
 	loadMessagesByIds,
 } from "../store/messages";
+import { findSkillByName, type SkillSummary } from "../store/skills";
 import type { UserSettings } from "../store/users";
 import { messageLine } from "./conversation";
 import {
@@ -33,6 +35,17 @@ const MAX_SEARCH_RESULTS = 10;
 /** AIが指定した日時を読めなかったときに、AIに返す文 */
 const INVALID_TIME =
 	"日時の形が正しくありません。日本時間で「2026-10-01」や「2026-10-01 09:00」の形で指定してください。";
+
+/** スキルを読む道具の名前(AIへの指示の、スキルの一覧の前置きでも使う) */
+export const READ_SKILL_TOOL_NAME = "read_skill";
+
+/** 1回の返答で、スキルを読んだ記録。返答の末尾に、使ったスキルの名前を書くのに使う */
+export interface SkillReads {
+	/** 呼ばれた回数(上限を数える) */
+	calls: number;
+	/** 本文を返したスキルの名前。読んだ順で、同じスキルは1回だけ */
+	names: string[];
+}
 
 /** 会話の最初のメッセージが、別のメッセージへの返信か。返信なら、返信先を読む道具を渡す */
 export function startsWithReply(
@@ -344,6 +357,51 @@ export function channelListTool(history: HistoryDeps): ChatTool {
 					return `- #${channel.name}${notes.length > 0 ? `(${notes.join("。")})` : ""}`;
 				}),
 			].join("\n");
+		},
+	};
+}
+
+/**
+ * スキルを読む道具(仕様: docs/spec/behavior.md「スキル」)。
+ * AIへの指示にあるスキルの一覧から、AIが選んだスキルの本文を返す。過去のメッセージと違い、本文は従う指示として渡す。
+ * 道具の呼び出しの上限には数えず、1回の返答で読めるのはMAX_SKILL_READS回まで。読んだスキルは、readsに記録する
+ */
+export function readSkillTool(
+	db: D1Database,
+	guildId: string,
+	skills: readonly SkillSummary[],
+	reads: SkillReads,
+): ChatTool {
+	return {
+		name: READ_SKILL_TOOL_NAME,
+		description: `スキルの本文を読みます。名前は、指示にあるスキルの一覧から選んでください。1回の返答で読めるのは${MAX_SKILL_READS}つまでです。`,
+		inputSchema: {
+			type: "object",
+			properties: {
+				name: {
+					type: "string",
+					enum: skills.map((skill) => skill.name),
+					description: "読むスキルの名前です",
+				},
+			},
+			required: ["name"],
+		},
+		countsTowardLimit: false,
+		run: async (input) => {
+			if (reads.calls >= MAX_SKILL_READS) {
+				return `1回の返答で読めるスキルは${MAX_SKILL_READS}つまでです。読んだスキルだけで答えてください。`;
+			}
+			reads.calls++;
+			const name = typeof input.name === "string" ? input.name.trim() : "";
+			// 一覧を渡した後に、ほかの人が消したり名前を変えたりしていることがある
+			const skill = await findSkillByName(db, guildId, name);
+			if (skill === null) {
+				return `「${name}」というスキルはありません。一覧にある名前で指定してください。`;
+			}
+			if (!reads.names.includes(skill.name)) {
+				reads.names.push(skill.name);
+			}
+			return `スキル「${skill.name}」の本文です。この手順に従って答えてください。\n\n${skill.body}`;
 		},
 	};
 }

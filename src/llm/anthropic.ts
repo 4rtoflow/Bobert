@@ -1,6 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { MAX_TOOL_CALLS, MAX_WEB_SEARCHES } from "../config/models";
-import { runChatTool, TOOL_LIMIT_REACHED } from "./tools";
+import {
+	MAX_SKILL_READS,
+	MAX_TOOL_CALLS,
+	MAX_WEB_SEARCHES,
+} from "../config/models";
+import { countsTowardLimit, runChatTool, TOOL_LIMIT_REACHED } from "./tools";
 import {
 	type ChatMessage,
 	type ChatRequest,
@@ -47,8 +51,11 @@ const DYNAMIC_WEB_SEARCH_MODELS: ReadonlySet<string> = new Set([
 /** サーバー側の処理が長くて、返答が途中で止まった(pause_turn)ときに、続きを頼む回数の上限 */
 const MAX_CONTINUATIONS = 3;
 
-/** 1回の返答で、AIとやり取りする回数の上限。続きを頼むときと、道具の結果を返すときに数える */
-const MAX_ROUNDS = 10;
+/**
+ * 1回の返答で、AIとやり取りする回数の上限。続きを頼むときと、道具の結果を返すときに数える。
+ * スキルを読む分は、道具の呼び出しの上限とは別に数えるので、その回数を足す
+ */
+const MAX_ROUNDS = 10 + MAX_SKILL_READS;
 
 /**
  * ユーザーのAnthropicのAPIキーで、Claudeを直接呼ぶ。
@@ -113,11 +120,15 @@ export async function chatWithAnthropic(
 			messages.push({ role: "assistant", content: message.content });
 			const results: Anthropic.ToolResultBlockParam[] = [];
 			for (const use of uses) {
+				// スキルを読む道具は、上限に数えない(道具が自分で回数を数える)
+				const counted = countsTowardLimit(request.tools, use.name);
 				const outcome =
-					toolCalls < MAX_TOOL_CALLS
+					!counted || toolCalls < MAX_TOOL_CALLS
 						? await runChatTool(request.tools, use.name, use.input)
 						: TOOL_LIMIT_REACHED;
-				toolCalls++;
+				if (counted) {
+					toolCalls++;
+				}
 				results.push({
 					type: "tool_result",
 					tool_use_id: use.id,

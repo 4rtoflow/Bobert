@@ -15,6 +15,17 @@ export const TOOL_LIMIT_REACHED: ToolOutcome = {
 	isError: true,
 };
 
+/** 道具の呼び出しの上限に数える道具か。知らない道具も数える(呼ばれ続けても、上限で止まるように) */
+export function countsTowardLimit(
+	tools: readonly ChatTool[],
+	name: string,
+): boolean {
+	return (
+		tools.find((candidate) => candidate.name === name)?.countsTowardLimit !==
+		false
+	);
+}
+
 /** AIが呼んだ道具を実行する。知らない道具や、実行に失敗したときは、そう伝える結果にする */
 export async function runChatTool(
 	tools: readonly ChatTool[],
