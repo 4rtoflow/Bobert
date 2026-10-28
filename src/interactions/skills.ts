@@ -83,8 +83,10 @@ const FILE_INPUT_ID = "file";
 
 /** 入力画面で書ける本文の長さ(Discordの入力欄の上限) */
 const MAX_MODAL_BODY_LENGTH = 4000;
-/** 一覧に書く、説明の先頭の長さ */
-const LIST_PREVIEW_LENGTH = 40;
+/**
+ * 一覧に書く説明の長さ。全文を書き、1通に収まらなければ、順に短くする(0は説明を書かない)
+ */
+const LIST_PREVIEW_LENGTHS = [Number.POSITIVE_INFINITY, 100, 40, 20, 0];
 /** セレクトメニューの選択肢の説明の長さ(Discordの上限) */
 const OPTION_DESCRIPTION_LENGTH = 100;
 /** Discordの1メッセージの長さの上限 */
@@ -93,13 +95,8 @@ const MESSAGE_LENGTH = 2000;
 const MAX_FILE_BYTES = 1024 * 1024;
 const SKILL_FILE_NAME = "SKILL.md";
 
-/** /skills の画面の、スキルの説明 */
-const EXPLANATION = [
-	"スキルは、AIに教えておく手順や知識です。質問に関係するスキルがあると、AIがそれを読んで答えます。登録したスキルは、このサーバーの全員への返答で使われます。誰でも追加・編集・削除できます。",
-	"追加は `/regskills` から行います。SKILL.mdを添付するか、添付せずに入力画面で書きます。",
-	"-# スキルの名前と説明は毎回、本文は読んだときだけAIに渡します。その分、返答の費用が増えます。",
-	"-# Claude Codeなどで使うSKILL.mdも、そのまま追加できます。参考資料とスクリプトは使えません。",
-];
+/** /skills の画面の見出し */
+const PANEL_HEADER = "**登録されたスキル**";
 
 const INVALID_NAME =
 	"名前は、英小文字、数字、ハイフンだけで、64文字までにしてください。例: `meeting-notes`";
@@ -567,27 +564,18 @@ async function panel(
 }
 
 /**
- * /skills の画面の本文。一覧には、説明の先頭と、最後に登録か編集をした人を書く。
- * 1通に収まらなければ、説明を短くし、それでも収まらなければ人の名前も外す
+ * /skills の画面の本文。見出しの次の行から、スキルの名前と説明を箇条書きにする(名前の順)。
+ * 説明は全文を書き、1通に収まらなければ短くする
  */
 function panelText(skills: SkillSummary[]): string {
-	const header =
-		skills.length === 0
-			? "**このサーバーのスキル**: なし"
-			: `**このサーバーのスキル**: ${skills.length}個(${MAX_SKILLS}個まで)`;
-	const layouts = [
-		{ previewLength: LIST_PREVIEW_LENGTH, withPerson: true },
-		{ previewLength: LIST_PREVIEW_LENGTH / 2, withPerson: true },
-		{ previewLength: 0, withPerson: true },
-		{ previewLength: 0, withPerson: false },
-	];
+	if (skills.length === 0) {
+		return `${PANEL_HEADER}: なし`;
+	}
 	let text = "";
-	for (const layout of layouts) {
+	for (const previewLength of LIST_PREVIEW_LENGTHS) {
 		text = [
-			header,
-			...skills.map((skill) => listLine(skill, layout)),
-			"",
-			...EXPLANATION,
+			PANEL_HEADER,
+			...skills.map((skill) => listLine(skill, previewLength)),
 		].join("\n");
 		if (text.length <= MESSAGE_LENGTH) {
 			return text;
@@ -596,21 +584,11 @@ function panelText(skills: SkillSummary[]): string {
 	return text.slice(0, MESSAGE_LENGTH);
 }
 
-/** 一覧の1行。例: - `meeting-notes`(bobが編集): 会議の議事録を… */
-function listLine(
-	skill: SkillSummary,
-	layout: { previewLength: number; withPerson: boolean },
-): string {
-	const person = !layout.withPerson
-		? ""
-		: skill.editedByName !== null
-			? `(${skill.editedByName}が編集)`
-			: `(${skill.createdByName}が登録)`;
+/** 一覧の1行。説明はpreviewLength文字まで(0なら書かない)。例: - `meeting-notes`: 会議の議事録を書く手順 */
+function listLine(skill: SkillSummary, previewLength: number): string {
 	const description =
-		layout.previewLength > 0
-			? `: ${preview(skill.description, layout.previewLength)}`
-			: "";
-	return `- \`${skill.name}\`${person}${description}`;
+		previewLength > 0 ? `: ${preview(skill.description, previewLength)}` : "";
+	return `- \`${skill.name}\`${description}`;
 }
 
 /** スキルを選ぶセレクトメニュー。選択肢には、名前と説明の先頭を出す */
