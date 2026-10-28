@@ -59,7 +59,7 @@ Discordは、通常のメッセージやメンションをGateway(常時接続�
 - **接続先:** Get Gateway Bot(`GET /gateway/bot`)で取得したURLに、`?v=10&encoding=json`を付けて接続する。v10は実装時点(2026年10月)の最新版。
 - **圧縮:** `zlib-stream`や`zstd-stream`は使わない。まずは単純さを優先する。
 - **インテント:** `GUILDS`(1)、`GUILD_MESSAGES`(512)と、特権の`MESSAGE_CONTENT`(32768)。`GUILDS`は特権ではなく、チャンネル・スレッド・ロールの変更を受け取るために使う。DMに対応したら`DIRECT_MESSAGES`(4096)を足す。
-  - インテントを変えると、Resumeでは反映されず、新しい接続(Identify)が要る。デプロイの後に、管理用エンドポイントで止めてから始め直す。
+  - インテントを変えると、Resumeでは反映されず、新しい接続(Identify)が要る。デプロイの後に、管理用エンドポイントで止め、4分ほど待ってから始め直す。Gatewayを持つDurable Objectは、デプロイしても前の版のまま動き続けることがあり、止めてしばらくたつと片付けられて、次に始めたときに新しい版で動くため。
 - **Message Contentが無効な場合:** Developer Portalで有効になっていないと、Gatewayは切断コード4014で切れる。このときは再接続せず、管理者に通知する。
 
 ### Durable Objectのストレージに保存するもの
