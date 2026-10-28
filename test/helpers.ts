@@ -171,8 +171,17 @@ export interface FetchCall {
 	method: string;
 	url: URL;
 	headers: Headers;
-	/** JSONなら読んだもの、それ以外は文字列 */
+	/**
+	 * JSONなら読んだもの、それ以外は文字列。
+	 * ファイルを添付したもの(multipart/form-data)は、payload_jsonを読んだものに、filesとして添付したファイルを足す
+	 */
 	body: unknown;
+}
+
+/** 添付したファイル */
+export interface SentFile {
+	name: string;
+	content: string;
 }
 
 /**
@@ -185,17 +194,36 @@ export function mockFetch(
 	const calls: FetchCall[] = [];
 	vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
 		const request = new Request(input, init);
-		const text = await request.text();
+		const multipart = (request.headers.get("Content-Type") ?? "").startsWith(
+			"multipart/form-data",
+		);
 		const call: FetchCall = {
 			method: request.method,
 			url: new URL(request.url),
 			headers: request.headers,
-			body: parseBody(text),
+			body: multipart
+				? await parseFormData(await request.formData())
+				: parseBody(await request.text()),
 		};
 		calls.push(call);
 		return handler(call);
 	});
 	return calls;
+}
+
+/** ファイルを添付したリクエストの、payload_jsonと、添付したファイル */
+async function parseFormData(form: FormData): Promise<unknown> {
+	const payload = form.get("payload_json");
+	const files: SentFile[] = [];
+	for (const [key, value] of form.entries()) {
+		if (key.startsWith("files[") && typeof value !== "string") {
+			files.push({ name: value.name, content: await value.text() });
+		}
+	}
+	return {
+		...(typeof payload === "string" ? JSON.parse(payload) : {}),
+		files,
+	};
 }
 
 function parseBody(text: string): unknown {

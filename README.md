@@ -15,24 +15,24 @@ Discord上でAIと会話できるBot。Botへのメンションや返信で話�
 
 Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のものをまとめている。
 
-| ファイル               | 役割                                                                                               |
-| ---------------------- | -------------------------------------------------------------------------------------------------- |
-| `src/index.ts`         | エントリポイント(HTTPの受付とQueueの処理)                                                          |
-| `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)                                |
-| `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                                                          |
-| `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)                                    |
-| `src/import/`          | `/import`(公開チャンネルの過去ログの取り込みの始め方と、進み具合を見張るDurable Object)            |
-| `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認                                         |
-| `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                                               |
-| `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                              |
-| `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)                                         |
-| `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                                |
-| `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ、寄付)と、検索用のデータ化 |
-| `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                                   |
-| `src/config/models.ts` | `/model`で選べるモデルの候補                                                                       |
-| `src/discord/`         | Discord APIの定数と呼び出し                                                                        |
-| `migrations/`          | D1のスキーマ                                                                                       |
-| `test/`                | テスト(Workersの実行環境で動かす)                                                                  |
+| ファイル               | 役割                                                                                                       |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`         | エントリポイント(HTTPの受付とQueueの処理)                                                                  |
+| `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)                                        |
+| `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                                                                  |
+| `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)                                            |
+| `src/import/`          | `/import`(公開チャンネルの過去ログの取り込みの始め方と、進み具合を見張るDurable Object)                    |
+| `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認                                                 |
+| `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                                                       |
+| `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                                      |
+| `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)                                                 |
+| `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                                        |
+| `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ、寄付、スキル)と、検索用のデータ化 |
+| `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                                           |
+| `src/config/models.ts` | `/model`で選べるモデルの候補                                                                               |
+| `src/discord/`         | Discord APIの定数と呼び出し                                                                                |
+| `migrations/`          | D1のスキーマ                                                                                               |
+| `test/`                | テスト(Workersの実行環境で動かす)                                                                          |
 
 ## 必要なもの
 

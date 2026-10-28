@@ -21,7 +21,6 @@ import {
 	DONATE_GIVE_ID,
 	DONATE_MODAL_ID,
 	DONATE_STOP_ID,
-	type Donor,
 	donateCommand,
 	donationModal,
 	stopDonation,
@@ -47,6 +46,13 @@ import {
 	setupCommand,
 	submitAnthropicKey,
 } from "./setup";
+import {
+	SKILLS_COMMAND_NAME,
+	SKILLS_ID_PREFIX,
+	skillComponent,
+	skillsCommand,
+	submitSkillModal,
+} from "./skills";
 import { verifyDiscordRequest } from "./verify";
 
 /**
@@ -82,9 +88,10 @@ async function route(
 	if (!user) {
 		return notReady();
 	}
-	// 寄付は、サーバーごと。名前は、サーバーで見えている名前
+	// 寄付とスキルは、サーバーごと。
+	// 操作した人の名前は、サーバーで見えている名前(寄付した人や、スキルを登録・編集した人として見せる)
 	const guildId = interaction.guild_id;
-	const donor: Donor = {
+	const actor = {
 		id: user.id,
 		name: interaction.member?.nick ?? user.global_name ?? user.username,
 	};
@@ -125,11 +132,14 @@ async function route(
 			if (interaction.data.name === "prompt") {
 				return promptCommand(env, user.id);
 			}
+			if (interaction.data.name === SKILLS_COMMAND_NAME && guildId) {
+				return skillsCommand(env, guildId);
+			}
 			if (interaction.data.name === "settings") {
 				return settingsCommand(interaction, env, ctx, user.id);
 			}
 			if (interaction.data.name === "donate" && guildId) {
-				return donateCommand(env, guildId, donor);
+				return donateCommand(env, guildId, actor);
 			}
 			if (interaction.data.name === IMPORT_COMMAND_NAME && guildId) {
 				return importCommand(interaction, env, guildId, user.id);
@@ -158,6 +168,18 @@ async function route(
 					return toggled;
 				}
 			}
+			if (interaction.data.custom_id.startsWith(SKILLS_ID_PREFIX) && guildId) {
+				const response = await skillComponent(
+					interaction,
+					env,
+					ctx,
+					guildId,
+					actor,
+				);
+				if (response) {
+					return response;
+				}
+			}
 			if (interaction.data.component_type === ComponentType.StringSelect) {
 				const value = interaction.data.values[0] ?? "";
 				if (interaction.data.custom_id === MODEL_SELECT_ID) {
@@ -174,7 +196,7 @@ async function route(
 				return donationModal(env, user.id);
 			}
 			if (interaction.data.custom_id === DONATE_STOP_ID && guildId) {
-				return stopDonation(env, guildId, donor);
+				return stopDonation(env, guildId, actor);
 			}
 			break;
 		case InteractionType.ModalSubmit:
@@ -188,7 +210,19 @@ async function route(
 				return submitPrompt(interaction, env, user.id);
 			}
 			if (interaction.data.custom_id === DONATE_MODAL_ID && guildId) {
-				return submitDonation(interaction, env, guildId, donor);
+				return submitDonation(interaction, env, guildId, actor);
+			}
+			if (interaction.data.custom_id.startsWith(SKILLS_ID_PREFIX) && guildId) {
+				const response = await submitSkillModal(
+					interaction,
+					env,
+					ctx,
+					guildId,
+					actor,
+				);
+				if (response) {
+					return response;
+				}
 			}
 			break;
 	}

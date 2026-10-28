@@ -11,6 +11,7 @@ import type {
 	RESTPatchAPIChannelMessageJSONBody,
 	RESTPatchAPIWebhookWithTokenMessageJSONBody,
 	RESTPostAPIChannelMessageJSONBody,
+	RESTPostAPIInteractionFollowupJSONBody,
 	RESTPutAPIApplicationCommandsJSONBody,
 	RESTPutAPIApplicationCommandsResult,
 } from "discord-api-types/v10";
@@ -37,10 +38,18 @@ export class DiscordApiError extends Error {
 	}
 }
 
+/** メッセージに添付する、テキストのファイル */
+export interface MessageFile {
+	name: string;
+	content: string;
+}
+
 interface RequestOptions {
 	/** Botのトークン。InteractionsのWebhookは、URLに含まれるトークンで認証するので不要 */
 	botToken?: string;
 	body?: unknown;
+	/** 添付するファイル。あれば、本文と一緒にmultipart/form-dataで送る */
+	files?: MessageFile[];
 }
 
 /**
@@ -57,7 +66,9 @@ async function discordRequest<T>(
 	if (options.botToken) {
 		headers.Authorization = `Bot ${options.botToken}`;
 	}
-	if (options.body !== undefined) {
+	const files = options.files ?? [];
+	// multipart/form-dataのContent-Typeは、区切りの文字列と一緒に、fetchが付ける
+	if (options.body !== undefined && files.length === 0) {
 		headers["Content-Type"] = "application/json";
 	}
 	for (let attempt = 0; ; attempt++) {
@@ -65,7 +76,11 @@ async function discordRequest<T>(
 			method,
 			headers,
 			body:
-				options.body === undefined ? undefined : JSON.stringify(options.body),
+				files.length > 0
+					? formDataOf(options.body, files)
+					: options.body === undefined
+						? undefined
+						: JSON.stringify(options.body),
 		});
 		if (response.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
 			const data = (await response.json().catch(() => ({}))) as {
@@ -283,17 +298,36 @@ export async function triggerTyping(
 	});
 }
 
-/** Interactionの最初の応答(保留にしたもの)を書き換え、書き換えたメッセージを返す。15分以内なら書き換えられる */
+/**
+ * Interactionの最初の応答(保留にしたもの)を書き換え、書き換えたメッセージを返す。15分以内なら書き換えられる。
+ * filesを渡すと、それを添付する(前に添付していたファイルは外す)
+ */
 export function editOriginalInteractionResponse(
 	applicationId: string,
 	interactionToken: string,
 	body: RESTPatchAPIWebhookWithTokenMessageJSONBody,
+	files: MessageFile[] = [],
 ): Promise<APIMessage> {
 	return discordRequest(
 		"PATCH original interaction response",
 		"PATCH",
 		`/webhooks/${applicationId}/${interactionToken}/messages/@original`,
-		{ body },
+		{ body, files },
+	);
+}
+
+/** Interactionに、続きのメッセージを送る。本人にだけ見せるなら、flagsにEphemeralを付ける。15分以内なら送れる */
+export async function createFollowupMessage(
+	applicationId: string,
+	interactionToken: string,
+	body: RESTPostAPIInteractionFollowupJSONBody,
+	files: MessageFile[] = [],
+): Promise<void> {
+	await discordRequest(
+		"POST interaction followup",
+		"POST",
+		`/webhooks/${applicationId}/${interactionToken}`,
+		{ body, files },
 	);
 }
 
@@ -309,6 +343,32 @@ export function overwriteGlobalCommands(
 		`/applications/${applicationId}/commands`,
 		{ botToken, body: commands },
 	);
+}
+
+/**
+ * 本文と添付するファイルを、multipart/form-dataにする。
+ * 本文はpayload_jsonに入れ、そのattachmentsで、ファイルを番号で指す(ここに挙げたファイルだけが、メッセージに残る)
+ */
+function formDataOf(body: unknown, files: MessageFile[]): FormData {
+	const form = new FormData();
+	form.append(
+		"payload_json",
+		JSON.stringify({
+			...(typeof body === "object" && body !== null ? body : {}),
+			attachments: files.map((file, index) => ({
+				id: index,
+				filename: file.name,
+			})),
+		}),
+	);
+	files.forEach((file, index) => {
+		form.append(
+			`files[${index}]`,
+			new Blob([file.content], { type: "text/plain; charset=utf-8" }),
+			file.name,
+		);
+	});
+	return form;
 }
 
 function sleep(ms: number): Promise<void> {

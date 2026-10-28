@@ -85,6 +85,7 @@ export const ComponentType = {
 	StringSelect: 3 as DiscordComponentType.StringSelect,
 	TextInput: 4 as DiscordComponentType.TextInput,
 	Label: 18 as DiscordComponentType.Label,
+	FileUpload: 19 as DiscordComponentType.FileUpload,
 } as const;
 
 export const ButtonStyle = {

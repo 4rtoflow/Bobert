@@ -25,6 +25,7 @@ import type {
 import { workersAiEmbedder } from "../store/embedding";
 import { claimMessage, releaseMessage } from "../store/messages";
 import { searchSimilarMessages } from "../store/search";
+import { listSkills } from "../store/skills";
 import {
 	type ConversationSummary,
 	claimCompactionNotice,
@@ -73,7 +74,9 @@ import {
 import {
 	channelHistoryTool,
 	channelListTool,
+	readSkillTool,
 	replyChainTool,
+	type SkillReads,
 	searchMessagesTool,
 	startsWithReply,
 	toolsAvailable,
@@ -409,14 +412,23 @@ export async function answer(
 		? await webSearchAvailable(env, userId, settings, model)
 		: false;
 	// AIが必要なときに、このチャンネルと、サーバーの公開チャンネルの履歴を読んだり探したりできるようにする。
+	// このサーバーにスキルがあれば、その一覧を指示に入れ、本文を読めるようにする(仕様: docs/spec/behavior.md「スキル」)。
 	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
 	// 道具の定義は、毎回同じ並びにする(キャッシュのため)
 	const root = chain[0];
-	const tools = (await toolsAvailable(settings, model))
+	const usesTools = await toolsAvailable(settings, model);
+	const guildId = history.guildId;
+	const skills =
+		usesTools && guildId !== null ? await listSkills(env.DB, guildId) : [];
+	const skillReads: SkillReads = { calls: 0, names: [] };
+	const tools = usesTools
 		? [
 				channelHistoryTool(history, botUserId),
 				searchMessagesTool(history, botUserId),
 				channelListTool(history),
+				...(guildId !== null && skills.length > 0
+					? [readSkillTool(env.DB, guildId, skills, skillReads)]
+					: []),
 				...(summary === null && startsWithReply(root)
 					? [replyChainTool(root, history, botUserId)]
 					: []),
@@ -424,7 +436,7 @@ export async function answer(
 		: [];
 	const result = await context.callModel({
 		model: model.modelId,
-		system: buildSystemPrompt(settings.customPrompt),
+		system: buildSystemPrompt(settings.customPrompt, skills),
 		messages: messages.messages,
 		effort: context.effort,
 		webSearch: webSearch === true,
@@ -441,6 +453,7 @@ export async function answer(
 		stopReason: result.stopReason,
 		durationMs: Date.now() - startedAt,
 		toolCalls: result.toolCalls,
+		skills: skillReads.names,
 		...result.usage,
 	});
 	// 料金が上がる境目を超えたら(1回の呼び出しごとの入力で見る)、その会話・その人・そのモデルで1回だけ、要約を勧める
@@ -460,6 +473,7 @@ export async function answer(
 			// 本人が画像の読み取りをOFFにしているときは、注記しない
 			imagesSkipped: messages.imagesSkipped && settings.featImageInput,
 			webSearchSkipped: settings.featWebSearch && webSearch === false,
+			skills: skillReads.names,
 			// 要約を作ったときは、その費用も含める
 			usage: settings.featUsageDisplay
 				? await usageNote(

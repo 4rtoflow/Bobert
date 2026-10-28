@@ -48,6 +48,11 @@ export interface ChatTool {
 	};
 	/** AIが呼んだときに、結果の文を作る。入力は、AIが送ったものなので、確かめてから使う */
 	run: (input: Record<string, unknown>) => Promise<string>;
+	/**
+	 * falseなら、道具の呼び出しの上限(MAX_TOOL_CALLS)に数えない。その道具は、自分で回数を数える(スキルを読む道具)。
+	 * 省けば数える
+	 */
+	countsTowardLimit?: boolean;
 }
 
 export interface ChatResult {
@@ -63,7 +68,7 @@ export interface ChatResult {
 	requestUsages: TokenUsage[];
 	/** 返答が引用したWebページ(出典)。引用した順 */
 	sources: Source[];
-	/** Bobertの道具を呼んだ回数 */
+	/** Bobertの道具を呼んだ回数。上限に数えない道具(スキルを読む道具)の分は含まない */
 	toolCalls: number;
 }
 

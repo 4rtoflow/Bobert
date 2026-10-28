@@ -8,6 +8,7 @@ import {
 import { IMPORT_COMMAND_NAME } from "../import/progress";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
+import { SKILLS_COMMAND_NAME } from "./skills";
 
 /** サーバー内だけで使えるコマンドにする。DMでの会話は後回しにしているため */
 const GUILD_ONLY = {
@@ -53,6 +54,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: "prompt",
 		description: "自分用のAIへの指示の設定",
+	},
+	{
+		...GUILD_ONLY,
+		name: SKILLS_COMMAND_NAME,
+		description: "このサーバーでAIが使うスキル(手順や知識)の一覧と登録",
 	},
 	{
 		...GUILD_ONLY,

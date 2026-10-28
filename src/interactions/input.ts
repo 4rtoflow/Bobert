@@ -1,4 +1,7 @@
-import type { APIModalSubmitInteraction } from "discord-api-types/v10";
+import type {
+	APIAttachment,
+	APIModalSubmitInteraction,
+} from "discord-api-types/v10";
 import { ComponentType } from "../discord/constants";
 
 /** APIキーやモデルIDに使われる文字(空白を除く、表示できるASCII文字) */
@@ -16,6 +19,26 @@ export function readTextInput(
 			component.component.custom_id === customId
 		) {
 			return component.component.value;
+		}
+	}
+	return undefined;
+}
+
+/** モーダルのファイルの欄で添付されたファイル(1つ目)。なければundefined */
+export function readFileUpload(
+	interaction: APIModalSubmitInteraction,
+	customId: string,
+): APIAttachment | undefined {
+	for (const component of interaction.data.components) {
+		if (
+			component.type === ComponentType.Label &&
+			component.component.type === ComponentType.FileUpload &&
+			component.component.custom_id === customId
+		) {
+			const id = component.component.values[0];
+			return id === undefined
+				? undefined
+				: interaction.data.resolved?.attachments?.[id];
 		}
 	}
 	return undefined;
