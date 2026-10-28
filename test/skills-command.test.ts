@@ -32,14 +32,6 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-/** /skills の画面の、スキルの説明 */
-const EXPLANATION = [
-	"スキルは、AIに教えておく手順や知識です。質問に関係するスキルがあると、AIがそれを読んで答えます。登録したスキルは、このサーバーの全員への返答で使われます。誰でも追加・編集・削除できます。",
-	"追加は `/regskills` から行います。SKILL.mdを添付するか、添付せずに入力画面で書きます。",
-	"-# スキルの名前と説明は毎回、本文は読んだときだけAIに渡します。その分、返答の費用が増えます。",
-	"-# Claude Codeなどで使うSKILL.mdも、そのまま追加できます。参考資料とスクリプトは使えません。",
-];
-
 const INVALID_NAME =
 	"名前は、英小文字、数字、ハイフンだけで、64文字までにしてください。例: `meeting-notes`";
 const LIMIT_REACHED =
@@ -313,22 +305,20 @@ describe("/skills と /regskills のコマンド", () => {
 });
 
 describe("/skills", () => {
-	it("スキルがなければ「なし」と、スキルの説明を、本人にだけ見せる(追加のボタンはない)", async () => {
+	it("スキルがなければ「登録されたスキル: なし」とだけ、本人にだけ見せる(ボタンもメニューもない)", async () => {
 		const response = await sendInteraction(skillsCommand(newGuild()));
 
 		expect(response).toEqual({
 			type: InteractionResponseType.ChannelMessageWithSource,
 			data: {
 				flags: MessageFlags.Ephemeral,
-				content: ["**このサーバーのスキル**: なし", "", ...EXPLANATION].join(
-					"\n",
-				),
+				content: "**登録されたスキル**: なし",
 				components: [],
 			},
 		});
 	});
 
-	it("一覧には、説明の先頭40文字と、最後に登録か編集をした人を、名前の順に書く。選ぶメニューも付ける", async () => {
+	it("見出しの次の行から、スキルの名前と説明の全文を、名前の順に箇条書きにする。選ぶメニューも付ける", async () => {
 		const guildId = newGuild();
 		const trpg = await seed(guildId, {
 			name: "trpg-rules",
@@ -347,13 +337,12 @@ describe("/skills", () => {
 
 		const response = await sendInteraction(skillsCommand(guildId));
 
+		// 誰が登録・編集したかは、一覧には書かない(スキルの画面に書く)
 		expect(response.data.content).toBe(
 			[
-				"**このサーバーのスキル**: 2個(20個まで)",
-				"- `meeting-notes`(aliceが編集): 会議の議事録を書く手順。議事録やまとめを頼まれたときに使う",
-				"- `trpg-rules`(bobが登録): このサーバーのTRPGのハウスルール。セッションの進め方と、判定の決まりをまとめ…",
-				"",
-				...EXPLANATION,
+				"**登録されたスキル**",
+				"- `meeting-notes`: 会議の議事録を書く手順。議事録やまとめを頼まれたときに使う",
+				"- `trpg-rules`: このサーバーのTRPGのハウスルール。セッションの進め方と、判定の決まりをまとめたもの",
 			].join("\n"),
 		);
 		expect(response.data.components).toEqual([
@@ -381,6 +370,32 @@ describe("/skills", () => {
 				],
 			},
 		]);
+	});
+
+	it("説明の改行は空白にする。1通(2000文字)に収まらなければ、説明を短くする", async () => {
+		const guildId = newGuild();
+		await seed(guildId, {
+			...MEETING_NOTES,
+			name: "a-multiline",
+			description: "1行目\n2行目",
+		});
+		for (let index = 1; index < MAX_SKILLS; index++) {
+			await seed(guildId, {
+				...MEETING_NOTES,
+				name: `skill-${String(index).padStart(2, "0")}`,
+				description: "あ".repeat(1024),
+			});
+		}
+
+		const response = await sendInteraction(skillsCommand(guildId));
+
+		const lines: string[] = response.data.content.split("\n");
+		expect(response.data.content.length).toBeLessThanOrEqual(2000);
+		expect(lines[0]).toBe("**登録されたスキル**");
+		expect(lines[1]).toBe("- `a-multiline`: 1行目 2行目");
+		// 全文(1024文字)でも100文字でも収まらないので、40文字まで(続きは「…」)に短くする
+		expect(lines[2]).toBe(`- \`skill-01\`: ${"あ".repeat(40)}…`);
+		expect(lines).toHaveLength(MAX_SKILLS + 1);
 	});
 });
 
