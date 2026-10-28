@@ -1,5 +1,7 @@
 import type {
 	APIActionRowComponent,
+	APIAttachment,
+	APIChatInputApplicationCommandInteraction,
 	APIComponentInMessageActionRow,
 	APIInteractionResponse,
 	APIMessageComponentInteraction,
@@ -7,6 +9,7 @@ import type {
 } from "discord-api-types/v10";
 import type { MessageFile } from "../discord/api";
 import {
+	ApplicationCommandOptionType,
 	ButtonStyle,
 	ComponentType,
 	InteractionResponseType,
@@ -19,7 +22,10 @@ import {
 	addSkill,
 	countCharacters,
 	countSkills,
+	deletePendingSkill,
 	deleteSkill,
+	findSkillByName,
+	getPendingSkill,
 	getSkill,
 	isValidSkillName,
 	listSkills,
@@ -27,10 +33,12 @@ import {
 	MAX_DESCRIPTION_LENGTH,
 	MAX_SKILL_NAME_LENGTH,
 	MAX_SKILLS,
+	overwriteSkill,
 	type Skill,
 	type SkillContent,
 	type SkillEditor,
 	type SkillSummary,
+	savePendingSkill,
 	updateSkill,
 } from "../store/skills";
 import {
@@ -45,8 +53,12 @@ import { cleanSkillBody, formatSkillFile, parseSkillFile } from "./skill-file";
 /** /skills のコマンドの名前 */
 export const SKILLS_COMMAND_NAME = "skills";
 
+/** /regskills のコマンドの名前と、SKILL.mdを添付する欄の名前 */
+export const REGSKILLS_COMMAND_NAME = "regskills";
+export const REGSKILLS_FILE_OPTION = "file";
+
 /**
- * /skills の画面のボタン、セレクトメニュー、モーダルのIDの頭。
+ * /skills と /regskills の、ボタン、セレクトメニュー、モーダルのIDの頭。
  * 続けて操作の種類と、対象のスキルのIDなどを「:」でつなぐ(例: skills:edit:12)
  */
 export const SKILLS_ID_PREFIX = "skills:";
@@ -54,14 +66,12 @@ export const SKILLS_ID_PREFIX = "skills:";
 /** 操作の種類 */
 const Action = {
 	Select: "select",
-	Add: "add",
-	Upload: "upload",
 	Edit: "edit",
 	Replace: "replace",
 	Delete: "delete",
 	DeleteConfirm: "delete-confirm",
-	AddModal: "add-modal",
-	UploadModal: "upload-modal",
+	Overwrite: "overwrite",
+	RegisterModal: "register-modal",
 	EditModal: "edit-modal",
 	ReplaceModal: "replace-modal",
 } as const;
@@ -86,6 +96,7 @@ const SKILL_FILE_NAME = "SKILL.md";
 /** /skills の画面の、スキルの説明 */
 const EXPLANATION = [
 	"スキルは、AIに教えておく手順や知識です。質問に関係するスキルがあると、AIがそれを読んで答えます。登録したスキルは、このサーバーの全員への返答で使われます。誰でも追加・編集・削除できます。",
+	"追加は `/regskills` から行います。SKILL.mdを添付するか、添付せずに入力画面で書きます。",
 	"-# スキルの名前と説明は毎回、本文は読んだときだけAIに渡します。その分、返答の費用が増えます。",
 	"-# Claude Codeなどで使うSKILL.mdも、そのまま追加できます。参考資料とスクリプトは使えません。",
 ];
@@ -113,9 +124,48 @@ const LOAD_FAILED =
 	"スキルを読み込めませんでした。少し待ってから、もう一度試してください。";
 const SAVE_FAILED =
 	"スキルを保存できませんでした。少し待ってから、もう一度試してください。";
+/** 入力画面で書いた内容を登録できないときに、書き添える文。書いた内容は、SKILL.mdにして添付する */
+const DRAFT_ATTACHED =
+	"書いた内容を添付します。直してから `/regskills` に添付すると、登録できます。";
+const PENDING_GONE =
+	"この置き換えは、もう使えません。もう一度 `/regskills` から登録してください。";
 
 /**
- * /skills: このサーバーのスキルの一覧と、追加のボタンを、本人にだけ見せる
+ * /regskills: スキルを登録する(仕様: docs/spec/behavior.md「スキル」)。
+ * SKILL.mdが添付されていれば、確かめて登録する(ファイルを読むので、保留にしてから結果を書く)。
+ * 添付されていなければ、名前・説明・本文を書く入力画面を開く
+ */
+export async function regskillsCommand(
+	interaction: APIChatInputApplicationCommandInteraction,
+	env: Env,
+	ctx: ExecutionContext,
+	guildId: string,
+	editor: SkillEditor,
+): Promise<APIInteractionResponse> {
+	const attachment = attachedFile(interaction);
+	if (attachment === undefined) {
+		if ((await countSkills(env.DB, guildId)) >= MAX_SKILLS) {
+			return ephemeral(LIMIT_REACHED);
+		}
+		return writeModal(idOf(Action.RegisterModal), "スキルを追加する", null);
+	}
+	return respondLater(
+		ctx,
+		interaction,
+		editor.id,
+		"reply",
+		async () => {
+			const content = await readSkillFile(attachment);
+			return typeof content === "string"
+				? { content }
+				: register(env.DB, guildId, content, editor, "file");
+		},
+		{ content: SAVE_FAILED },
+	);
+}
+
+/**
+ * /skills: このサーバーのスキルの一覧と、スキルを選ぶメニューを、本人にだけ見せる
  * (仕様: docs/spec/behavior.md「スキル」)
  */
 export async function skillsCommand(
@@ -141,14 +191,6 @@ export async function skillComponent(
 ): Promise<APIInteractionResponse | null> {
 	const [action, target] = parseId(interaction.data.custom_id);
 	switch (action) {
-		case Action.Add:
-		case Action.Upload:
-			if ((await countSkills(env.DB, guildId)) >= MAX_SKILLS) {
-				return ephemeral(LIMIT_REACHED);
-			}
-			return action === Action.Add
-				? writeModal(idOf(Action.AddModal), "スキルを追加する", null)
-				: fileModal(idOf(Action.UploadModal), "スキルをファイルで追加する");
 		case Action.Select: {
 			if (interaction.data.component_type !== ComponentType.StringSelect) {
 				return null;
@@ -227,6 +269,36 @@ export async function skillComponent(
 			log("skill_deleted", { userId: editor.id, guildId, skill: name });
 			return updateMessage(`スキル「${name}」を削除しました。`);
 		}
+		case Action.Overwrite: {
+			// 置き換えられないときは、確かめる画面(書いた内容の添付)を残したまま、理由を見せる
+			const id = Number(target);
+			const pending = await getPendingSkill(env.DB, guildId, editor.id, id);
+			if (pending === null) {
+				return ephemeral(PENDING_GONE);
+			}
+			const result = await overwriteSkill(env.DB, guildId, pending, editor);
+			if (result === "limit") {
+				return ephemeral(LIMIT_REACHED);
+			}
+			await deletePendingSkill(env.DB, id);
+			log(result === "saved" ? "skill_updated" : "skill_added", {
+				userId: editor.id,
+				guildId,
+				skill: pending.name,
+				via: "overwrite",
+			});
+			return {
+				type: InteractionResponseType.UpdateMessage,
+				data: {
+					content:
+						result === "saved"
+							? savedText(pending.name)
+							: addedText(pending.name),
+					components: [],
+					attachments: [],
+				},
+			};
+		}
 	}
 	return null;
 }
@@ -247,43 +319,20 @@ export async function submitSkillModal(
 		expectedUpdatedAt: Number(expectedUpdatedAt),
 	};
 	switch (action) {
-		case Action.AddModal: {
-			// 書いた内容だけで済むので、すぐに答える
-			const content = writtenSkill(interaction);
-			const problem = problemOf(content);
-			if (problem !== null) {
-				return ephemeral(problem);
-			}
-			const { added, message } = await add(
-				env.DB,
-				guildId,
-				content,
-				editor,
-				"text",
-			);
-			return added ? updateMessage(message) : ephemeral(message);
-		}
-		case Action.UploadModal:
-			// 添付されたファイルを読むのに時間がかかることがあるので、保留にする
-			return updateOrReplyLater(
+		case Action.RegisterModal:
+			// /regskills から開いた入力画面。登録できないときは、書いた内容を添付して返す。
+			// 元になるメッセージがないので、本人にだけ見える新しいメッセージを保留にして、そこに結果を書く
+			return respondLater(
 				ctx,
 				interaction,
 				editor.id,
+				"reply",
 				async () => {
-					const content = await uploadedSkill(interaction);
-					if (typeof content === "string") {
-						return { reply: { content } };
-					}
-					const { added, message } = await add(
-						env.DB,
-						guildId,
-						content,
-						editor,
-						"file",
-					);
-					return added
-						? { update: { content: message, components: [] } }
-						: { reply: { content: message } };
+					const content = writtenSkill(interaction);
+					const problem = problemOf(content);
+					return problem !== null
+						? withDraft(problem, content)
+						: register(env.DB, guildId, content, editor, "text");
 				},
 				{ content: SAVE_FAILED },
 			);
@@ -308,7 +357,9 @@ export async function submitSkillModal(
 				interaction,
 				editor.id,
 				async () => {
-					const content = await uploadedSkill(interaction);
+					const content = await readSkillFile(
+						readFileUpload(interaction, FILE_INPUT_ID),
+					);
 					return typeof content === "string"
 						? { reply: { content } }
 						: save(env.DB, guildId, edited, content, editor, "file");
@@ -325,28 +376,86 @@ export function normalizeSkillName(input: string): string {
 }
 
 /**
- * スキルを足す。足せたら結果の文を返す(画面を、これに書き換える)。
- * 足せなければ、本人にだけ見せる理由を返す
+ * /regskills で、スキルを登録する。結果は、本人にだけ見えるメッセージに書く。
+ * 同じ名前のスキルがあれば、置き換えるかを確かめる(内容は、確かめている間だけ保存する)。
+ * 入力画面で書いた内容(viaがtext)は、登録できなければ、SKILL.mdにして添付する
  */
-async function add(
+async function register(
 	db: D1Database,
 	guildId: string,
 	content: SkillContent,
 	editor: SkillEditor,
 	via: "text" | "file",
-): Promise<{ added: boolean; message: string }> {
-	const result = await addSkill(db, guildId, content, editor);
-	if (result === "duplicate") {
-		return { added: false, message: duplicateName(content.name) };
+): Promise<MessageEdit> {
+	const result =
+		(await findSkillByName(db, guildId, content.name)) === null
+			? await addSkill(db, guildId, content, editor)
+			: "duplicate";
+	if (result === "added") {
+		log("skill_added", {
+			userId: editor.id,
+			guildId,
+			skill: content.name,
+			via,
+		});
+		return { content: addedText(content.name) };
 	}
 	if (result === "limit") {
-		return { added: false, message: LIMIT_REACHED };
+		return via === "text"
+			? withDraft(LIMIT_REACHED, content)
+			: { content: LIMIT_REACHED };
 	}
-	log("skill_added", { userId: editor.id, guildId, skill: content.name, via });
+	const pendingId = await savePendingSkill(db, guildId, editor.id, content);
+	const question =
+		via === "file"
+			? `「${content.name}」という名前のスキルは、すでにあります。添付したSKILL.mdで置き換えますか?`
+			: `「${content.name}」という名前のスキルは、すでにあります。書いた内容で置き換えますか?`;
 	return {
-		added: true,
-		message: `スキル「${content.name}」を追加しました。次の返答から使います。`,
+		...(via === "text" ? withDraft(question, content) : { content: question }),
+		components: [
+			{
+				type: ComponentType.ActionRow,
+				components: [
+					{
+						type: ComponentType.Button,
+						style: ButtonStyle.Danger,
+						custom_id: idOf(Action.Overwrite, pendingId),
+						label: "置き換える",
+					},
+				],
+			},
+		],
 	};
+}
+
+/** 登録できなかった理由に、書いた内容を添付したことを書き添え、書いた内容をSKILL.mdにして添付する */
+function withDraft(message: string, content: SkillContent): MessageEdit {
+	return {
+		content: `${message}\n${DRAFT_ATTACHED}`,
+		files: [skillFileOf(content)],
+	};
+}
+
+/** /regskills に添付されたファイル。なければundefined */
+function attachedFile(
+	interaction: APIChatInputApplicationCommandInteraction,
+): APIAttachment | undefined {
+	const option = interaction.data.options?.find(
+		(candidate) =>
+			candidate.name === REGSKILLS_FILE_OPTION &&
+			candidate.type === ApplicationCommandOptionType.Attachment,
+	);
+	return option?.type === ApplicationCommandOptionType.Attachment
+		? interaction.data.resolved?.attachments?.[option.value]
+		: undefined;
+}
+
+function addedText(name: string): string {
+	return `スキル「${name}」を追加しました。次の返答から使います。`;
+}
+
+function savedText(name: string): string {
+	return `スキル「${name}」を保存しました。次の返答から使います。`;
 }
 
 /**
@@ -376,7 +485,7 @@ async function save(
 	});
 	return {
 		update: {
-			content: `スキル「${content.name}」を保存しました。次の返答から使います。`,
+			content: savedText(content.name),
 			components: [],
 			attachments: [],
 		},
@@ -395,10 +504,9 @@ function writtenSkill(interaction: APIModalSubmitInteraction): SkillContent {
 }
 
 /** 添付されたSKILL.mdを読む。読めないか、決まりに合わなければ、本人に見せる理由を返す */
-async function uploadedSkill(
-	interaction: APIModalSubmitInteraction,
+async function readSkillFile(
+	attachment: APIAttachment | undefined,
 ): Promise<SkillContent | string> {
-	const attachment = readFileUpload(interaction, FILE_INPUT_ID);
 	if (attachment === undefined || attachment.size > MAX_FILE_BYTES) {
 		return UNREADABLE_FILE;
 	}
@@ -443,7 +551,7 @@ function duplicateName(name: string): string {
 	return `「${name}」という名前のスキルは、すでにあります。別の名前にするか、一覧から選んで編集してください。`;
 }
 
-/** /skills の画面。スキルがあれば、選ぶためのセレクトメニューも付ける */
+/** /skills の画面。スキルがあれば、選ぶためのセレクトメニューを付ける(追加は /regskills から行う) */
 async function panel(
 	db: D1Database,
 	guildId: string,
@@ -454,26 +562,7 @@ async function panel(
 	const skills = await listSkills(db, guildId);
 	return {
 		content: panelText(skills),
-		components: [
-			...(skills.length > 0 ? [selectRow(skills)] : []),
-			{
-				type: ComponentType.ActionRow,
-				components: [
-					{
-						type: ComponentType.Button,
-						style: ButtonStyle.Primary,
-						custom_id: idOf(Action.Add),
-						label: "書いて追加",
-					},
-					{
-						type: ComponentType.Button,
-						style: ButtonStyle.Secondary,
-						custom_id: idOf(Action.Upload),
-						label: "ファイルで追加",
-					},
-				],
-			},
-		],
+		components: skills.length > 0 ? [selectRow(skills)] : [],
 	};
 }
 

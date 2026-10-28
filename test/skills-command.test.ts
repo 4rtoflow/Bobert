@@ -13,6 +13,7 @@ import { helpText } from "../src/interactions/help";
 import { formatSkillFile } from "../src/interactions/skill-file";
 import {
 	addSkill,
+	deleteSkill,
 	findSkillByName,
 	getSkill,
 	MAX_SKILLS,
@@ -34,27 +35,10 @@ afterEach(() => {
 /** /skills の画面の、スキルの説明 */
 const EXPLANATION = [
 	"スキルは、AIに教えておく手順や知識です。質問に関係するスキルがあると、AIがそれを読んで答えます。登録したスキルは、このサーバーの全員への返答で使われます。誰でも追加・編集・削除できます。",
+	"追加は `/regskills` から行います。SKILL.mdを添付するか、添付せずに入力画面で書きます。",
 	"-# スキルの名前と説明は毎回、本文は読んだときだけAIに渡します。その分、返答の費用が増えます。",
 	"-# Claude Codeなどで使うSKILL.mdも、そのまま追加できます。参考資料とスクリプトは使えません。",
 ];
-
-const ADD_BUTTONS = {
-	type: ComponentType.ActionRow,
-	components: [
-		{
-			type: ComponentType.Button,
-			style: ButtonStyle.Primary,
-			custom_id: "skills:add",
-			label: "書いて追加",
-		},
-		{
-			type: ComponentType.Button,
-			style: ButtonStyle.Secondary,
-			custom_id: "skills:upload",
-			label: "ファイルで追加",
-		},
-	],
-};
 
 const INVALID_NAME =
 	"名前は、英小文字、数字、ハイフンだけで、64文字までにしてください。例: `meeting-notes`";
@@ -73,12 +57,36 @@ const CONFLICT =
 	"編集の画面を開いている間に、ほかの人がこのスキルを変更したか削除したため、保存しませんでした。送った内容を添付します。`/skills` から開き直して、もう一度試してください。";
 const NOT_FOUND =
 	"このスキルは見つかりません。ほかの人が削除したか、名前を変えた可能性があります。`/skills` から開き直してください。";
+const SAVE_FAILED =
+	"スキルを保存できませんでした。少し待ってから、もう一度試してください。";
+const DRAFT_ATTACHED =
+	"書いた内容を添付します。直してから `/regskills` に添付すると、登録できます。";
+const PENDING_GONE =
+	"この置き換えは、もう使えません。もう一度 `/regskills` から登録してください。";
+const ADDED = "スキル「meeting-notes」を追加しました。次の返答から使います。";
+const SAVED = "スキル「meeting-notes」を保存しました。次の返答から使います。";
 
 const MEETING_NOTES: SkillContent = {
 	name: "meeting-notes",
 	description: "会議の議事録を書く手順。議事録やまとめを頼まれたときに使う",
 	body: "決まったこと、宿題、次回の予定の3つに分けて書く",
 };
+
+/** MEETING_NOTESを書いたSKILL.md(使わない項目も入れておく) */
+const FILE = [
+	"---",
+	"name: meeting-notes",
+	"description: 会議の議事録を書く手順。議事録やまとめを頼まれたときに使う",
+	"license: MIT",
+	"---",
+	"",
+	"決まったこと、宿題、次回の予定の3つに分けて書く",
+	"",
+].join("\n");
+
+/** 添付したファイル(SKILL.md)。中身は、CDN_URLから読む(mockDiscordで返す) */
+const CDN_URL =
+	"https://cdn.discordapp.com/ephemeral-attachments/1/700/SKILL.md";
 
 /** テストごとに、ほかのテストと重ならないサーバーを使う(スキルはサーバーごとなので) */
 let nextGuildId = 7100;
@@ -96,11 +104,36 @@ function inGuild(
 	return { ...guildInteraction(type, data, user), guild_id: guildId };
 }
 
+function attachment(size: number) {
+	return {
+		id: "700",
+		filename: "SKILL.md",
+		size,
+		url: CDN_URL,
+		proxy_url: CDN_URL,
+	};
+}
+
 function skillsCommand(guildId: string) {
 	return inGuild(guildId, InteractionType.ApplicationCommand, {
 		id: "1",
 		name: "skills",
 		type: 1,
+	});
+}
+
+/** /regskills。fileSizeを渡すと、その大きさのSKILL.mdを添付する */
+function regskills(guildId: string, fileSize?: number) {
+	return inGuild(guildId, InteractionType.ApplicationCommand, {
+		id: "2",
+		name: "regskills",
+		type: 1,
+		...(fileSize === undefined
+			? {}
+			: {
+					options: [{ name: "file", type: 11, value: "700" }],
+					resolved: { attachments: { "700": attachment(fileSize) } },
+				}),
 	});
 }
 
@@ -147,7 +180,7 @@ function submitWritten(
 	);
 }
 
-/** ファイルを添付する入力画面の送信。ファイルの中身は、CDN_URLから読む(mockDiscordで返す) */
+/** ファイルを添付する入力画面の送信 */
 function submitFile(guildId: string, customId: string, size = 100) {
 	return inGuild(guildId, InteractionType.ModalSubmit, {
 		custom_id: customId,
@@ -161,22 +194,9 @@ function submitFile(guildId: string, customId: string, size = 100) {
 				},
 			},
 		],
-		resolved: {
-			attachments: {
-				"700": {
-					id: "700",
-					filename: "SKILL.md",
-					size,
-					url: CDN_URL,
-					proxy_url: CDN_URL,
-				},
-			},
-		},
+		resolved: { attachments: { "700": attachment(size) } },
 	});
 }
-
-const CDN_URL =
-	"https://cdn.discordapp.com/ephemeral-attachments/1/700/SKILL.md";
 
 /** DiscordのAPIとCDNの偽物。CDNは、添付されたファイルとしてfileを返す */
 function mockDiscord(file = ""): FetchCall[] {
@@ -211,6 +231,38 @@ function followups(calls: FetchCall[]) {
 		.map((call) => call.body);
 }
 
+/** 置き換えるかを確かめるメッセージの、「置き換える」ボタンのID */
+function overwriteButtonId(message: unknown): string {
+	const rows = (
+		message as { components?: { components: { custom_id: string }[] }[] }
+	).components;
+	return rows?.[0]?.components[0]?.custom_id ?? "";
+}
+
+/** 置き換えるかを確かめるメッセージの、「置き換える」ボタンの並び */
+function overwriteRow(customId: string) {
+	return {
+		type: ComponentType.ActionRow,
+		components: [
+			{
+				type: ComponentType.Button,
+				style: ButtonStyle.Danger,
+				custom_id: customId,
+				label: "置き換える",
+			},
+		],
+	};
+}
+
+/** 書いた内容を添付したことを書き添えた、本人にだけ見えるメッセージ */
+function withDraft(message: string, content: SkillContent) {
+	return {
+		content: `${message}\n${DRAFT_ATTACHED}`,
+		attachments: [{ id: 0, filename: "SKILL.md" }],
+		files: [{ name: "SKILL.md", content: formatSkillFile(content) }],
+	};
+}
+
 async function seed(
 	guildId: string,
 	content: SkillContent = MEETING_NOTES,
@@ -224,20 +276,44 @@ async function seed(
 	return skill;
 }
 
-describe("/skills", () => {
+async function seedFull(guildId: string) {
+	for (let index = 0; index < MAX_SKILLS; index++) {
+		await seed(guildId, { ...MEETING_NOTES, name: `skill-${index}` });
+	}
+}
+
+describe("/skills と /regskills のコマンド", () => {
 	it("コマンドの一覧と/helpに出る", () => {
 		expect(COMMANDS).toContainEqual(
 			expect.objectContaining({
 				name: "skills",
-				description: "このサーバーでAIが使うスキル(手順や知識)の一覧と登録",
+				description: "このサーバーでAIが使うスキル(手順や知識)の一覧と編集",
+			}),
+		);
+		expect(COMMANDS).toContainEqual(
+			expect.objectContaining({
+				name: "regskills",
+				description:
+					"スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書く",
+				options: [
+					{
+						type: 11,
+						name: "file",
+						description:
+							"登録するSKILL.md。添付しなければ、入力画面で名前・説明・本文を書く",
+						required: false,
+					},
+				],
 			}),
 		);
 		expect(helpText()).toContain(
-			"- `/skills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。",
+			"- `/regskills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。一覧と編集は `/skills` で行います。",
 		);
 	});
+});
 
-	it("スキルがなければ「なし」と、スキルの説明と、追加のボタンを、本人にだけ見せる", async () => {
+describe("/skills", () => {
+	it("スキルがなければ「なし」と、スキルの説明を、本人にだけ見せる(追加のボタンはない)", async () => {
 		const response = await sendInteraction(skillsCommand(newGuild()));
 
 		expect(response).toEqual({
@@ -247,7 +323,7 @@ describe("/skills", () => {
 				content: ["**このサーバーのスキル**: なし", "", ...EXPLANATION].join(
 					"\n",
 				),
-				components: [ADD_BUTTONS],
+				components: [],
 			},
 		});
 	});
@@ -304,24 +380,24 @@ describe("/skills", () => {
 					},
 				],
 			},
-			ADD_BUTTONS,
 		]);
 	});
 });
 
-describe("書いて追加", () => {
-	it("ボタンで入力画面を開き、送ると追加して、画面を結果に書き換える", async () => {
+describe("/regskills(添付なし)", () => {
+	it("入力画面を開く。送ると登録し、本人にだけ見えるメッセージに結果を書く", async () => {
 		const guildId = newGuild();
+		const calls = mockDiscord();
 
-		const modal = await sendInteraction(pressButton(guildId, "skills:add"));
-		const added = await sendInteraction(
-			submitWritten(guildId, "skills:add-modal", MEETING_NOTES),
+		const modal = await sendInteraction(regskills(guildId));
+		const response = await sendInteraction(
+			submitWritten(guildId, "skills:register-modal", MEETING_NOTES),
 		);
 
 		expect(modal).toEqual({
 			type: InteractionResponseType.Modal,
 			data: {
-				custom_id: "skills:add-modal",
+				custom_id: "skills:register-modal",
 				title: "スキルを追加する",
 				components: [
 					{
@@ -362,14 +438,11 @@ describe("書いて追加", () => {
 				],
 			},
 		});
-		expect(added).toEqual({
-			type: InteractionResponseType.UpdateMessage,
-			data: {
-				content:
-					"スキル「meeting-notes」を追加しました。次の返答から使います。",
-				components: [],
-			},
+		expect(response).toEqual({
+			type: InteractionResponseType.DeferredChannelMessageWithSource,
+			data: { flags: MessageFlags.Ephemeral },
 		});
+		expect(edits(calls)).toEqual([{ content: ADDED }]);
 		expect(
 			await findSkillByName(env.DB, guildId, "meeting-notes"),
 		).toMatchObject({
@@ -381,9 +454,10 @@ describe("書いて追加", () => {
 
 	it("名前は、全角の英数字を半角に、大文字を小文字に直してから確かめる", async () => {
 		const guildId = newGuild();
+		mockDiscord();
 
 		await sendInteraction(
-			submitWritten(guildId, "skills:add-modal", {
+			submitWritten(guildId, "skills:register-modal", {
 				...MEETING_NOTES,
 				name: " Ｍｅｅｔｉｎｇ－Notes ",
 			}),
@@ -394,134 +468,101 @@ describe("書いて追加", () => {
 		);
 	});
 
-	it("名前が規則に合わないときや、同じ名前があるときは、追加せずに理由を本人にだけ見せる", async () => {
+	it("名前が規則に合わないときは、登録せずに、書いた内容をSKILL.mdにして添付する", async () => {
 		const guildId = newGuild();
-		await seed(guildId);
+		const calls = mockDiscord();
+		const written = { ...MEETING_NOTES, name: "議事録" };
 
-		const invalid = await sendInteraction(
-			submitWritten(guildId, "skills:add-modal", {
-				...MEETING_NOTES,
-				name: "議事録",
-			}),
-		);
-		const duplicate = await sendInteraction(
-			submitWritten(guildId, "skills:add-modal", MEETING_NOTES),
+		await sendInteraction(
+			submitWritten(guildId, "skills:register-modal", written),
 		);
 
-		expect(invalid).toEqual({
-			type: InteractionResponseType.ChannelMessageWithSource,
-			data: { flags: MessageFlags.Ephemeral, content: INVALID_NAME },
-		});
-		expect(duplicate.data.content).toBe(
-			"「meeting-notes」という名前のスキルは、すでにあります。別の名前にするか、一覧から選んで編集してください。",
-		);
+		expect(edits(calls)).toEqual([withDraft(INVALID_NAME, written)]);
+		expect(await findSkillByName(env.DB, guildId, "議事録")).toBe(null);
 	});
 
-	it("20個あれば、ボタンを押したときも、送ったときも、上限を伝える", async () => {
+	it("20個あれば、入力画面を開かずに上限を伝える。送ったときに上限なら、書いた内容を添付する", async () => {
 		const guildId = newGuild();
-		for (let index = 0; index < MAX_SKILLS; index++) {
-			await seed(guildId, { ...MEETING_NOTES, name: `skill-${index}` });
-		}
+		await seedFull(guildId);
+		const calls = mockDiscord();
 
-		const pressed = await sendInteraction(
-			pressButton(guildId, "skills:upload"),
-		);
-		const submitted = await sendInteraction(
-			submitWritten(guildId, "skills:add-modal", MEETING_NOTES),
+		const command = await sendInteraction(regskills(guildId));
+		await sendInteraction(
+			submitWritten(guildId, "skills:register-modal", MEETING_NOTES),
 		);
 
-		expect(pressed.data).toEqual({
-			flags: MessageFlags.Ephemeral,
-			content: LIMIT_REACHED,
+		expect(command).toEqual({
+			type: InteractionResponseType.ChannelMessageWithSource,
+			data: { flags: MessageFlags.Ephemeral, content: LIMIT_REACHED },
 		});
-		expect(submitted.data.content).toBe(LIMIT_REACHED);
+		expect(edits(calls)).toEqual([withDraft(LIMIT_REACHED, MEETING_NOTES)]);
+	});
+
+	it("同じ名前があれば、書いた内容を添付して、置き換えるかを確かめる。「置き換える」を押すと置き換える", async () => {
+		const guildId = newGuild();
+		const seeded = await seed(guildId);
+		const calls = mockDiscord();
+		const written = { ...MEETING_NOTES, body: "新しい本文" };
+
+		await sendInteraction(
+			submitWritten(guildId, "skills:register-modal", written),
+		);
+		const [question] = edits(calls);
+		const replaced = await sendInteraction(
+			pressButton(guildId, overwriteButtonId(question)),
+		);
+
+		expect(question).toEqual({
+			...withDraft(
+				"「meeting-notes」という名前のスキルは、すでにあります。書いた内容で置き換えますか?",
+				written,
+			),
+			components: [overwriteRow(overwriteButtonId(question))],
+		});
+		expect(overwriteButtonId(question)).toMatch(/^skills:overwrite:\d+$/);
+		expect(replaced).toEqual({
+			type: InteractionResponseType.UpdateMessage,
+			data: { content: SAVED, components: [], attachments: [] },
+		});
+		expect(await getSkill(env.DB, guildId, seeded.id)).toMatchObject({
+			body: "新しい本文",
+			createdByName: "bob",
+			editedByName: "Alice",
+		});
 	});
 });
 
-describe("ファイルで追加", () => {
-	const FILE = [
-		"---",
-		"name: meeting-notes",
-		"description: 会議の議事録を書く手順。議事録やまとめを頼まれたときに使う",
-		"license: MIT",
-		"---",
-		"",
-		"決まったこと、宿題、次回の予定の3つに分けて書く",
-		"",
-	].join("\n");
-
-	it("ボタンで、ファイルの欄がある入力画面を開く", async () => {
-		const modal = await sendInteraction(
-			pressButton(newGuild(), "skills:upload"),
-		);
-
-		expect(modal).toEqual({
-			type: InteractionResponseType.Modal,
-			data: {
-				custom_id: "skills:upload-modal",
-				title: "スキルをファイルで追加する",
-				components: [
-					{
-						type: ComponentType.Label,
-						label: "SKILL.md",
-						description:
-							"冒頭に名前(name)と説明(description)を書いたファイル。本文は2万文字まで",
-						component: {
-							type: ComponentType.FileUpload,
-							custom_id: "file",
-							min_values: 1,
-							max_values: 1,
-							required: true,
-						},
-					},
-				],
-			},
-		});
-	});
-
-	it("添付されたSKILL.mdを読んで追加し、画面を結果に書き換える", async () => {
+describe("/regskills(SKILL.mdを添付)", () => {
+	it("添付したSKILL.mdを読んで確かめ、登録してから、結果を書く", async () => {
 		const guildId = newGuild();
 		const calls = mockDiscord(FILE);
 
-		const response = await sendInteraction(
-			submitFile(guildId, "skills:upload-modal"),
-		);
+		const response = await sendInteraction(regskills(guildId, 100));
 
 		expect(response).toEqual({
-			type: InteractionResponseType.DeferredMessageUpdate,
+			type: InteractionResponseType.DeferredChannelMessageWithSource,
+			data: { flags: MessageFlags.Ephemeral },
 		});
 		expect(calls.some((call) => call.url.href === CDN_URL)).toBe(true);
-		expect(edits(calls)).toEqual([
-			{
-				content:
-					"スキル「meeting-notes」を追加しました。次の返答から使います。",
-				components: [],
-			},
-		]);
+		expect(edits(calls)).toEqual([{ content: ADDED }]);
 		expect(
 			await findSkillByName(env.DB, guildId, "meeting-notes"),
-		).toMatchObject(MEETING_NOTES);
+		).toMatchObject({ ...MEETING_NOTES, createdByName: "Alice" });
 	});
 
-	it("読めないファイルや、本文が長すぎるファイルは、追加せずに理由を本人にだけ見せる(画面はそのまま)", async () => {
+	it("読めないファイルや、本文が長すぎるファイルは、登録せずに理由を書く(添付は付けない)", async () => {
 		const guildId = newGuild();
 		const unreadable = mockDiscord("# 冒頭に名前と説明がない");
-		await sendInteraction(submitFile(guildId, "skills:upload-modal"));
+		await sendInteraction(regskills(guildId, 100));
 		vi.restoreAllMocks();
 		const tooLong = mockDiscord(
 			FILE.replace("決まったこと", "あ".repeat(20_001)),
 		);
-		await sendInteraction(submitFile(guildId, "skills:upload-modal"));
+		await sendInteraction(regskills(guildId, 100));
 
-		expect(edits(unreadable)).toEqual([]);
-		expect(followups(unreadable)).toEqual([
-			{ content: UNREADABLE_FILE, flags: MessageFlags.Ephemeral },
-		]);
-		expect(followups(tooLong)).toEqual([
-			{
-				content: "本文は2万文字までにしてください(いまは20,019文字)。",
-				flags: MessageFlags.Ephemeral,
-			},
+		expect(edits(unreadable)).toEqual([{ content: UNREADABLE_FILE }]);
+		expect(edits(tooLong)).toEqual([
+			{ content: "本文は2万文字までにしてください(いまは20,019文字)。" },
 		]);
 		expect(await findSkillByName(env.DB, guildId, "meeting-notes")).toBe(null);
 	});
@@ -529,17 +570,96 @@ describe("ファイルで追加", () => {
 	it("大きすぎるファイルは、読まずに読めないと伝える", async () => {
 		const calls = mockDiscord(FILE);
 
-		await sendInteraction(
-			submitFile(newGuild(), "skills:upload-modal", 2 * 1024 * 1024),
-		);
+		await sendInteraction(regskills(newGuild(), 2 * 1024 * 1024));
 
 		expect(calls.some((call) => call.url.href === CDN_URL)).toBe(false);
-		expect(followups(calls)).toEqual([
-			{ content: UNREADABLE_FILE, flags: MessageFlags.Ephemeral },
-		]);
+		expect(edits(calls)).toEqual([{ content: UNREADABLE_FILE }]);
 	});
 
-	it("保存に失敗したら、保存できなかったと本人にだけ見せる", async () => {
+	it("20個あれば、上限を伝える", async () => {
+		const guildId = newGuild();
+		await seedFull(guildId);
+		const calls = mockDiscord(FILE);
+
+		await sendInteraction(regskills(guildId, 100));
+
+		expect(edits(calls)).toEqual([{ content: LIMIT_REACHED }]);
+	});
+
+	it("同じ名前があれば、置き換えるかを確かめる。「置き換える」を押すと置き換える", async () => {
+		const guildId = newGuild();
+		const seeded = await seed(guildId, { ...MEETING_NOTES, body: "古い本文" });
+		const calls = mockDiscord(FILE);
+
+		await sendInteraction(regskills(guildId, 100));
+		const [question] = edits(calls);
+		const replaced = await sendInteraction(
+			pressButton(guildId, overwriteButtonId(question)),
+		);
+
+		expect(question).toEqual({
+			content:
+				"「meeting-notes」という名前のスキルは、すでにあります。添付したSKILL.mdで置き換えますか?",
+			components: [overwriteRow(overwriteButtonId(question))],
+		});
+		expect(replaced).toEqual({
+			type: InteractionResponseType.UpdateMessage,
+			data: { content: SAVED, components: [], attachments: [] },
+		});
+		expect(await getSkill(env.DB, guildId, seeded.id)).toMatchObject({
+			...MEETING_NOTES,
+			editedByName: "Alice",
+		});
+	});
+
+	it("古い「置き換える」ボタンや、ほかの人の確かめているボタンは使えない", async () => {
+		const guildId = newGuild();
+		const seeded = await seed(guildId, { ...MEETING_NOTES, body: "古い本文" });
+		const calls = mockDiscord(FILE);
+
+		// 置き換えるかを確かめている間に、同じ人がもう一度登録しようとした
+		await sendInteraction(regskills(guildId, 100));
+		await sendInteraction(regskills(guildId, 100));
+		const [first, second] = edits(calls);
+		const stale = await sendInteraction(
+			pressButton(guildId, overwriteButtonId(first)),
+		);
+		const byOther = await sendInteraction(
+			pressButton(guildId, overwriteButtonId(second), BOB),
+		);
+
+		for (const response of [stale, byOther]) {
+			expect(response).toEqual({
+				type: InteractionResponseType.ChannelMessageWithSource,
+				data: { flags: MessageFlags.Ephemeral, content: PENDING_GONE },
+			});
+		}
+		expect((await getSkill(env.DB, guildId, seeded.id))?.body).toBe("古い本文");
+	});
+
+	it("確かめている間に、そのスキルが消されていたら、新しく足す", async () => {
+		const guildId = newGuild();
+		const seeded = await seed(guildId);
+		const calls = mockDiscord(FILE);
+
+		await sendInteraction(regskills(guildId, 100));
+		await deleteSkill(env.DB, guildId, seeded.id);
+		const [question] = edits(calls);
+		const replaced = await sendInteraction(
+			pressButton(guildId, overwriteButtonId(question)),
+		);
+
+		expect(replaced.data).toEqual({
+			content: ADDED,
+			components: [],
+			attachments: [],
+		});
+		expect(await findSkillByName(env.DB, guildId, "meeting-notes")).not.toBe(
+			null,
+		);
+	});
+
+	it("保存に失敗したら、保存できなかったと伝える", async () => {
 		const calls = mockDiscord(FILE);
 		const brokenDb = {
 			prepare: () => {
@@ -547,18 +667,12 @@ describe("ファイルで追加", () => {
 			},
 		} as unknown as D1Database;
 
-		await sendInteraction(submitFile(newGuild(), "skills:upload-modal"), {
+		await sendInteraction(regskills(newGuild(), 100), {
 			...env,
 			DB: brokenDb,
 		});
 
-		expect(followups(calls)).toEqual([
-			{
-				content:
-					"スキルを保存できませんでした。少し待ってから、もう一度試してください。",
-				flags: MessageFlags.Ephemeral,
-			},
-		]);
+		expect(edits(calls)).toEqual([{ content: SAVE_FAILED }]);
 	});
 });
 
@@ -805,9 +919,24 @@ describe("ファイルで置き換え", () => {
 		);
 		await sendInteraction(submitFile(guildId, modal.data.custom_id));
 
-		expect(modal.data).toMatchObject({
+		expect(modal.data).toEqual({
 			custom_id: `skills:replace-modal:${seeded.id}:${seeded.updatedAt}`,
 			title: "スキルをファイルで置き換える",
+			components: [
+				{
+					type: ComponentType.Label,
+					label: "SKILL.md",
+					description:
+						"冒頭に名前(name)と説明(description)を書いたファイル。本文は2万文字まで",
+					component: {
+						type: ComponentType.FileUpload,
+						custom_id: "file",
+						min_values: 1,
+						max_values: 1,
+						required: true,
+					},
+				},
+			],
 		});
 		expect(edits(calls)).toEqual([
 			{
@@ -821,6 +950,24 @@ describe("ファイルで置き換え", () => {
 			description: "議事録: 新しい説明",
 			body: "新しい本文",
 		});
+	});
+
+	it("読めないファイルは、置き換えずに理由を本人にだけ見せる(画面はそのまま)", async () => {
+		const guildId = newGuild();
+		const seeded = await seed(guildId);
+		const calls = mockDiscord("# 冒頭に名前と説明がない");
+
+		await sendInteraction(
+			submitFile(
+				guildId,
+				`skills:replace-modal:${seeded.id}:${seeded.updatedAt}`,
+			),
+		);
+
+		expect(edits(calls)).toEqual([]);
+		expect(followups(calls)).toEqual([
+			{ content: UNREADABLE_FILE, flags: MessageFlags.Ephemeral },
+		]);
 	});
 });
 

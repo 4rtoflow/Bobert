@@ -238,7 +238,116 @@ export async function deleteSkill(
 	return row?.name ?? null;
 }
 
-/** スキルのIDとして使える数か。ボタンなどのIDから読んだ値が壊れていたら、使わない */
+/** 名前でスキルの中身を置き換えた結果。addedは、確かめている間に消されていたので、新しく足した */
+export type OverwriteSkillResult = "saved" | "added" | "limit";
+
+/**
+ * 名前で、スキルの説明と本文を置き換える(/regskills で、置き換えると確かめたとき)。
+ * 確かめている間に消されていたら、新しく足す(数の上限は確かめる)
+ */
+export async function overwriteSkill(
+	db: D1Database,
+	guildId: string,
+	content: SkillContent,
+	editor: SkillEditor,
+	now = Date.now(),
+): Promise<OverwriteSkillResult> {
+	const overwrite = async () => {
+		const result = await db
+			.prepare(
+				`UPDATE skills SET
+					description = ?, body = ?,
+					edited_by_id = ?, edited_by_name = ?,
+					updated_at = MAX(?, updated_at + 1)
+				WHERE guild_id = ? AND name = ?`,
+			)
+			.bind(
+				content.description,
+				content.body,
+				editor.id,
+				editor.name,
+				now,
+				guildId,
+				content.name,
+			)
+			.run();
+		return result.meta.changes > 0;
+	};
+	if (await overwrite()) {
+		return "saved";
+	}
+	const added = await addSkill(db, guildId, content, editor, now);
+	if (added !== "duplicate") {
+		return added;
+	}
+	// 同じ名前のスキルが、ちょうど足されていた。それを置き換える
+	await overwrite();
+	return "saved";
+}
+
+/**
+ * 置き換えるかを確かめている間の内容を保存し、そのIDを返す。
+ * 同じ人が同じサーバーで確かめていた、前の内容は消す(人ごと・サーバーごとに1つだけ残す)
+ */
+export async function savePendingSkill(
+	db: D1Database,
+	guildId: string,
+	userId: string,
+	content: SkillContent,
+	now = Date.now(),
+): Promise<number> {
+	const [, inserted] = await db.batch<{ id: number }>([
+		db
+			.prepare("DELETE FROM pending_skills WHERE guild_id = ? AND user_id = ?")
+			.bind(guildId, userId),
+		db
+			.prepare(
+				`INSERT INTO pending_skills (guild_id, user_id, name, description, body, created_at)
+				VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+			)
+			.bind(
+				guildId,
+				userId,
+				content.name,
+				content.description,
+				content.body,
+				now,
+			),
+	]);
+	const id = inserted?.results[0]?.id;
+	if (id === undefined) {
+		throw new Error("pending skill was not saved");
+	}
+	return id;
+}
+
+/** 置き換えるかを確かめている間の内容。消えていたら(置き換えたか、次に確かめたら)、またはほかの人のものならnull */
+export async function getPendingSkill(
+	db: D1Database,
+	guildId: string,
+	userId: string,
+	id: number,
+): Promise<SkillContent | null> {
+	if (!isSkillId(id)) {
+		return null;
+	}
+	return db
+		.prepare(
+			"SELECT name, description, body FROM pending_skills WHERE id = ? AND guild_id = ? AND user_id = ?",
+		)
+		.bind(id, guildId, userId)
+		.first<SkillContent>();
+}
+
+/** 置き換えを済ませた内容を消す */
+export async function deletePendingSkill(
+	db: D1Database,
+	id: number,
+): Promise<void> {
+	await db.prepare("DELETE FROM pending_skills WHERE id = ?").bind(id).run();
+}
+
+/** スキル(と、置き換えを確かめている間の内容)のIDとして使える数か。ボタンなどのIDから読んだ値が壊れていたら、使わない */
 function isSkillId(id: number): boolean {
 	return Number.isSafeInteger(id) && id > 0;
 }

@@ -1,5 +1,6 @@
 import type { RESTPutAPIApplicationCommandsJSONBody } from "discord-api-types/v10";
 import {
+	ApplicationCommandOptionType,
 	ApplicationCommandType,
 	ApplicationIntegrationType,
 	InteractionContextType,
@@ -8,7 +9,11 @@ import {
 import { IMPORT_COMMAND_NAME } from "../import/progress";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
-import { SKILLS_COMMAND_NAME } from "./skills";
+import {
+	REGSKILLS_COMMAND_NAME,
+	REGSKILLS_FILE_OPTION,
+	SKILLS_COMMAND_NAME,
+} from "./skills";
 
 /** サーバー内だけで使えるコマンドにする。DMでの会話は後回しにしているため */
 const GUILD_ONLY = {
@@ -57,8 +62,23 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	},
 	{
 		...GUILD_ONLY,
+		name: REGSKILLS_COMMAND_NAME,
+		description:
+			"スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書く",
+		options: [
+			{
+				type: ApplicationCommandOptionType.Attachment,
+				name: REGSKILLS_FILE_OPTION,
+				description:
+					"登録するSKILL.md。添付しなければ、入力画面で名前・説明・本文を書く",
+				required: false,
+			},
+		],
+	},
+	{
+		...GUILD_ONLY,
 		name: SKILLS_COMMAND_NAME,
-		description: "このサーバーでAIが使うスキル(手順や知識)の一覧と登録",
+		description: "このサーバーでAIが使うスキル(手順や知識)の一覧と編集",
 	},
 	{
 		...GUILD_ONLY,

@@ -16,12 +16,16 @@ import { readSkillTool, type SkillReads } from "../src/respond/tools";
 import {
 	addSkill,
 	countSkills,
+	deletePendingSkill,
 	deleteSkill,
 	findSkillByName,
+	getPendingSkill,
 	getSkill,
 	listSkills,
 	MAX_SKILLS,
+	overwriteSkill,
 	type SkillContent,
+	savePendingSkill,
 	updateSkill,
 } from "../src/store/skills";
 import { saveCredential, updateUserSettings } from "../src/store/users";
@@ -310,6 +314,73 @@ describe("スキルの保存(D1)", () => {
 				BOB,
 			),
 		).toBe("conflict");
+	});
+
+	it("名前で置き換える。消されていたら、新しく足す(数の上限は確かめる)", async () => {
+		const guildId = newGuild();
+		await addSkill(env.DB, guildId, MEETING_NOTES, BOB, 1000);
+		const alice = { id: ALICE.id, name: "alice" };
+		const replaced = { ...MEETING_NOTES, body: "新しい本文" };
+
+		expect(await overwriteSkill(env.DB, guildId, replaced, alice, 1000)).toBe(
+			"saved",
+		);
+		expect(
+			await findSkillByName(env.DB, guildId, "meeting-notes"),
+		).toMatchObject({
+			body: "新しい本文",
+			editedByName: "alice",
+			updatedAt: 1001,
+		});
+		expect(await overwriteSkill(env.DB, guildId, TRPG_RULES, alice)).toBe(
+			"added",
+		);
+
+		const full = newGuild();
+		for (let index = 0; index < MAX_SKILLS; index++) {
+			await addSkill(
+				env.DB,
+				full,
+				{ ...MEETING_NOTES, name: `s-${index}` },
+				BOB,
+			);
+		}
+		expect(await overwriteSkill(env.DB, full, MEETING_NOTES, alice)).toBe(
+			"limit",
+		);
+	});
+
+	it("置き換えるかを確かめている間の内容は、人ごと・サーバーごとに1つだけ残し、その人しか読めない", async () => {
+		const guildId = newGuild();
+
+		const first = await savePendingSkill(
+			env.DB,
+			guildId,
+			ALICE.id,
+			MEETING_NOTES,
+		);
+		const second = await savePendingSkill(
+			env.DB,
+			guildId,
+			ALICE.id,
+			TRPG_RULES,
+		);
+		const other = await savePendingSkill(
+			env.DB,
+			newGuild(),
+			ALICE.id,
+			MEETING_NOTES,
+		);
+
+		// 同じ人が同じサーバーで確かめ直すと、前の内容は消える。ほかのサーバーの分は残る
+		expect(await getPendingSkill(env.DB, guildId, ALICE.id, first)).toBe(null);
+		expect(await getPendingSkill(env.DB, guildId, ALICE.id, second)).toEqual(
+			TRPG_RULES,
+		);
+		expect(await getPendingSkill(env.DB, guildId, BOB.id, second)).toBe(null);
+		expect(await getPendingSkill(env.DB, guildId, ALICE.id, other)).toBe(null);
+		await deletePendingSkill(env.DB, second);
+		expect(await getPendingSkill(env.DB, guildId, ALICE.id, second)).toBe(null);
 	});
 });
 

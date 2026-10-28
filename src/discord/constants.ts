@@ -1,4 +1,5 @@
 import type {
+	ApplicationCommandOptionType as DiscordApplicationCommandOptionType,
 	ApplicationCommandType as DiscordApplicationCommandType,
 	ApplicationIntegrationType as DiscordApplicationIntegrationType,
 	ButtonStyle as DiscordButtonStyle,
@@ -104,6 +105,10 @@ export const TextInputStyle = {
 export const ApplicationCommandType = {
 	ChatInput: 1 as DiscordApplicationCommandType.ChatInput,
 	Message: 3 as DiscordApplicationCommandType.Message,
+} as const;
+
+export const ApplicationCommandOptionType = {
+	Attachment: 11 as DiscordApplicationCommandOptionType.Attachment,
 } as const;
 
 export const InteractionContextType = {
