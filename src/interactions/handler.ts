@@ -1,4 +1,5 @@
 import type {
+	APIChatInputApplicationCommandInteraction,
 	APIInteraction,
 	APIInteractionResponse,
 	APIMessageApplicationCommandInteraction,
@@ -47,6 +48,8 @@ import {
 	submitAnthropicKey,
 } from "./setup";
 import {
+	REGSKILLS_COMMAND_NAME,
+	regskillsCommand,
 	SKILLS_COMMAND_NAME,
 	SKILLS_ID_PREFIX,
 	skillComponent,
@@ -134,6 +137,19 @@ async function route(
 			}
 			if (interaction.data.name === SKILLS_COMMAND_NAME && guildId) {
 				return skillsCommand(env, guildId);
+			}
+			if (
+				interaction.data.type === ApplicationCommandType.ChatInput &&
+				interaction.data.name === REGSKILLS_COMMAND_NAME &&
+				guildId
+			) {
+				return regskillsCommand(
+					interaction as APIChatInputApplicationCommandInteraction,
+					env,
+					ctx,
+					guildId,
+					actor,
+				);
 			}
 			if (interaction.data.name === "settings") {
 				return settingsCommand(interaction, env, ctx, user.id);
