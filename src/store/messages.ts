@@ -453,7 +453,7 @@ export async function deleteStoredMessages(
 /**
  * チャンネル(スレッドを含む)の保存したメッセージを、まとめて消す。権限付きになったチャンネルや、削除されたチャンネルの分。
  * 消したメッセージのIDを返す(Vectorizeからも消すため)。
- * 保存の処理は、公開チャンネルかどうかを確かめてから保存するので、消したメッセージのIDは残さない
+ * 保存の処理は、共有チャンネルかどうかを確かめてから保存するので、消したメッセージのIDは残さない
  */
 export async function deleteChannelMessages(
 	db: D1Database,

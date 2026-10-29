@@ -1,14 +1,14 @@
 /**
  * `/import`の進み具合の表示(仕様: docs/spec/architecture.md「過去ログの取り込み」の進み具合の表示)。
- * 表示する文は、承認をもらったもの(issue #46「文言」)
+ * 表示する文は、承認をもらったもの(issue #46、#55「文言」)
  */
 
 /** `/import`のコマンドの名前 */
 export const IMPORT_COMMAND_NAME = "import";
 
-/** 公開チャンネルがないときの表示 */
-export const NO_PUBLIC_CHANNELS =
-	"公開チャンネル(@everyoneが見られるチャンネル)がないため、取り込むものはありません。";
+/** 取り込める共有チャンネルがないときの表示 */
+export const NO_SHARED_CHANNELS =
+	"Botが見られるチャンネルがないため、取り込むものはありません。";
 
 /** 取り込みを始められなかったときの表示 */
 export const IMPORT_START_FAILED =

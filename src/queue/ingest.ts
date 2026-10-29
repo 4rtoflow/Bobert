@@ -10,7 +10,7 @@ import {
 	messageVersion,
 	saveMessages,
 } from "../store/messages";
-import { type ChannelDeps, resolvePublicChannels } from "./channels";
+import { type ChannelDeps, resolveSharedChannels } from "./channels";
 import type { ReindexJob, StoredMessageInput } from "./messages";
 
 /** 1回でベクトルにする文の数。過去ログの取り込みでは1回に100件届くので、分けて送る */
@@ -29,14 +29,13 @@ export interface IngestDeps extends ChannelDeps {
 		deleteByIds(ids: string[]): Promise<unknown>;
 	};
 	embed: Embedder;
-	/** Bobert自身のユーザーID。返答の末尾の注記を、ベクトルにする文から外すため */
-	botUserId: string;
 }
 
 /**
  * 受け取ったメッセージを保存し、ベクトルを入れる(仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」)。
  * 保存したメッセージの数を返す。
- * - 保存するのは、公開チャンネルのメッセージだけ。権限付きのチャンネルのメッセージは保存しない
+ * - 保存するのは、共有チャンネル(Botが見られて、年齢制限がないチャンネルと、その中の公開スレッド)のメッセージだけ。
+ *   年齢制限のチャンネルと、非公開スレッドのメッセージは保存しない
  * - `/import`の進み具合のメッセージは保存しない。会話ではないうえ、5秒おきに書き換わるため
  * - ベクトルのIDはメッセージID、名前空間はチャンネルID。メタデータに発言者IDと時刻、サーバーIDを付ける
  * - ベクトルを入れるのは、新しいメッセージと、本文が変わったものだけ
@@ -57,7 +56,7 @@ export async function ingestMessages(
 	const candidates = [...latest.values()].filter(
 		(message) => !isImportProgress(message, deps.botUserId),
 	);
-	const visible = await resolvePublicChannels(candidates, deps);
+	const visible = await resolveSharedChannels(candidates, deps);
 	const kept = candidates.filter((message) => visible.has(message.channelId));
 	await saveMessages(deps.db, kept);
 	const { embedded, emptied } = await embedMessages(

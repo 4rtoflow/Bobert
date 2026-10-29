@@ -7,7 +7,7 @@ import { notifyAdmin } from "../alert";
 import { getGatewayBot } from "../discord/api";
 import { isImportProgress } from "../queue/ingest";
 import type { QueueMessage, StoredMessageInput } from "../queue/messages";
-import { channelSyncJobs } from "./channels";
+import { channelSyncJobs, chunkBySize } from "./channels";
 import {
 	type GatewayMessage,
 	memberNames,
@@ -49,6 +49,8 @@ const EMPTY_STATS: GatewayStats = {
 
 /** 再接続の待ち時間の上限 */
 const MAX_BACKOFF_MS = 5 * 60_000;
+/** Queueに1回で入れる仕事の大きさの目安(バイト)。Queuesの1回の上限(256KB)に、余裕を持って収める */
+const MAX_BATCH_BYTES = 192 * 1024;
 
 /**
  * Discord Gatewayへの常時接続を1本持つDurable Object(受信専用)。
@@ -337,11 +339,17 @@ export class Gateway extends DurableObject<Env> {
 				return;
 			}
 			default: {
-				// チャンネル・スレッド・ロールの作成・変更・削除。公開チャンネルかどうかの判定に使う
-				const jobs = channelSyncJobs(event, data, Date.now());
-				if (jobs.length > 0) {
+				// チャンネル・スレッド・ロールの作成・変更・削除と、Bot自身のメンバーの変更。共有チャンネルかどうかの判定に使う
+				const jobs = channelSyncJobs(
+					event,
+					data,
+					Date.now(),
+					this.session?.botUserId ?? null,
+				);
+				// 1回で入れる大きさの上限(256KB)に収まるよう、分けて入れる
+				for (const batch of chunkBySize(jobs, MAX_BATCH_BYTES)) {
 					await this.env.INGEST_QUEUE.sendBatch(
-						jobs.map((job) => ({ body: job satisfies QueueMessage })),
+						batch.map((job) => ({ body: job satisfies QueueMessage })),
 					);
 				}
 			}

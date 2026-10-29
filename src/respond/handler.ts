@@ -411,7 +411,7 @@ export async function answer(
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
 		: false;
-	// AIが必要なときに、このチャンネルと、サーバーの公開チャンネルの履歴を読んだり探したりできるようにする。
+	// AIが必要なときに、このチャンネルと、サーバーの共有チャンネルの履歴を読んだり探したりできるようにする。
 	// このサーバーにスキルがあれば、その一覧を指示に入れ、本文を読めるようにする(仕様: docs/spec/behavior.md「スキル」)。
 	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
 	// 道具の定義は、毎回同じ並びにする(キャッシュのため)

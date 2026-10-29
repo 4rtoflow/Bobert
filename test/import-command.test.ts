@@ -27,18 +27,20 @@ import {
 } from "../src/store/imports";
 import { BOT } from "./fixtures";
 import {
+	BOT_ROLE,
 	EVERYONE_CAN_READ,
 	fakeIngestDeps,
 	guildInteraction,
+	hiddenFromEveryone,
 	mockFetch,
 	sendInteraction,
+	shownToBotRole,
+	testGuildRoles,
 } from "./helpers";
 
 afterEach(() => {
 	vi.restoreAllMocks();
 });
-
-const VIEW_CHANNEL = String(1n << 10n);
 
 function channel(
 	channelId: string,
@@ -52,8 +54,7 @@ function channel(
 		type: ChannelType.GuildText,
 		name: `channel-${channelId}`,
 		nsfw: false,
-		everyoneAllow: null,
-		everyoneDeny: null,
+		overwrites: [],
 		...extra,
 	};
 }
@@ -112,7 +113,7 @@ describe("/importのコマンド", () => {
 		const command = COMMANDS.find((item) => item.name === "import");
 		expect(command).toMatchObject({
 			description:
-				"公開チャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
+				"Botが見られるチャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
 			default_member_permissions: "32",
 		});
 	});
@@ -157,12 +158,19 @@ describe("/importのコマンド", () => {
 });
 
 describe("/importの始め方", () => {
-	it("公開チャンネルとスレッドを、上限の数まで取り込み始め、保留の応答を進み具合の表示にする", async () => {
+	it("Botが見られるチャンネルとスレッドを、上限の数まで取り込み始め、保留の応答を進み具合の表示にする", async () => {
 		const guildId = "5100";
 		const channels = Array.from({ length: MAX_PARALLEL_IMPORTS }, (_, i) =>
 			channel(String(51000 + i), guildId),
 		);
-		const closed = channel("51100", guildId, { everyoneDeny: VIEW_CHANNEL });
+		// @everyoneは見られないが、Botのロールは見られる
+		const membersOnly = channel("51010", guildId, {
+			overwrites: shownToBotRole(guildId),
+		});
+		const closed = channel("51100", guildId, {
+			overwrites: hiddenFromEveryone(guildId),
+		});
+		const adult = channel("51150", guildId, { nsfw: true });
 		const category = channel("51200", guildId, {
 			type: ChannelType.GuildCategory,
 		});
@@ -170,19 +178,23 @@ describe("/importの始め方", () => {
 			type: ChannelType.PublicThread,
 			parentId: "51000",
 		});
+		const privateThread = channel("51400", guildId, {
+			type: ChannelType.PrivateThread,
+			parentId: "51000",
+		});
 		const { deps, edits, enqueued, watched, counted } = fakeStart({
-			everyonePermissions: EVERYONE_CAN_READ,
-			channels: [...channels, closed, category],
-			threads: [thread],
+			roles: testGuildRoles(guildId),
+			channels: [...channels, membersOnly, closed, adult, category],
+			threads: [thread, privateThread],
 		});
 		const job = importJob(guildId);
 
 		await startImport(job, deps, 5_000);
 
-		// 権限付きのチャンネルとカテゴリーは、取り込まない
+		// Botが見られないチャンネル、年齢制限のチャンネル、非公開スレッド、カテゴリーは、取り込まない
 		expect(counted).toHaveLength(1);
 		expect(counted[0]?.sort()).toEqual(
-			[...channels.map((item) => item.channelId), "51300"].sort(),
+			[...channels.map((item) => item.channelId), "51010", "51300"].sort(),
 		);
 		expect(enqueued).toHaveLength(MAX_PARALLEL_IMPORTS);
 		expect(enqueued[0]).toMatchObject({
@@ -211,7 +223,7 @@ describe("/importの始め方", () => {
 	it("取り込み中に実行されたら、同じ回の進み具合を、新しい表示でも見せる", async () => {
 		const guildId = "5200";
 		const snapshot = {
-			everyonePermissions: EVERYONE_CAN_READ,
+			roles: testGuildRoles(guildId),
 			channels: [channel("52000", guildId)],
 			threads: [],
 		};
@@ -231,7 +243,7 @@ describe("/importの始め方", () => {
 	it("すべて取り込み済みなら、0件の完了の表示にする", async () => {
 		const guildId = "5300";
 		const snapshot = {
-			everyonePermissions: EVERYONE_CAN_READ,
+			roles: testGuildRoles(guildId),
 			channels: [channel("53000", guildId)],
 			threads: [],
 		};
@@ -249,10 +261,10 @@ describe("/importの始め方", () => {
 		expect(watched).toEqual([]);
 	});
 
-	it("公開チャンネルがなければ、そう表示する", async () => {
+	it("Botが見られるチャンネルがなければ、そう表示する", async () => {
 		const guildId = "5400";
 		const { deps, edits } = fakeStart({
-			everyonePermissions: "0",
+			roles: { roles: [{ id: guildId, permissions: "0" }], botRoleIds: [] },
 			channels: [channel("54000", guildId)],
 			threads: [],
 		});
@@ -260,7 +272,7 @@ describe("/importの始め方", () => {
 		await startImport(importJob(guildId), deps, 5_000);
 
 		expect(edits).toEqual([
-			"公開チャンネル(@everyoneが見られるチャンネル)がないため、取り込むものはありません。",
+			"Botが見られるチャンネルがないため、取り込むものはありません。",
 		]);
 	});
 
@@ -269,7 +281,7 @@ describe("/importの始め方", () => {
 		const job = importJob(guildId);
 		const { deps } = fakeStart(
 			{
-				everyonePermissions: EVERYONE_CAN_READ,
+				roles: testGuildRoles(guildId),
 				channels: [channel("55000", guildId)],
 				threads: [],
 			},
@@ -297,7 +309,7 @@ describe("/importの始め方", () => {
 });
 
 describe("サーバーのチャンネルとスレッドの列挙", () => {
-	it("アーカイブされた公開スレッドは、公開チャンネルの分だけ、続きがある限り読む", async () => {
+	it("ロールの権限とBotのロールを読む。アーカイブされた公開スレッドは、共有チャンネルの分だけ、続きがある限り読む", async () => {
 		const guildId = "5700";
 		const archivedCalls: string[] = [];
 		mockFetch((call) => {
@@ -309,14 +321,24 @@ describe("サーバーのチャンネルとスレッドの列挙", () => {
 						id: "57002",
 						type: ChannelType.GuildText,
 						name: "運営",
-						permission_overwrites: [
-							{ id: guildId, type: 0, allow: "0", deny: VIEW_CHANNEL },
-						],
+						permission_overwrites: hiddenFromEveryone(guildId),
+					},
+					{
+						id: "57003",
+						type: ChannelType.GuildText,
+						name: "メンバー",
+						permission_overwrites: shownToBotRole(guildId),
 					},
 				]);
 			}
 			if (path === `/guilds/${guildId}/roles`) {
-				return Response.json([{ id: guildId, permissions: EVERYONE_CAN_READ }]);
+				return Response.json([
+					{ id: guildId, permissions: EVERYONE_CAN_READ },
+					{ id: BOT_ROLE, permissions: "0" },
+				]);
+			}
+			if (path === `/guilds/${guildId}/members/${BOT.id}`) {
+				return Response.json({ user: BOT, roles: [BOT_ROLE] });
 			}
 			if (path === `/guilds/${guildId}/threads/active`) {
 				return Response.json({ threads: [], members: [] });
@@ -325,17 +347,18 @@ describe("サーバーのチャンネルとスレッドの列挙", () => {
 				/^\/channels\/(\d+)\/threads\/archived\/public$/,
 			);
 			if (archived) {
+				const parentId = archived[1] ?? "";
 				const before = call.url.searchParams.get("before");
-				archivedCalls.push(`${archived[1]}:${before ?? ""}`);
+				archivedCalls.push(`${parentId}:${before ?? ""}`);
 				return Response.json(
 					before === null
 						? {
 								threads: [
 									{
-										id: "57010",
+										id: `${parentId}0`,
 										type: ChannelType.PublicThread,
 										name: "古い相談",
-										parent_id: "57001",
+										parent_id: parentId,
 										thread_metadata: {
 											archive_timestamp: "2026-10-01T00:00:00.000Z",
 										},
@@ -349,19 +372,31 @@ describe("サーバーのチャンネルとスレッドの列挙", () => {
 			return new Response(null, { status: 500 });
 		});
 
-		const snapshot = await listGuild("token", guildId);
+		const snapshot = await listGuild("token", guildId, BOT.id);
 
-		expect(archivedCalls).toEqual(["57001:", "57001:2026-10-01T00:00:00.000Z"]);
-		expect(snapshot.everyonePermissions).toBe(EVERYONE_CAN_READ);
+		// Botが見られない57002の分は読まない
+		expect(archivedCalls).toEqual([
+			"57001:",
+			"57001:2026-10-01T00:00:00.000Z",
+			"57003:",
+			"57003:2026-10-01T00:00:00.000Z",
+		]);
+		expect(snapshot.roles).toEqual(testGuildRoles(guildId));
 		expect(snapshot.channels.map((item) => item.channelId)).toEqual([
 			"57001",
 			"57002",
+			"57003",
 		]);
 		expect(snapshot.threads).toEqual([
-			channel("57010", guildId, {
+			channel("570010", guildId, {
 				name: "古い相談",
 				type: ChannelType.PublicThread,
 				parentId: "57001",
+			}),
+			channel("570030", guildId, {
+				name: "古い相談",
+				type: ChannelType.PublicThread,
+				parentId: "57003",
 			}),
 		]);
 	});

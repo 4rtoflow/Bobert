@@ -1,13 +1,16 @@
-import type { ChannelInfo } from "../discord/channels";
+import type { ChannelInfo, GuildRoles, RoleInfo } from "../discord/channels";
 import { logEvent } from "../log";
 import {
 	deleteChannelRecords,
+	deleteGuildRoles,
 	loadChannels,
-	loadEveryonePermissions,
+	loadGuildRoles,
 	recomputeVisibility,
 	recordedChannelIds,
+	replaceGuildRoles,
+	saveBotRoles,
 	saveChannels,
-	saveEveryonePermissions,
+	saveGuildRoles,
 	threadIdsOf,
 	unrecordedMessageChannels,
 } from "../store/channels";
@@ -22,18 +25,24 @@ const DELETE_BATCH_SIZE = 100;
 export interface ChannelDeps {
 	db: D1Database;
 	vectors: { deleteByIds(ids: string[]): Promise<unknown> };
+	/**
+	 * Bobert自身のユーザーID。チャンネルの、Botへの権限の上書きを見分けるのと、
+	 * 返答の末尾の注記を、ベクトルにする文から外すのに使う
+	 */
+	botUserId: string;
 	/** チャンネル(スレッドを含む)の情報を、DiscordのAPIで取る。消えているか、Botが見られなければnull */
 	fetchChannel: (
 		channelId: string,
 		guildId: string,
 	) => Promise<ChannelInfo | null>;
-	/** サーバーの@everyoneの権限を、DiscordのAPIで取る。取れなければnull */
-	fetchEveryonePermissions: (guildId: string) => Promise<string | null>;
+	/** サーバーのロールの権限と、Botのロールを、DiscordのAPIで取る。取れなければnull */
+	fetchGuildRoles: (guildId: string) => Promise<GuildRoles | null>;
 }
 
 /**
- * チャンネル・スレッド・ロールの通知を、記録に反映する(仕様: docs/spec/architecture.md「サーバー全体の公開チャンネル」)。
- * - 公開チャンネルかどうかを決め直し、権限付きのチャンネルの保存分を消す
+ * チャンネル・スレッド・ロール・Bot自身のメンバーの通知を、記録に反映する
+ * (仕様: docs/spec/architecture.md「サーバー全体の共有チャンネル」)。
+ * - 共有チャンネルかどうかを決め直し、共有しないチャンネルの保存分を消す
  * - 削除されたチャンネル(中のスレッドを含む)の、記録と保存分を消す
  * - サーバーの全チャンネルの一覧(GUILD_CREATE)なら、記録にあって一覧にないチャンネルは、Botが止まっていた間に
  *   削除されたとみなす。記録のないチャンネルの保存分(この仕組みの前に保存したもの)も、DiscordのAPIで確かめ直す
@@ -43,16 +52,26 @@ export async function applyChannelSync(
 	deps: ChannelDeps,
 ): Promise<void> {
 	const { db } = deps;
-	if (job.everyonePermissions !== undefined) {
-		await saveEveryonePermissions(
-			db,
-			job.guildId,
-			job.everyonePermissions,
-			job.syncedAt,
-		);
+	const roles: RoleInfo[] = [
+		...(job.roles ?? []),
+		// デプロイの前に入った仕事。@everyoneのロールのIDは、サーバーのIDと同じ
+		...(job.everyonePermissions === undefined
+			? []
+			: [{ id: job.guildId, permissions: job.everyonePermissions }]),
+	];
+	if (job.allRoles) {
+		await replaceGuildRoles(db, job.guildId, roles, job.syncedAt);
+	} else {
+		await saveGuildRoles(db, job.guildId, roles, job.syncedAt);
+	}
+	if (job.deletedRoleIds) {
+		await deleteGuildRoles(db, job.guildId, job.deletedRoleIds, job.syncedAt);
+	}
+	if (job.botRoleIds) {
+		await saveBotRoles(db, job.guildId, job.botRoleIds, job.syncedAt);
 	}
 	if (job.channels) {
-		await saveChannels(db, job.channels, job.syncedAt);
+		await saveChannels(db, job.channels.map(withOverwrites), job.syncedAt);
 	}
 	const removed = new Set(job.deleted ?? []);
 	if (job.allChannelIds) {
@@ -69,17 +88,46 @@ export async function applyChannelSync(
 	if (job.allChannelIds) {
 		await recordUnknownChannels(job.guildId, deps);
 	}
-	const restricted = await recomputeVisibility(db, job.guildId);
+	const restricted = await recomputeVisibility(db, job.guildId, deps.botUserId);
 	if (restricted !== null && restricted.length > 0) {
 		await forgetChannels(restricted, deps);
 	}
 }
 
 /**
- * 保存してよいチャンネル(公開チャンネル)のIDを返す。記録にないチャンネルと、@everyoneの権限が分からないサーバーは、
- * DiscordのAPIで確かめて記録する。確かめられなかったチャンネル(Botが見られないか、消えた)は、公開ではないとみなす
+ * デプロイの前に入った仕事のチャンネルは、権限の上書きを、@everyoneへの分だけ別の形で持つ。今の形に直す
  */
-export async function resolvePublicChannels(
+function withOverwrites(
+	channel: ChannelInfo & {
+		everyoneAllow?: string | null;
+		everyoneDeny?: string | null;
+	},
+): ChannelInfo {
+	if (channel.overwrites !== undefined) {
+		return channel;
+	}
+	const { everyoneAllow, everyoneDeny, ...rest } = channel;
+	return {
+		...rest,
+		overwrites:
+			everyoneAllow == null && everyoneDeny == null
+				? []
+				: [
+						{
+							id: channel.guildId,
+							type: 0,
+							allow: everyoneAllow ?? "0",
+							deny: everyoneDeny ?? "0",
+						},
+					],
+	};
+}
+
+/**
+ * 保存してよいチャンネル(共有チャンネル)のIDを返す。記録にないチャンネルと、Botのロールなどが分からないサーバーは、
+ * DiscordのAPIで確かめて記録する。確かめられなかったチャンネル(Botが見られないか、消えた)は、共有しないとみなす
+ */
+export async function resolveSharedChannels(
 	targets: readonly { channelId: string; guildId: string | null }[],
 	deps: ChannelDeps,
 	now = Date.now(),
@@ -123,17 +171,18 @@ export async function resolvePublicChannels(
 		await saveChannels(deps.db, [...fetched.values()], now);
 	}
 	for (const guildId of new Set(guildOf.values())) {
-		if ((await loadEveryonePermissions(deps.db, guildId)) !== null) {
+		if ((await loadGuildRoles(deps.db, guildId)) !== null) {
 			continue;
 		}
-		const permissions = await deps.fetchEveryonePermissions(guildId);
-		if (permissions !== null) {
-			await saveEveryonePermissions(deps.db, guildId, permissions, now);
+		const guild = await deps.fetchGuildRoles(guildId);
+		if (guild !== null) {
+			await replaceGuildRoles(deps.db, guildId, guild.roles, now);
+			await saveBotRoles(deps.db, guildId, guild.botRoleIds, now);
 			touched.add(guildId);
 		}
 	}
 	for (const guildId of touched) {
-		await recomputeVisibility(deps.db, guildId);
+		await recomputeVisibility(deps.db, guildId, deps.botUserId);
 	}
 	const records =
 		touched.size > 0
@@ -143,7 +192,7 @@ export async function resolvePublicChannels(
 		[...records.values()]
 			.filter(
 				(record) =>
-					record.public && guildOf.get(record.channelId) === record.guildId,
+					record.shared && guildOf.get(record.channelId) === record.guildId,
 			)
 			.map((record) => record.channelId),
 	);
