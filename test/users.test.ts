@@ -18,13 +18,13 @@ describe("ユーザーごとの設定", () => {
 
 		await updateUserSettings(env.DB, userId, {
 			customModelId: "x-ai/grok-4.7-mini",
-			featImageInput: false,
+			featWebSearch: true,
 		});
 		expect(await getUserSettings(env.DB, userId)).toEqual({
 			...DEFAULT_USER_SETTINGS,
 			modelKey: "gpt-6-luna",
 			customModelId: "x-ai/grok-4.7-mini",
-			featImageInput: false,
+			featWebSearch: true,
 		});
 
 		// nullを渡せば、空に戻す

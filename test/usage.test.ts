@@ -32,6 +32,7 @@ const HAIKU_DIRECT: ResolvedModel = {
 	modelId: "claude-haiku-5-5",
 	label: "Claude Haiku 5.5",
 	supportsImages: true,
+	supportsPdf: true,
 };
 
 /** OpenRouterのモデル一覧に載っている、Claude Haiku 5.5の単価(1トークンあたりのUSD) */
@@ -71,6 +72,7 @@ describe("利用量の表示", () => {
 				modelId: "openai/gpt-6-luna",
 				label: "GPT-6 Luna",
 				supportsImages: true,
+				supportsPdf: true,
 			},
 			findModelCandidate("gpt-6-luna") ?? null,
 		);
@@ -166,6 +168,7 @@ describe("利用量の表示", () => {
 				modelId: "claude-sonnet-4-6",
 				label: "claude-sonnet-4-6",
 				supportsImages: true,
+				supportsPdf: true,
 			},
 			null,
 		);

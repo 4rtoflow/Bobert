@@ -1,11 +1,19 @@
 import Anthropic from "@anthropic-ai/sdk";
 import {
+	MAX_FILE_READS,
 	MAX_SKILL_READS,
 	MAX_TOOL_CALLS,
 	MAX_WEB_SEARCHES,
 } from "../config/models";
-import { countsTowardLimit, runChatTool, TOOL_LIMIT_REACHED } from "./tools";
 import {
+	countsTowardLimit,
+	FILES_REJECTED,
+	runChatTool,
+	TOOL_LIMIT_REACHED,
+	type ToolOutcome,
+} from "./tools";
+import {
+	type ChatFile,
 	type ChatMessage,
 	type ChatRequest,
 	type ChatResult,
@@ -53,9 +61,9 @@ const MAX_CONTINUATIONS = 3;
 
 /**
  * 1回の返答で、AIとやり取りする回数の上限。続きを頼むときと、道具の結果を返すときに数える。
- * スキルを読む分は、道具の呼び出しの上限とは別に数えるので、その回数を足す
+ * スキルを読む分とファイルを読む分は、道具の呼び出しの上限とは別に数えるので、その回数を足す
  */
-const MAX_ROUNDS = 10 + MAX_SKILL_READS;
+const MAX_ROUNDS = 10 + MAX_SKILL_READS + MAX_FILE_READS;
 
 /**
  * ユーザーのAnthropicのAPIキーで、Claudeを直接呼ぶ。
@@ -80,27 +88,39 @@ export async function chatWithAnthropic(
 	let answerFrom = 0;
 	let continuations = 0;
 	let toolCalls = 0;
+	// 長い返答でも打ち切られないよう、ストリーミングで受けて最後にまとめる
+	const send = () =>
+		client.messages
+			.stream({
+				model: request.model,
+				max_tokens: request.maxTokens,
+				// 毎回同じ並びの会話を渡すので、最後のブロックまでを自動でキャッシュする
+				// (仕様: docs/spec/architecture.md「プロンプトキャッシュ」)
+				cache_control: { type: "ephemeral" },
+				...(tools.length > 0 ? { tools } : {}),
+				...(request.tools.length > 0 && toolCalls >= MAX_TOOL_CALLS
+					? { tool_choice: { type: "none" } }
+					: {}),
+				system: request.system.map((text) => ({ type: "text", text })),
+				messages,
+				...(request.effort !== null && isClaudeEffort(request.effort)
+					? { output_config: { effort: request.effort } }
+					: {}),
+			})
+			.finalMessage();
 	try {
 		while (responses.length < MAX_ROUNDS) {
-			// 長い返答でも打ち切られないよう、ストリーミングで受けて最後にまとめる
-			const message = await client.messages
-				.stream({
-					model: request.model,
-					max_tokens: request.maxTokens,
-					// 毎回同じ並びの会話を渡すので、最後のブロックまでを自動でキャッシュする
-					// (仕様: docs/spec/architecture.md「プロンプトキャッシュ」)
-					cache_control: { type: "ephemeral" },
-					...(tools.length > 0 ? { tools } : {}),
-					...(request.tools.length > 0 && toolCalls >= MAX_TOOL_CALLS
-						? { tool_choice: { type: "none" } }
-						: {}),
-					system: request.system.map((text) => ({ type: "text", text })),
-					messages,
-					...(request.effort !== null && isClaudeEffort(request.effort)
-						? { output_config: { effort: request.effort } }
-						: {}),
-				})
-				.finalMessage();
+			let message: Anthropic.Message;
+			try {
+				message = await send();
+			} catch (error) {
+				// 道具の結果に入れたファイルを、受け付けなかった(大きすぎる、壊れている、パスワード付きなど)。
+				// 1つのファイルのために返答全体が失敗しないよう、そのファイルを外して、1回だけ送り直す
+				if (!filesRejected(error) || !dropToolFiles(messages)) {
+					throw error;
+				}
+				message = await send();
+			}
 			responses.push(message);
 			if (
 				message.stop_reason === "pause_turn" &&
@@ -120,7 +140,7 @@ export async function chatWithAnthropic(
 			messages.push({ role: "assistant", content: message.content });
 			const results: Anthropic.ToolResultBlockParam[] = [];
 			for (const use of uses) {
-				// スキルを読む道具は、上限に数えない(道具が自分で回数を数える)
+				// スキルを読む道具とファイルを読む道具は、上限に数えない(道具が自分で回数を数える)
 				const counted = countsTowardLimit(request.tools, use.name);
 				const outcome =
 					!counted || toolCalls < MAX_TOOL_CALLS
@@ -129,12 +149,7 @@ export async function chatWithAnthropic(
 				if (counted) {
 					toolCalls++;
 				}
-				results.push({
-					type: "tool_result",
-					tool_use_id: use.id,
-					content: outcome.content,
-					...(outcome.isError ? { is_error: true } : {}),
-				});
+				results.push(toolResultBlock(use.id, outcome));
 			}
 			// 道具の結果は、まとめて1つのメッセージで返す
 			messages.push({ role: "user", content: results });
@@ -165,6 +180,76 @@ export async function chatWithAnthropic(
 		sources: sourcesOf(blocks),
 		toolCalls,
 	};
+}
+
+/** 道具の結果。文だけなら文のまま渡す。画像やPDFがあれば、文の後に並べる */
+function toolResultBlock(
+	toolUseId: string,
+	outcome: ToolOutcome,
+): Anthropic.ToolResultBlockParam {
+	return {
+		type: "tool_result",
+		tool_use_id: toolUseId,
+		content:
+			outcome.files.length === 0
+				? outcome.content
+				: [
+						{ type: "text", text: outcome.content },
+						...outcome.files.map(({ file }) => fileBlock(file)),
+					],
+		...(outcome.isError ? { is_error: true } : {}),
+	};
+}
+
+/** 画像とPDFは、URLのまま渡す。Anthropicが読みに行く */
+function fileBlock(
+	file: ChatFile,
+): Anthropic.ImageBlockParam | Anthropic.DocumentBlockParam {
+	return file.type === "image"
+		? { type: "image", source: { type: "url", url: file.url } }
+		: {
+				type: "document",
+				source: { type: "url", url: file.url },
+				title: file.filename,
+			};
+}
+
+/** ファイルを受け付けなかったときの失敗か(400と413) */
+function filesRejected(error: unknown): boolean {
+	return (
+		error instanceof Anthropic.BadRequestError ||
+		(error instanceof Anthropic.APIError && error.status === 413)
+	);
+}
+
+/**
+ * 最後に返した道具の結果から、画像とPDFを外し、渡せなかったことを書き足す。
+ * それより前の道具の結果のファイルは、受け付けられているので残す。外すものがなければfalse
+ */
+function dropToolFiles(messages: Anthropic.MessageParam[]): boolean {
+	const last = messages.at(-1);
+	if (last?.role !== "user" || typeof last.content === "string") {
+		return false;
+	}
+	let dropped = false;
+	const content = last.content.map((block): Anthropic.ContentBlockParam => {
+		if (block.type !== "tool_result" || !Array.isArray(block.content)) {
+			return block;
+		}
+		const texts = block.content.filter((part) => part.type === "text");
+		if (texts.length === block.content.length) {
+			return block;
+		}
+		dropped = true;
+		return {
+			...block,
+			content: [...texts, { type: "text", text: FILES_REJECTED }],
+		};
+	});
+	if (dropped) {
+		messages[messages.length - 1] = { ...last, content };
+	}
+	return dropped;
 }
 
 /**
@@ -345,7 +430,7 @@ function toMessageParam(message: ChatMessage): Anthropic.MessageParam {
 			(part): Anthropic.ContentBlockParam =>
 				part.type === "text"
 					? { type: "text", text: part.text }
-					: { type: "image", source: { type: "url", url: part.url } },
+					: fileBlock(part),
 		),
 	};
 }

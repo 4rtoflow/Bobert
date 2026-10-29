@@ -1,6 +1,6 @@
 /**
  * モデル情報。取得したら、しばらく使い回す。
- * - OpenRouterのモデル一覧: 「その他」で入力されたモデルの存在の確認、画像を読めるかの判断、選べる思考の深さ、
+ * - OpenRouterのモデル一覧: 「その他」で入力されたモデルの存在の確認、画像とPDFを読めるかの判断、選べる思考の深さ、
  *   Web検索を使えるかの判断、利用量の表示の費用(Anthropicで直接呼ぶClaude)に使う。
  *   一覧は大きい(数百件、約800KB)
  * - Anthropicのモデル情報: 「その他」で入力したClaudeで選べる思考の深さと、Web検索を使えるか、入力の上限に使う
@@ -18,6 +18,8 @@ export interface OpenRouterModelInfo {
 	id: string;
 	/** 画像を読めるか */
 	supportsImages: boolean;
+	/** ファイル(PDF)をそのまま読めるか。入力の種類(input_modalities)にfileがあるもの */
+	supportsFiles: boolean;
 	/** 選べる思考の深さ(effort)。並びはOpenRouterのまま。空なら選べない */
 	efforts: string[];
 	/** 道具を使えるか。OpenRouterのWeb検索は、モデルが道具として呼ぶので、使えないモデルでは検索できない */
@@ -163,6 +165,7 @@ async function fetchModels(): Promise<Map<string, OpenRouterModelInfo>> {
 		models.set(model.id, {
 			id: model.id,
 			supportsImages: Array.isArray(modalities) && modalities.includes("image"),
+			supportsFiles: Array.isArray(modalities) && modalities.includes("file"),
 			efforts: Array.isArray(efforts)
 				? efforts.filter((effort) => typeof effort === "string")
 				: [],

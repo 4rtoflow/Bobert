@@ -53,7 +53,7 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	{
 		...GUILD_ONLY,
 		name: "feat",
-		description: "機能のON/OFF(Web検索、利用量の表示、画像の読み取り)",
+		description: "機能のON/OFF(Web検索、利用量の表示)",
 	},
 	{
 		...GUILD_ONLY,

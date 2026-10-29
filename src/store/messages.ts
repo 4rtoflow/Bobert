@@ -275,6 +275,57 @@ export async function loadMessagesByIds(
 }
 
 /**
+ * メッセージの前後windowMs以内にある、添付ファイル付きのメッセージ(意味で検索の結果に入れる。
+ * 仕様: docs/spec/architecture.md「添付ファイルの読み取り」)。
+ * 同じチャンネルで、前後それぞれ近い順にperSide件まで。元のメッセージは含まない。
+ * 順番は決まっておらず、同じメッセージが何回か入ることもある
+ */
+export async function loadNeighborsWithFiles(
+	db: D1Database,
+	messages: readonly Pick<
+		StoredMessageInput,
+		"messageId" | "channelId" | "createdAt"
+	>[],
+	windowMs: number,
+	perSide: number,
+): Promise<StoredMessageInput[]> {
+	if (messages.length === 0) {
+		return [];
+	}
+	// 添付ファイルは、JSONの配列で保存している(ないときは空の配列)
+	const query = (order: "ASC" | "DESC") =>
+		`SELECT * FROM messages
+		WHERE channel_id = ?1 AND created_at >= ?2 AND created_at <= ?3 AND message_id != ?4
+			AND attachments IS NOT NULL AND attachments != '[]'
+		ORDER BY created_at ${order}
+		LIMIT ?5`;
+	const results = await db.batch<MessageRow>(
+		messages.flatMap((message) => [
+			// 前は新しい順(近い順)に、後は古い順(近い順)に読む
+			db
+				.prepare(query("DESC"))
+				.bind(
+					message.channelId,
+					message.createdAt - windowMs,
+					message.createdAt,
+					message.messageId,
+					perSide,
+				),
+			db
+				.prepare(query("ASC"))
+				.bind(
+					message.channelId,
+					message.createdAt,
+					message.createdAt + windowMs,
+					message.messageId,
+					perSide,
+				),
+		]),
+	);
+	return results.flatMap((result) => result.results.map(fromRow));
+}
+
+/**
  * 名前から、発言者のIDを探す(意味で検索の、発言者の指定)。
  * このチャンネルで、その名前で発言した人(前に使っていた名前でも)と、サーバーで今その名前の人。
  * 大文字と小文字は区別しない。先頭の「@」は外す。同じ名前の人が何人かいれば、全員を返す

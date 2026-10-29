@@ -4,28 +4,25 @@ import type {
 	EmbedInfo,
 	StoredMessageInput,
 } from "../queue/messages";
+import { type FileCatalog, isImage, isReadableImage } from "./attachments";
 import { formatJst } from "./time";
 
-/** AIに渡せる画像の形式 */
-const IMAGE_TYPES = new Set([
-	"image/jpeg",
-	"image/png",
-	"image/gif",
-	"image/webp",
-]);
-/** 1枚あたりの大きさの上限(AnthropicのAPIの上限は5MB) */
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 /** 1回に渡す画像の枚数の上限。新しいものから数える */
 const MAX_IMAGES = 10;
 
 export interface ConversationOptions {
 	botUserId: string;
-	/** 画像をAIに渡すか(モデルが対応していて、本人の設定がONのとき) */
+	/** 画像をAIに渡すか(モデルが画像を読めるとき) */
 	includeImages: boolean;
 	/** サーバーで見えている名前(人ごとに、最後に分かったもの)。なければ、メッセージに付いている名前を使う */
 	names: ReadonlyMap<string, string>;
 	/** 会話の古い部分の要約。あれば、会話の最初に渡す */
 	summary?: string | null;
+	/**
+	 * AIに見せた添付ファイルの一覧(ファイルを読む道具を渡すとき)。あれば、渡さない添付ファイルに番号を付ける。
+	 * なければ、ファイル名だけを書き添える
+	 */
+	files?: FileCatalog;
 }
 
 export interface Conversation {
@@ -38,7 +35,7 @@ export interface Conversation {
  * 返信のつながり(古い順)を、AIに渡す会話に変換する(仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」)。
  * - Bobertの発言はAIの発言、それ以外は「[時刻] 名前: 本文」の形の人の発言にする。時刻は日本時間で、
  *   話しかけた発言の時刻が今の日時にあたる。発言の形は毎回同じなので、キャッシュは崩れない
- * - 画像は、新しいものから上限の枚数まで渡す。渡さない添付は、ファイル名だけを書き添える
+ * - 画像は、新しいものから上限の枚数まで渡す。渡さない添付は、番号(ファイルを読む道具で読める)か、ファイル名を書き添える
  * - 古い部分の要約があれば、会話の最初に、人の発言として渡す
  */
 export function toConversation(
@@ -60,7 +57,7 @@ export function toConversation(
 		const passed = images.get(message.messageId) ?? [];
 		const notes = message.attachments
 			.filter((attachment) => !passed.includes(attachment))
-			.map(attachmentNote);
+			.map((attachment) => attachmentNote(message, attachment, options.files));
 		messages.push({
 			role: "user",
 			parts: [
@@ -125,15 +122,17 @@ export function selectImages(
 }
 
 /**
- * メッセージを「[時刻] 名前: 本文」の文にする(道具の結果で使う)。Bobertの発言にも時刻を付ける。Embedの中身と、添付のファイル名を書き添える。
+ * メッセージを「[時刻] 名前: 本文」の文にする(道具の結果で使う)。Bobertの発言にも時刻を付ける。Embedの中身と、添付ファイルを書き添える。
  * Bobertの発言は、末尾の注記を外す。
- * placeを渡すと、時刻の後に書く(今いるチャンネル以外のメッセージの、チャンネルの名前。例: 「[時刻] #雑談 名前: 本文」)
+ * placeを渡すと、時刻の後に書く(今いるチャンネル以外のメッセージの、チャンネルの名前。例: 「[時刻] #雑談 名前: 本文」)。
+ * filesを渡すと、添付ファイルに番号を付ける(ファイルを読む道具で読める)。なければ、ファイル名だけを書き添える
  */
 export function messageLine(
 	message: StoredMessageInput,
 	botUserId: string,
 	names: ReadonlyMap<string, string>,
 	place: string | null = null,
+	files?: FileCatalog,
 ): string {
 	const where = place === null ? "" : `${place} `;
 	if (message.authorId === botUserId) {
@@ -142,7 +141,9 @@ export function messageLine(
 	return humanLine(
 		message,
 		names,
-		message.attachments.map(attachmentNote),
+		message.attachments.map((attachment) =>
+			attachmentNote(message, attachment, files),
+		),
 		where,
 	);
 }
@@ -258,17 +259,19 @@ export function resolveMentions(
 		.replace(/<a?:(\w+):\d+>/g, ":$1:");
 }
 
-function attachmentNote(attachment: AttachmentInfo): string {
+/**
+ * 添付ファイルに書き添える文。filesがあれば、番号(読めるとき)か、読めない理由を書く。
+ * なければ(ファイルを読む道具を渡さないとき)、ファイル名だけを書く
+ */
+function attachmentNote(
+	message: StoredMessageInput,
+	attachment: AttachmentInfo,
+	files: FileCatalog | undefined,
+): string {
+	if (files) {
+		return files.note(message, attachment);
+	}
 	return isImage(attachment)
 		? `[画像: ${attachment.filename}]`
 		: `[添付ファイル: ${attachment.filename}]`;
-}
-
-function isImage(attachment: AttachmentInfo): boolean {
-	return attachment.contentType?.startsWith("image/") ?? false;
-}
-
-function isReadableImage(attachment: AttachmentInfo): boolean {
-	const type = attachment.contentType?.split(";")[0]?.trim() ?? "";
-	return IMAGE_TYPES.has(type) && attachment.size <= MAX_IMAGE_BYTES;
 }

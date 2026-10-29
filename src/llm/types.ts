@@ -9,9 +9,12 @@ export interface ChatMessage {
 	parts: ChatPart[];
 }
 
-export type ChatPart =
-	| { type: "text"; text: string }
-	| { type: "image"; url: string };
+export type ChatPart = { type: "text"; text: string } | ChatFile;
+
+/** AIに渡すファイル(画像とPDF)。URLのまま渡し、AIのプロバイダが読みに行く */
+export type ChatFile =
+	| { type: "image"; url: string }
+	| { type: "pdf"; url: string; filename: string };
 
 export interface ChatRequest {
 	/** プロバイダでのモデルID */
@@ -46,13 +49,28 @@ export interface ChatTool {
 		properties: Record<string, unknown>;
 		required?: string[];
 	};
-	/** AIが呼んだときに、結果の文を作る。入力は、AIが送ったものなので、確かめてから使う */
-	run: (input: Record<string, unknown>) => Promise<string>;
 	/**
-	 * falseなら、道具の呼び出しの上限(MAX_TOOL_CALLS)に数えない。その道具は、自分で回数を数える(スキルを読む道具)。
-	 * 省けば数える
+	 * AIが呼んだときに、結果を作る。入力は、AIが送ったものなので、確かめてから使う。
+	 * 結果は、文のほかに、画像やPDFを含むことがある(ファイルを読む道具)
+	 */
+	run: (input: Record<string, unknown>) => Promise<string | ToolResult>;
+	/**
+	 * falseなら、道具の呼び出しの上限(MAX_TOOL_CALLS)に数えない。
+	 * その道具は、自分で回数を数える(スキルを読む道具と、ファイルを読む道具)。省けば数える
 	 */
 	countsTowardLimit?: boolean;
+}
+
+/** 結果が文だけの道具 */
+export type TextTool = Omit<ChatTool, "run"> & {
+	run: (input: Record<string, unknown>) => Promise<string>;
+};
+
+/** 文のほかに、画像やPDFを含む道具の結果 */
+export interface ToolResult {
+	text: string;
+	/** AIに渡すファイル。labelは、どのファイルかを示す名前(例: 「ファイル3「photo.png」」) */
+	files: { label: string; file: ChatFile }[];
 }
 
 export interface ChatResult {

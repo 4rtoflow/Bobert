@@ -15,6 +15,8 @@ export interface ResolvedModel {
 	/** 表示用の名前 */
 	label: string;
 	supportsImages: boolean;
+	/** PDFをそのまま読めるか */
+	supportsPdf: boolean;
 }
 
 export type ModelResolution =
@@ -46,6 +48,7 @@ export function resolveModel(
 	const base = {
 		label: candidate.label,
 		supportsImages: candidate.supportsImages,
+		supportsPdf: candidate.supportsPdf,
 	};
 	if (candidate.anthropicId && providers.has("anthropic")) {
 		return {
@@ -116,7 +119,7 @@ function resolveCustomModel(
 	if (!providers.has(provider)) {
 		return { ok: false, missing: provider, label: modelId };
 	}
-	// Claudeは画像を読める。ほかのモデルが読めるかはここでは分からないので、
+	// Claudeは画像とPDFを読める。ほかのモデルが読めるかはここでは分からないので、
 	// 応答の処理で、OpenRouterのモデル情報から確かめる
 	return {
 		ok: true,
@@ -125,6 +128,7 @@ function resolveCustomModel(
 			modelId,
 			label: modelId,
 			supportsImages: provider === "anthropic",
+			supportsPdf: provider === "anthropic",
 		},
 	};
 }

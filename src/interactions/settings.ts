@@ -58,7 +58,6 @@ async function settingsMessage(env: Env, userId: string): Promise<MessageEdit> {
 		}`,
 		`- Web検索: ${onOff(settings.featWebSearch)}`,
 		`- 利用量の表示: ${onOff(settings.featUsageDisplay)}`,
-		`- 画像の読み取り: ${onOff(settings.featImageInput)}`,
 		`- 自分用の指示: ${promptPreview(settings.customPrompt)}`,
 	];
 	return { content: lines.join("\n"), components: [] };

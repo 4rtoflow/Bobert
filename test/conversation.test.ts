@@ -1,6 +1,7 @@
 import type { APIAttachment, APIMessage, APIUser } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
 import type { StoredMessageInput } from "../src/queue/messages";
+import { FileCatalog } from "../src/respond/attachments";
 import { toConversation } from "../src/respond/conversation";
 import { fromDiscord } from "../src/respond/history";
 import { ALICE, at, BOB, BOT, discordMessage } from "./fixtures";
@@ -119,6 +120,57 @@ describe("AIに渡す会話への変換", () => {
 			},
 		]);
 		expect(conversation.imagesSkipped).toBe(true);
+	});
+
+	it("ファイルを読む道具を渡すときは、渡さない添付ファイルに、会話の古い順に番号を付ける。読めないファイルには理由を書く", () => {
+		const report: APIAttachment = {
+			id: "a3",
+			filename: "report.pdf",
+			size: 2_000_000,
+			url: "https://cdn.example/report.pdf",
+			proxy_url: "https://media.example/report.pdf",
+			content_type: "application/pdf",
+		};
+		const plan: APIAttachment = {
+			id: "a4",
+			filename: "plan.docx",
+			size: 5000,
+			url: "https://cdn.example/plan.docx",
+			proxy_url: "https://media.example/plan.docx",
+		};
+		const chain = stored(
+			discordMessage("1", ALICE, "資料です", { attachments: [report, plan] }),
+			discordMessage("2", BOB, "これ何?", { attachments: [CAT_IMAGE, MEMO] }),
+		);
+		const files = new FileCatalog({ images: true, pdfs: true });
+
+		const conversation = toConversation(chain, { ...OPTIONS, files });
+
+		// 画像は、今までどおり最初から渡すので、番号は付けない
+		expect(conversation.messages).toEqual([
+			{
+				role: "user",
+				parts: [
+					{
+						type: "text",
+						text: at(
+							"Alice: 資料です\n[ファイル1: report.pdf(PDF、1.9MB)]\n[添付ファイル: plan.docx(まだ読めない形式)]",
+						),
+					},
+				],
+			},
+			{
+				role: "user",
+				parts: [
+					{
+						type: "text",
+						text: at("bob: これ何?\n[ファイル2: memo.txt(テキスト、100B)]"),
+					},
+					{ type: "image", url: "https://cdn.example/cat.png" },
+				],
+			},
+		]);
+		expect(files.find(1)?.messageId).toBe("1");
 	});
 
 	it("「/」と英数字で始まる人の発言には、コマンドの実行ではないと書き添える", () => {
