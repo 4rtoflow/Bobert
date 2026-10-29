@@ -3,6 +3,11 @@ export interface OAuthState {
 	/** /setup を実行した人 */
 	userId: string;
 	codeVerifier: string;
+	/**
+	 * /setup のInteractionのトークン(15分有効)。連携が済んだことを、/setup への追加の返信で知らせるのに使う。
+	 * この列を足す前に作った行ではnull
+	 */
+	interactionToken: string | null;
 }
 
 /** 連携のリンクを作るときに保存する。ついでに期限切れの行を消す */
@@ -17,9 +22,16 @@ export async function saveOAuthState(
 		db.prepare("DELETE FROM oauth_states WHERE expires_at < ?").bind(now),
 		db
 			.prepare(
-				"INSERT INTO oauth_states (state, user_id, code_verifier, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+				"INSERT INTO oauth_states (state, user_id, code_verifier, interaction_token, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
 			)
-			.bind(state, value.userId, value.codeVerifier, expiresAt, now),
+			.bind(
+				state,
+				value.userId,
+				value.codeVerifier,
+				value.interactionToken,
+				expiresAt,
+				now,
+			),
 	]);
 }
 
@@ -31,12 +43,21 @@ export async function takeOAuthState(
 ): Promise<OAuthState | null> {
 	const row = await db
 		.prepare(
-			"DELETE FROM oauth_states WHERE state = ? RETURNING user_id, code_verifier, expires_at",
+			"DELETE FROM oauth_states WHERE state = ? RETURNING user_id, code_verifier, interaction_token, expires_at",
 		)
 		.bind(state)
-		.first<{ user_id: string; code_verifier: string; expires_at: number }>();
+		.first<{
+			user_id: string;
+			code_verifier: string;
+			interaction_token: string | null;
+			expires_at: number;
+		}>();
 	if (row === null || row.expires_at < now) {
 		return null;
 	}
-	return { userId: row.user_id, codeVerifier: row.code_verifier };
+	return {
+		userId: row.user_id,
+		codeVerifier: row.code_verifier,
+		interactionToken: row.interaction_token,
+	};
 }

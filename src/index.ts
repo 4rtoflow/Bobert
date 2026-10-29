@@ -24,7 +24,7 @@ export default {
 			return handleInteraction(request, env, ctx);
 		}
 		if (request.method === "GET" && url.pathname === OPENROUTER_CALLBACK_PATH) {
-			return handleOpenRouterCallback(request, env);
+			return handleOpenRouterCallback(request, env, ctx);
 		}
 		if (url.pathname.startsWith("/admin/")) {
 			return handleAdminRequest(request, env);

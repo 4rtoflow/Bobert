@@ -121,7 +121,7 @@ async function route(
 				);
 			}
 			if (interaction.data.name === "setup") {
-				return setupCommand(env, origin, user);
+				return setupCommand(env, origin, user, interaction.token);
 			}
 			if (interaction.data.name === "model") {
 				return modelCommand(env, user.id);
