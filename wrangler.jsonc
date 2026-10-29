@@ -116,8 +116,8 @@
 				{
 					"binding": "DB",
 					"database_name": "bobert",
-					// 「wrangler d1 create bobert」で作ったIDに置き換える
-					"database_id": "00000000-0000-0000-0000-000000000000",
+					// 北米東部(enam)に作成(2026-10-29)
+					"database_id": "f31cbdb4-5ca6-4c1f-8c46-e308030e5f52",
 					"migrations_dir": "migrations"
 				}
 			],

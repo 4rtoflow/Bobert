@@ -78,6 +78,13 @@ pnpm exec wrangler secret put DISCORD_BOT_TOKEN --env=""
 pnpm db:migrate:dev
 ```
 
+本番のシークレットは、Gitに入らない`.env.production`(書式は`.env.example`と同じ)に書き、デプロイのときにまとめて入れる。本番の環境は2026-10-29に作成済み。
+
+```sh
+pnpm db:migrate:production
+pnpm exec wrangler deploy --env production --secrets-file .env.production
+```
+
 ## Gatewayとコマンドを準備する
 
 デプロイしたあと、管理用エンドポイントから次の操作をする。`ADMIN_TOKEN`は`.env`の値。
