@@ -1,5 +1,7 @@
 import type { APIUser } from "discord-api-types/v10";
 import { randomToken, sha256Base64Url } from "../crypto";
+import { createFollowupMessage } from "../discord/api";
+import { MessageFlags } from "../discord/constants";
 import { exchangeOpenRouterCode } from "../llm/openrouter";
 import { logEvent } from "../log";
 import { saveOAuthState, takeOAuthState } from "../store/oauth";
@@ -17,11 +19,13 @@ const AUTH_LINK_TTL_MS = 10 * 60_000;
  * /setup で見せる、OpenRouterとの連携のリンクを作る
  * (仕様: docs/spec/llm-cost.md「資格情報の登録・保存・削除」)。
  * stateで、コールバックを受けたときに誰のキーとして保存するかを決める。
+ * /setup のInteractionのトークンも一緒に保存し、連携が済んだら、それを使って本人に知らせる。
  */
 export async function createOpenRouterAuthLink(
 	env: Env,
 	origin: string,
 	user: APIUser,
+	interactionToken: string,
 ): Promise<string> {
 	const state = randomToken();
 	const codeVerifier = randomToken();
@@ -29,7 +33,7 @@ export async function createOpenRouterAuthLink(
 	await saveOAuthState(
 		env.DB,
 		state,
-		{ userId: user.id, codeVerifier },
+		{ userId: user.id, codeVerifier, interactionToken },
 		now + AUTH_LINK_TTL_MS,
 		now,
 	);
@@ -43,10 +47,11 @@ export async function createOpenRouterAuthLink(
 	return url.toString();
 }
 
-/** OpenRouterからのコールバック: codeを本人のキーと交換し、暗号化して保存する */
+/** OpenRouterからのコールバック: codeを本人のキーと交換し、暗号化して保存する。済んだらDiscordでも知らせる */
 export async function handleOpenRouterCallback(
 	request: Request,
 	env: Env,
+	ctx: ExecutionContext,
 ): Promise<Response> {
 	const url = new URL(request.url);
 	const code = url.searchParams.get("code");
@@ -86,11 +91,37 @@ export async function handleOpenRouterCallback(
 		);
 	}
 	logEvent("oauth", "openrouter_linked", { userId: saved.userId });
+	if (saved.interactionToken !== null) {
+		ctx.waitUntil(notifyLinked(env, saved.userId, saved.interactionToken));
+	}
 	return page(
 		200,
 		"OpenRouterと連携しました",
 		"Discordに戻って、Bobertにメンションして話しかけてみてください。このページは閉じてかまいません。",
 	);
+}
+
+/**
+ * 連携が済んだことを、/setup への追加の返信で、本人にメンションして知らせる。
+ * /setup の返信と同じく、本人にだけ見える形にする。知らせられなくても連携は済んでいるので、記録だけ残す
+ */
+async function notifyLinked(
+	env: Env,
+	userId: string,
+	interactionToken: string,
+): Promise<void> {
+	try {
+		await createFollowupMessage(env.DISCORD_APPLICATION_ID, interactionToken, {
+			content: `<@${userId}> OpenRouterとの連携が完了しました。`,
+			flags: MessageFlags.Ephemeral,
+			allowed_mentions: { users: [userId] },
+		});
+	} catch (error) {
+		logEvent("oauth", "openrouter_link_notify_failed", {
+			userId,
+			error: error instanceof Error ? error.message : "unknown",
+		});
+	}
 }
 
 /** 結果を知らせる簡単なページ。文言は固定の文字列だけを入れる */

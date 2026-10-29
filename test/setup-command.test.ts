@@ -96,12 +96,16 @@ describe("/setup", () => {
 			"https://bobert.example/oauth/openrouter/callback",
 		);
 		expect(link.searchParams.get("code_challenge_method")).toBe("S256");
+		// 連携が済んだら /setup への追加の返信で知らせるので、Interactionのトークンも保存する
 		const row = await env.DB.prepare(
-			"SELECT user_id FROM oauth_states WHERE state = ?",
+			"SELECT user_id, interaction_token FROM oauth_states WHERE state = ?",
 		)
 			.bind(link.searchParams.get("state"))
-			.first<{ user_id: string }>();
-		expect(row?.user_id).toBe(ALICE.id);
+			.first<{ user_id: string; interaction_token: string }>();
+		expect(row).toEqual({
+			user_id: ALICE.id,
+			interaction_token: "interaction-token",
+		});
 	});
 
 	it("ボタンを押すと、キーを入力するモーダルを開く", async () => {

@@ -34,10 +34,11 @@ export async function setupCommand(
 	env: Env,
 	origin: string,
 	user: APIUser,
+	interactionToken: string,
 ): Promise<APIInteractionResponse> {
 	const [providers, openRouterLink] = await Promise.all([
 		getRegisteredProviders(env.DB, user.id),
-		createOpenRouterAuthLink(env, origin, user),
+		createOpenRouterAuthLink(env, origin, user, interactionToken),
 	]);
 	const anthropic = providers.has("anthropic");
 	const openRouter = providers.has("openrouter");
