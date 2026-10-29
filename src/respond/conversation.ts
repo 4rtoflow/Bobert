@@ -232,7 +232,22 @@ function authorName(
 
 /** Bobertの発言。末尾に添えた注記は外す */
 function botText(message: StoredMessageInput): string {
-	return stripNotes(message.content) || "(本文なし)";
+	return stripNotes(stripReplyHeader(message.content)) || "(本文なし)";
+}
+
+/**
+ * AIが会話の書式をまねて返答の先頭に書いた、「[時刻] 名前: 」の部分。時刻は会話と同じ日本時間の書式で、
+ * 後に、ほかのチャンネルの名前(道具の結果の書式)と、Bobertの名前が続くことがある。時刻がなくても、先頭の「Bobert: 」は外す
+ */
+const REPLY_HEADER =
+	/^\s*(?:\[\d{4}-\d{2}-\d{2}\([日月火水木金土]\) \d{2}:\d{2}\]\s*(?:#\S+\s+)?(?:Bobert\s*[:：]\s*)?|Bobert\s*[:：]\s*)/i;
+
+/**
+ * AIの返答の先頭に付いた「[時刻] Bobert: 」を外す(仕様: docs/spec/architecture.md「会話の並べ方」)。
+ * 投稿する前と、過去の返答をAIに渡す前に外す。残っていると、AIがそれを見て、またまねるため
+ */
+export function stripReplyHeader(text: string): string {
+	return text.replace(REPLY_HEADER, "");
 }
 
 /** Bobertの返答の末尾に添えた注記(「-# 」で始まる小さな文字の行)を外す。会話の内容ではないため */
