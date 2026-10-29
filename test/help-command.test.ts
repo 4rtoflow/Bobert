@@ -25,11 +25,12 @@ describe("/help", () => {
 		expect(body.type).toBe(InteractionResponseType.ChannelMessageWithSource);
 		expect(body.data.flags).toBe(MessageFlags.Ephemeral);
 		const lines: string[] = body.data.content.split("\n");
-		expect(lines.slice(0, 11)).toEqual([
+		expect(lines.slice(0, 12)).toEqual([
 			"**Bobertの使い方**",
 			"- Bobertにメンションするか、Bobertの返答に返信すると、AIが答えます。",
 			"- メッセージに返信しながらBobertにメンションすると、そのメッセージについて聞けます。",
-			"- AIは必要なときに、このサーバーの公開チャンネル(全員が見られるチャンネル)の過去のメッセージを探して答えます。権限付きのチャンネルのメッセージは、そのチャンネルでの返答にだけ使います。",
+			"- AIは必要なときに、このサーバーでBotが見られるチャンネルの過去のメッセージを探して答えます。年齢制限のチャンネルと非公開スレッドのメッセージは、その中での返答にだけ使います。",
+			"- ほかのチャンネルの内容を、そのチャンネルを見られない人もいるチャンネルで答えることがあります。AIに読ませたくないチャンネルは、Botの「チャンネルを見る」権限を外してください。",
 			"- メッセージの右クリックメニュー(アプリ)の「Bobertに聞く」: そのメッセージの意味を説明します",
 			"- メッセージの右クリックメニュー(アプリ)の「会話を要約」: そのメッセージまでの会話を要約します。長い会話の費用を抑えられます",
 			"- 費用は、登録した本人のアカウントに請求されます。まず `/setup` でキーを登録してください。",
@@ -39,19 +40,19 @@ describe("/help", () => {
 			"**コマンド**",
 		]);
 		// コマンドの一覧は、登録するスラッシュコマンドの説明から、登録する順に作る(右クリックメニューの項目は入れない)
-		expect(lines.slice(11)).toHaveLength(
+		expect(lines.slice(12)).toHaveLength(
 			COMMANDS.filter(
 				(command) => command.type === ApplicationCommandType.ChatInput,
 			).length,
 		);
-		expect(lines[11]).toBe(
+		expect(lines[12]).toBe(
 			"- `/setup`: Anthropic APIキーの登録・OpenRouterへのログイン",
 		);
 		expect(lines).toContain(
 			"- `/donate`: サーバーの全員が使えるクレジットの寄付と、残りの確認",
 		);
 		expect(lines).toContain(
-			"- `/import`: 公開チャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
+			"- `/import`: Botが見られるチャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
 		);
 		expect(lines).toContain(
 			"- `/regskills`: スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書く",

@@ -1,20 +1,24 @@
 import {
 	type ChannelInfo,
-	isPublicChannel,
+	type GuildRoles,
+	isSharedChannel,
 	isThreadType,
+	type PermissionOverwrite,
+	type RoleInfo,
 } from "../discord/channels";
 
 /**
- * サーバーのチャンネルとスレッドの記録(仕様: docs/spec/architecture.md「サーバー全体の公開チャンネル」)。
- * 公開チャンネルのメッセージだけを保存し、AIが読めるのも公開チャンネルと今いるチャンネルだけにするため
+ * サーバーのチャンネルとスレッド、ロールの記録(仕様: docs/spec/architecture.md「サーバー全体の共有チャンネル」)。
+ * 共有チャンネル(Botが見られて、年齢制限がないチャンネル)のメッセージだけを保存し、
+ * AIが読めるのも共有チャンネルと今いるチャンネルだけにするため
  */
 
 /** 1つの問い合わせに入れるIDの数の上限(D1は、1つの問い合わせの値を100個までにしている) */
 const MAX_IDS_PER_QUERY = 50;
 
-/** 記録したチャンネル。publicは、最後に判定したときの、公開チャンネルかどうか */
+/** 記録したチャンネル。sharedは、最後に判定したときの、共有チャンネルかどうか */
 export interface ChannelRecord extends ChannelInfo {
-	public: boolean;
+	shared: boolean;
 }
 
 interface ChannelRow {
@@ -24,44 +28,136 @@ interface ChannelRow {
 	type: number;
 	name: string;
 	nsfw: number;
-	everyone_allow: string | null;
-	everyone_deny: string | null;
-	public: number;
+	overwrites: string;
+	shared: number;
 }
 
-/** サーバーの@everyoneの権限を記録する。古い通知で上書きしないよう、受け取った時刻が新しいときだけ書き換える */
-export async function saveEveryonePermissions(
+/** サーバーのロールを記録する。古い通知で上書きしないよう、受け取った時刻が新しいときだけ書き換える */
+export async function saveGuildRoles(
 	db: D1Database,
 	guildId: string,
-	permissions: string,
+	roles: readonly RoleInfo[],
+	syncedAt: number,
+): Promise<void> {
+	if (roles.length === 0) {
+		return;
+	}
+	await db.batch(roles.map((role) => saveRole(db, guildId, role, syncedAt)));
+}
+
+/**
+ * サーバーの全ロールの一覧で、ロールの記録を置き換える。一覧にないロール(Botが止まっていた間に削除されたものなど)の記録は消す。
+ * 一覧より新しい通知で記録したロールは、残す
+ */
+export async function replaceGuildRoles(
+	db: D1Database,
+	guildId: string,
+	roles: readonly RoleInfo[],
+	syncedAt: number,
+): Promise<void> {
+	await db.batch([
+		...roles.map((role) => saveRole(db, guildId, role, syncedAt)),
+		// 一覧にあるロールは、上で受け取った時刻(か、より新しい時刻)になっている
+		db
+			.prepare("DELETE FROM guild_roles WHERE guild_id = ? AND synced_at < ?")
+			.bind(guildId, syncedAt),
+	]);
+}
+
+function saveRole(
+	db: D1Database,
+	guildId: string,
+	role: RoleInfo,
+	syncedAt: number,
+): D1PreparedStatement {
+	return db
+		.prepare(
+			`INSERT INTO guild_roles (guild_id, role_id, permissions, synced_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (guild_id, role_id) DO UPDATE SET
+				permissions = excluded.permissions,
+				synced_at = excluded.synced_at
+			WHERE excluded.synced_at >= guild_roles.synced_at`,
+		)
+		.bind(guildId, role.id, role.permissions, syncedAt);
+}
+
+/** 削除されたロールの記録を消す。削除より新しい通知で記録し直したものは、残す */
+export async function deleteGuildRoles(
+	db: D1Database,
+	guildId: string,
+	roleIds: readonly string[],
+	syncedAt: number,
+): Promise<void> {
+	for (const ids of chunks([...new Set(roleIds)], MAX_IDS_PER_QUERY)) {
+		await db
+			.prepare(
+				`DELETE FROM guild_roles
+				WHERE guild_id = ? AND synced_at <= ? AND role_id IN (${ids.map(() => "?").join(", ")})`,
+			)
+			.bind(guildId, syncedAt, ...ids)
+			.run();
+	}
+}
+
+/** Botが持つロールを記録する。古い通知で上書きしないよう、受け取った時刻が新しいときだけ書き換える */
+export async function saveBotRoles(
+	db: D1Database,
+	guildId: string,
+	roleIds: readonly string[],
 	syncedAt: number,
 ): Promise<void> {
 	await db
 		.prepare(
-			`INSERT INTO guild_everyone (guild_id, permissions, synced_at) VALUES (?, ?, ?)
+			`INSERT INTO bot_members (guild_id, role_ids, synced_at) VALUES (?, ?, ?)
 			ON CONFLICT (guild_id) DO UPDATE SET
-				permissions = excluded.permissions,
+				role_ids = excluded.role_ids,
 				synced_at = excluded.synced_at
-			WHERE excluded.synced_at >= guild_everyone.synced_at`,
+			WHERE excluded.synced_at >= bot_members.synced_at`,
 		)
-		.bind(guildId, permissions, syncedAt)
+		.bind(guildId, JSON.stringify(roleIds), syncedAt)
 		.run();
 }
 
-/** サーバーの@everyoneの権限。まだ分からなければnull */
-export async function loadEveryonePermissions(
+/** サーバーのロールの権限と、Botのロール。Botのロールか、@everyoneのロールの権限が、まだ分からなければnull */
+export async function loadGuildRoles(
 	db: D1Database,
 	guildId: string,
-): Promise<string | null> {
-	return db
-		.prepare("SELECT permissions FROM guild_everyone WHERE guild_id = ?")
-		.bind(guildId)
-		.first<string>("permissions");
+): Promise<GuildRoles | null> {
+	const [roles, member] = await db.batch([
+		db
+			.prepare(
+				"SELECT role_id, permissions FROM guild_roles WHERE guild_id = ? ORDER BY role_id",
+			)
+			.bind(guildId),
+		db
+			.prepare("SELECT role_ids FROM bot_members WHERE guild_id = ?")
+			.bind(guildId),
+	]);
+	const roleRows = (roles?.results ?? []) as {
+		role_id: string;
+		permissions: string;
+	}[];
+	const memberRow = (member?.results ?? [])[0] as
+		| { role_ids: string }
+		| undefined;
+	if (
+		memberRow === undefined ||
+		!roleRows.some((row) => row.role_id === guildId)
+	) {
+		return null;
+	}
+	return {
+		roles: roleRows.map((row) => ({
+			id: row.role_id,
+			permissions: row.permissions,
+		})),
+		botRoleIds: parseStrings(memberRow.role_ids),
+	};
 }
 
 /**
  * チャンネルとスレッドを記録する。古い通知で上書きしないよう、受け取った時刻が新しいときだけ書き換える。
- * 公開かどうかは、recomputeVisibilityで決め直す(新しく記録したものは、決まるまで権限付きとして扱う)
+ * 共有チャンネルかどうかは、recomputeVisibilityで決め直す(新しく記録したものは、決まるまで共有しない)
  */
 export async function saveChannels(
 	db: D1Database,
@@ -76,16 +172,15 @@ export async function saveChannels(
 			db
 				.prepare(
 					`INSERT INTO channels (
-						channel_id, guild_id, parent_id, type, name, nsfw, everyone_allow, everyone_deny, public, synced_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+						channel_id, guild_id, parent_id, type, name, nsfw, overwrites, shared, synced_at
+					) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
 					ON CONFLICT (channel_id) DO UPDATE SET
 						guild_id = excluded.guild_id,
 						parent_id = excluded.parent_id,
 						type = excluded.type,
 						name = excluded.name,
 						nsfw = excluded.nsfw,
-						everyone_allow = excluded.everyone_allow,
-						everyone_deny = excluded.everyone_deny,
+						overwrites = excluded.overwrites,
 						synced_at = excluded.synced_at
 					WHERE excluded.synced_at >= channels.synced_at`,
 				)
@@ -96,8 +191,7 @@ export async function saveChannels(
 					channel.type,
 					channel.name,
 					channel.nsfw ? 1 : 0,
-					channel.everyoneAllow,
-					channel.everyoneDeny,
+					JSON.stringify(channel.overwrites),
 					syncedAt,
 				),
 		),
@@ -105,15 +199,16 @@ export async function saveChannels(
 }
 
 /**
- * サーバーのチャンネルとスレッドが公開かどうかを、@everyoneの権限から決め直す。権限付きのもののIDを返す。
- * @everyoneの権限がまだ分からなければ、何もせずにnullを返す(分かるまで、新しく記録したものは権限付きのまま)
+ * サーバーのチャンネルとスレッドが共有チャンネルかどうかを、ロールの権限から決め直す。共有しないもののIDを返す。
+ * Botのロールなどがまだ分からなければ、何もせずにnullを返す(分かるまで、新しく記録したものは共有しないまま)
  */
 export async function recomputeVisibility(
 	db: D1Database,
 	guildId: string,
+	botUserId: string,
 ): Promise<string[] | null> {
-	const everyone = await loadEveryonePermissions(db, guildId);
-	if (everyone === null) {
+	const guild = await loadGuildRoles(db, guildId);
+	if (guild === null) {
 		return null;
 	}
 	const records = await guildChannels(db, guildId);
@@ -123,15 +218,15 @@ export async function recomputeVisibility(
 	for (const record of records) {
 		const parent =
 			record.parentId === null ? undefined : byId.get(record.parentId);
-		const visible = isPublicChannel(record, parent, everyone);
-		if (!visible) {
+		const shared = isSharedChannel(record, parent, guild, botUserId);
+		if (!shared) {
 			restricted.push(record.channelId);
 		}
-		if (visible !== record.public) {
+		if (shared !== record.shared) {
 			updates.push(
 				db
-					.prepare("UPDATE channels SET public = ? WHERE channel_id = ?")
-					.bind(visible ? 1 : 0, record.channelId),
+					.prepare("UPDATE channels SET shared = ? WHERE channel_id = ?")
+					.bind(shared ? 1 : 0, record.channelId),
 			);
 		}
 	}
@@ -173,14 +268,14 @@ export async function loadChannels(
 	return found;
 }
 
-/** サーバーの公開チャンネル(スレッドを除く)。名前の順 */
-export async function publicChannelsOf(
+/** サーバーの共有チャンネル(スレッドを除く)。名前の順 */
+export async function sharedChannelsOf(
 	db: D1Database,
 	guildId: string,
 ): Promise<ChannelRecord[]> {
 	const { results } = await db
 		.prepare(
-			`SELECT * FROM channels WHERE guild_id = ? AND public = 1 AND parent_id IS NULL
+			`SELECT * FROM channels WHERE guild_id = ? AND shared = 1 AND parent_id IS NULL
 			ORDER BY name, channel_id`,
 		)
 		.bind(guildId)
@@ -189,10 +284,10 @@ export async function publicChannelsOf(
 }
 
 /**
- * 名前から、サーバーの公開チャンネル(スレッドを含む)を探す。大文字と小文字は区別しない。
+ * 名前から、サーバーの共有チャンネル(スレッドを含む)を探す。大文字と小文字は区別しない。
  * スレッドでないチャンネルを先に、古い(IDが小さい)ものから並べる
  */
-export async function findPublicChannelsByName(
+export async function findSharedChannelsByName(
 	db: D1Database,
 	guildId: string,
 	name: string,
@@ -200,7 +295,7 @@ export async function findPublicChannelsByName(
 	const { results } = await db
 		.prepare(
 			`SELECT * FROM channels
-			WHERE guild_id = ? AND public = 1 AND name = ? COLLATE NOCASE
+			WHERE guild_id = ? AND shared = 1 AND name = ? COLLATE NOCASE
 			ORDER BY parent_id IS NOT NULL, length(channel_id), channel_id`,
 		)
 		.bind(guildId, name)
@@ -274,10 +369,31 @@ function fromRow(row: ChannelRow): ChannelRecord {
 		type: row.type,
 		name: row.name,
 		nsfw: row.nsfw === 1,
-		everyoneAllow: row.everyone_allow,
-		everyoneDeny: row.everyone_deny,
-		public: row.public === 1,
+		overwrites: parseOverwrites(row.overwrites),
+		shared: row.shared === 1,
 	};
+}
+
+/** 記録した権限の上書き(JSON)を読む。読めなければ、上書きはないとみなす */
+function parseOverwrites(json: string): PermissionOverwrite[] {
+	try {
+		const value: unknown = JSON.parse(json);
+		return Array.isArray(value) ? (value as PermissionOverwrite[]) : [];
+	} catch {
+		return [];
+	}
+}
+
+/** 記録した文字列の配列(JSON)を読む。読めなければ、空とみなす */
+function parseStrings(json: string): string[] {
+	try {
+		const value: unknown = JSON.parse(json);
+		return Array.isArray(value)
+			? value.filter((item): item is string => typeof item === "string")
+			: [];
+	} catch {
+		return [];
+	}
 }
 
 function chunks<T>(items: readonly T[], size: number): T[][] {

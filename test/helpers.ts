@@ -5,16 +5,21 @@ import {
 import { env } from "cloudflare:workers";
 import type { APIUser } from "discord-api-types/v10";
 import { vi } from "vitest";
-import type { ChannelInfo } from "../src/discord/channels";
+import type {
+	ChannelInfo,
+	GuildRoles,
+	PermissionOverwrite,
+} from "../src/discord/channels";
 import { handleInteraction } from "../src/interactions/handler";
 import type { IngestDeps } from "../src/queue/ingest";
 import {
 	recomputeVisibility,
+	replaceGuildRoles,
+	saveBotRoles,
 	saveChannels,
-	saveEveryonePermissions,
 } from "../src/store/channels";
 import { type Provider, saveCredential } from "../src/store/users";
-import { ALICE } from "./fixtures";
+import { ALICE, BOT } from "./fixtures";
 
 // テスト専用の秘密鍵(本物の秘密ではない)。
 // 対になる公開鍵は vitest.config.ts の DISCORD_PUBLIC_KEY に入れてある。
@@ -385,15 +390,45 @@ data: ${JSON.stringify(data)}
 	);
 }
 
+/** 「チャンネルを見る」の権限のビット */
+export const VIEW_CHANNEL = String(1n << 10n);
 /** テストの@everyoneの権限(チャンネルを見る、メッセージ履歴を読む) */
 export const EVERYONE_CAN_READ = String((1n << 10n) | (1n << 16n));
+/** テストで、Botが持つロール(サーバーでの権限はない) */
+export const BOT_ROLE = "7777";
 
-/** チャンネルとスレッドを記録し、公開かどうかを決める。サーバーの@everyoneは、見て読めることにする */
+/** テストのサーバーのロール。@everyoneは見て読めて、BotはBOT_ROLEを持つ */
+export function testGuildRoles(guildId: string): GuildRoles {
+	return {
+		roles: [
+			{ id: guildId, permissions: EVERYONE_CAN_READ },
+			{ id: BOT_ROLE, permissions: "0" },
+		],
+		botRoleIds: [BOT_ROLE],
+	};
+}
+
+/** @everyoneに、チャンネルを見せない上書き。Botのロールにも見せなければ、Botも見られない */
+export function hiddenFromEveryone(guildId: string): PermissionOverwrite[] {
+	return [{ id: guildId, type: 0, allow: "0", deny: VIEW_CHANNEL }];
+}
+
+/** @everyoneには見せず、Botのロール(BOT_ROLE)には見せる上書き */
+export function shownToBotRole(guildId: string): PermissionOverwrite[] {
+	return [
+		...hiddenFromEveryone(guildId),
+		{ id: BOT_ROLE, type: 0, allow: VIEW_CHANNEL, deny: "0" },
+	];
+}
+
+/** チャンネルとスレッドを記録し、共有チャンネルかどうかを決める。サーバーのロールは、testGuildRolesにする */
 export async function recordChannels(
 	guildId: string,
 	channels: (Partial<ChannelInfo> & { channelId: string })[],
 ): Promise<void> {
-	await saveEveryonePermissions(env.DB, guildId, EVERYONE_CAN_READ, 1);
+	const guild = testGuildRoles(guildId);
+	await replaceGuildRoles(env.DB, guildId, guild.roles, 1);
+	await saveBotRoles(env.DB, guildId, guild.botRoleIds, 1);
 	await saveChannels(
 		env.DB,
 		channels.map((channel) => ({
@@ -402,18 +437,18 @@ export async function recordChannels(
 			type: 0,
 			name: `channel-${channel.channelId}`,
 			nsfw: false,
-			everyoneAllow: null,
-			everyoneDeny: null,
+			overwrites: [],
 			...channel,
 		})),
 		1,
 	);
-	await recomputeVisibility(env.DB, guildId);
+	await recomputeVisibility(env.DB, guildId, BOT.id);
 }
 
 /**
  * 偽物のVectorizeと埋め込み。呼ばれた内容を記録する。
- * 記録にないチャンネルは、DiscordのAPIで確かめると、公開のテキストチャンネルだったことにする
+ * 記録にないチャンネルは、DiscordのAPIで確かめると、上書きのないテキストチャンネルだったことにする。
+ * サーバーのロールは、testGuildRolesにする
  */
 export function fakeIngestDeps(botUserId: string) {
 	const upserted: VectorizeVector[] = [];
@@ -443,10 +478,9 @@ export function fakeIngestDeps(botUserId: string) {
 			type: 0,
 			name: `channel-${channelId}`,
 			nsfw: false,
-			everyoneAllow: null,
-			everyoneDeny: null,
+			overwrites: [],
 		}),
-		fetchEveryonePermissions: async () => EVERYONE_CAN_READ,
+		fetchGuildRoles: async (guildId) => testGuildRoles(guildId),
 	};
 	return { deps, upserted, deleted, embedded };
 }

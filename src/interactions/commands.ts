@@ -94,7 +94,7 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: IMPORT_COMMAND_NAME,
 		description:
-			"公開チャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
+			"Botが見られるチャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
 		// 実行できるのは、サーバー管理の権限を持つ人(サーバー設定の「連携サービス」で変えられる)
 		default_member_permissions: String(PermissionFlags.ManageGuild),
 	},

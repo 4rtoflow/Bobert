@@ -180,7 +180,7 @@ describe("過去ログの取り込み", () => {
 		).rejects.toThrow(DiscordApiError);
 	});
 
-	it("公開チャンネルでなくなっていたら、読まずに、取り込めなかったと記録する", async () => {
+	it("共有チャンネルでなくなっていたら(Botが見られなくなったなど)、読まずに、取り込めなかったと記録する", async () => {
 		const channelId = "7006";
 		await beginImport(channelId);
 		let listed = false;

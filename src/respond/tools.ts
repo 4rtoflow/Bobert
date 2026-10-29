@@ -5,9 +5,9 @@ import { findOpenRouterModel } from "../llm/model-info";
 import type { ChatTool } from "../llm/types";
 import type { StoredMessageInput } from "../queue/messages";
 import {
-	findPublicChannelsByName,
+	findSharedChannelsByName,
 	loadChannels,
-	publicChannelsOf,
+	sharedChannelsOf,
 } from "../store/channels";
 import {
 	findAuthorIds,
@@ -108,7 +108,7 @@ export function replyChainTool(
 
 /**
  * 時系列で読む道具(仕様: docs/spec/architecture.md「過去メッセージを参照する道具」)。
- * このチャンネルか、このサーバーの公開チャンネル(スレッドを含む)の履歴を、期間(日本時間)を指定して読む。
+ * このチャンネルか、このサーバーの共有チャンネル(スレッドを含む)の履歴を、期間(日本時間)を指定して読む。
  * 読んだ件数で打ち切ったときは、続きの読み方を添える。
  */
 export function channelHistoryTool(
@@ -118,14 +118,14 @@ export function channelHistoryTool(
 	return {
 		name: "read_channel_history",
 		description:
-			"このチャンネルや、このサーバーの公開チャンネルの過去のメッセージを、時系列で読みます(1回で最大50件)。期間は日本時間で指定します。会話に含まれていない前後の発言や、以前に話していたこと、ほかのBotの返答などを知りたいときに使ってください。",
+			"このチャンネルや、このサーバーのほかのチャンネルの過去のメッセージを、時系列で読みます(1回で最大50件)。期間は日本時間で指定します。会話に含まれていない前後の発言や、以前に話していたこと、ほかのBotの返答などを知りたいときに使ってください。",
 		inputSchema: {
 			type: "object",
 			properties: {
 				channel: {
 					type: "string",
 					description:
-						"読むチャンネルの名前です(例: 雑談)。省くと、このチャンネルを読みます。読めるのは、このチャンネルと、このサーバーの公開チャンネルです",
+						"読むチャンネルの名前です(例: 雑談)。省くと、このチャンネルを読みます。ほかに読めるのは、チャンネルの一覧の道具が返すチャンネルです",
 				},
 				after: {
 					type: "string",
@@ -161,7 +161,7 @@ export function channelHistoryTool(
 			if (typeof target === "string") {
 				return target;
 			}
-			// 今いるチャンネルなら「このチャンネル」、ほかの公開チャンネルなら名前で書く
+			// 今いるチャンネルなら「このチャンネル」、ほかの共有チャンネルなら名前で書く
 			const place = target.name === null ? "このチャンネル" : `#${target.name}`;
 			const newestFirst = input.order !== "oldest_first";
 			const limit = limitInput(input.limit);
@@ -209,10 +209,11 @@ export function channelHistoryTool(
 
 /**
  * 意味で検索する道具(仕様: docs/spec/architecture.md「過去メッセージを参照する道具」)。
- * このチャンネルか、このサーバーの公開チャンネル全体の過去のメッセージから、検索語に意味が近いものを探す。
+ * このチャンネルか、このサーバーの共有チャンネル全体の過去のメッセージから、検索語に意味が近いものを探す。
  * 発言者(名前)と期間(日本時間)で絞り込める。
  * 本文はD1から読むので、消されたメッセージは、Vectorizeへの反映が遅れていても結果に入らない。
- * 権限付きのチャンネルでは、そのチャンネルのメッセージを保存していないので、公開チャンネル全体を探す
+ * 共有しないチャンネル(年齢制限のチャンネルと非公開スレッド)では、そのチャンネルのメッセージを保存していないので、
+ * 共有チャンネル全体を探す
  */
 export function searchMessagesTool(
 	history: HistoryDeps,
@@ -221,7 +222,7 @@ export function searchMessagesTool(
 	return {
 		name: "search_channel_messages",
 		description:
-			"このチャンネルか、このサーバーの公開チャンネル全体の過去のメッセージを、意味の近さで探します(最大10件)。発言者や期間で絞り込めます。いつのことか分からない話題や、誰かが前に言っていたことを探すときに使ってください。数分以内の発言は、まだ見つからないことがあります。",
+			"このチャンネルか、このサーバーのチャンネル全体の過去のメッセージを、意味の近さで探します(最大10件)。発言者や期間で絞り込めます。いつのことか分からない話題や、誰かが前に言っていたことを探すときに使ってください。数分以内の発言は、まだ見つからないことがあります。",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -233,7 +234,7 @@ export function searchMessagesTool(
 					type: "string",
 					enum: ["channel", "server"],
 					description:
-						"探す範囲です。channelはこのチャンネル(既定)、serverはこのサーバーの公開チャンネル全体です",
+						"探す範囲です。channelはこのチャンネル(既定)、serverはこのサーバーのチャンネル全体です",
 				},
 				author: {
 					type: "string",
@@ -266,7 +267,7 @@ export function searchMessagesTool(
 			const { guildId, channelId } = history;
 			const scope =
 				guildId !== null &&
-				(input.scope === "server" || !(await isPublic(history, channelId)))
+				(input.scope === "server" || !(await isShared(history, channelId)))
 					? "server"
 					: "channel";
 			const author =
@@ -289,7 +290,7 @@ export function searchMessagesTool(
 				scope,
 			});
 			const found = await loadMessagesByIds(history.db, ids);
-			// 今いるチャンネルと、公開チャンネルのメッセージだけを渡す。権限付きになったチャンネルの保存分を消すのが遅れても、使わないため
+			// 今いるチャンネルと、共有チャンネルのメッセージだけを渡す。共有しなくなったチャンネルの保存分を消すのが遅れても、使わないため
 			const channels = await loadChannels(
 				history.db,
 				found.map((message) => message.channelId),
@@ -298,7 +299,7 @@ export function searchMessagesTool(
 				.filter(
 					(message) =>
 						message.channelId === channelId ||
-						channels.get(message.channelId)?.public === true,
+						channels.get(message.channelId)?.shared === true,
 				)
 				.sort((a, b) => a.createdAt - b.createdAt);
 			if (messages.length === 0) {
@@ -323,7 +324,7 @@ export function searchMessagesTool(
 }
 
 /**
- * 公開チャンネルの一覧を返す道具(仕様: docs/spec/architecture.md「過去メッセージを参照する道具」)。
+ * 共有チャンネルの一覧を返す道具(仕様: docs/spec/architecture.md「過去メッセージを参照する道具」)。
  * AIが、ほかのチャンネルの名前を確かめるために使う。一覧はAIへの指示に入れず、道具で渡す。
  * チャンネルが変わってもキャッシュが崩れず、使わない返答では費用が増えないようにするため
  */
@@ -331,20 +332,20 @@ export function channelListTool(history: HistoryDeps): ChatTool {
 	return {
 		name: "list_channels",
 		description:
-			"このサーバーの公開チャンネルの名前の一覧を返します。ほかのチャンネルを読みたいときに、名前を確かめるのに使ってください。",
+			"このサーバーの、読めるチャンネルの名前の一覧を返します。ほかのチャンネルを読みたいときに、名前を確かめるのに使ってください。",
 		inputSchema: { type: "object", properties: {} },
 		run: async () => {
 			const channels =
 				history.guildId === null
 					? []
-					: (await publicChannelsOf(history.db, history.guildId)).filter(
+					: (await sharedChannelsOf(history.db, history.guildId)).filter(
 							(channel) => hasMessages(channel.type) || hasPosts(channel.type),
 						);
 			if (channels.length === 0) {
-				return "このサーバーには、公開チャンネルがありません。";
+				return "このサーバーには、読めるチャンネルがありません。";
 			}
 			return [
-				"このサーバーの公開チャンネルです。",
+				"このサーバーの、読めるチャンネルです。",
 				...channels.map((channel) => {
 					const notes = [
 						...(hasPosts(channel.type)
@@ -406,20 +407,20 @@ export function readSkillTool(
 	};
 }
 
-/** チャンネルが公開チャンネルか(記録になければ、公開ではないとみなす) */
-async function isPublic(
+/** チャンネルが共有チャンネルか(記録になければ、共有しないとみなす) */
+async function isShared(
 	history: HistoryDeps,
 	channelId: string,
 ): Promise<boolean> {
 	return (
-		(await loadChannels(history.db, [channelId])).get(channelId)?.public ===
+		(await loadChannels(history.db, [channelId])).get(channelId)?.shared ===
 		true
 	);
 }
 
 /**
  * AIが指定したチャンネル。名前を省いたときと、今いるチャンネルの名前のときは、今いるチャンネル(nameはnull)。
- * 読めるのは、今いるチャンネルと、このサーバーの公開チャンネル(スレッドを含む)。見つからなければ、AIに返す文
+ * 読めるのは、今いるチャンネルと、このサーバーの共有チャンネル(スレッドを含む)。見つからなければ、AIに返す文
  */
 async function targetChannel(
 	value: unknown,
@@ -437,13 +438,13 @@ async function targetChannel(
 	if (here !== undefined && here.name.toLowerCase() === name.toLowerCase()) {
 		return current;
 	}
-	const [found] = await findPublicChannelsByName(
+	const [found] = await findSharedChannelsByName(
 		history.db,
 		history.guildId,
 		name,
 	);
 	if (found === undefined) {
-		return `「${name}」という公開チャンネルは見つかりませんでした。チャンネルの一覧の道具で、名前を確かめてください。`;
+		return `「${name}」という、読めるチャンネルは見つかりませんでした。チャンネルの一覧の道具で、名前を確かめてください。`;
 	}
 	return found.channelId === history.channelId
 		? current

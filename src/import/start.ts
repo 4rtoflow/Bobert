@@ -7,15 +7,16 @@ import {
 	getActiveGuildThreads,
 	getArchivedPublicThreads,
 	getGuildChannels,
+	getGuildMember,
 	getGuildRoles,
 } from "../discord/api";
 import {
 	type ChannelInfo,
 	canHaveThreads,
 	type DiscordChannel,
-	everyonePermissionsOf,
+	type GuildRoles,
 	hasMessages,
-	isPublicChannel,
+	isSharedChannel,
 	isThreadType,
 	toChannelInfo,
 } from "../discord/channels";
@@ -42,7 +43,7 @@ import {
 	completedText,
 	IMPORT_START_FAILED,
 	isComplete,
-	NO_PUBLIC_CHANNELS,
+	NO_SHARED_CHANNELS,
 	progressText,
 } from "./progress";
 import {
@@ -61,11 +62,11 @@ const PROGRESS_OBJECT_PREFIX = "import-progress:";
 
 /** サーバーのチャンネルとスレッドの、今の様子 */
 export interface GuildSnapshot {
-	/** @everyoneの権限。取れなければnull */
-	everyonePermissions: string | null;
-	/** スレッドでないチャンネル(サーバーの全部) */
+	/** サーバーのロールの権限と、Botのロール */
+	roles: GuildRoles;
+	/** スレッドでないチャンネル(サーバーの全部。2026-11-16からは、Botが見られるものだけ) */
 	channels: ChannelInfo[];
-	/** スレッド。アーカイブされていないものと、公開チャンネルの、アーカイブされた公開スレッド */
+	/** スレッド。アーカイブされていないものと、共有チャンネルの、アーカイブされた公開スレッド */
 	threads: ChannelInfo[];
 }
 
@@ -103,7 +104,7 @@ export async function handleImportCommandJob(
 }
 
 /**
- * 公開チャンネルと公開スレッドを列挙し、過去ログの取り込みを始めて、保留にした応答を進み具合の表示にする。
+ * 共有チャンネルと、その中の公開スレッドを列挙し、過去ログの取り込みを始めて、保留にした応答を進み具合の表示にする。
  * 取り込み中の回があれば、その回に足す(同じ回の進み具合を見せる)。始められなければ、そう表示する。
  * 失敗してもやり直さない(やり直すと、表示が「取り込みを始められませんでした」から戻らないことがあるため)
  */
@@ -140,9 +141,9 @@ async function start(
 			kind: "channels",
 			guildId,
 			syncedAt: now,
-			...(snapshot.everyonePermissions === null
-				? {}
-				: { everyonePermissions: snapshot.everyonePermissions }),
+			roles: snapshot.roles.roles,
+			allRoles: true,
+			botRoleIds: snapshot.roles.botRoleIds,
 			channels: [...snapshot.channels, ...snapshot.threads],
 			allChannelIds: snapshot.channels.map((channel) => channel.channelId),
 		},
@@ -151,12 +152,12 @@ async function start(
 	const targets = (await guildChannels(deps.db, guildId))
 		.filter(
 			(record) =>
-				record.public &&
+				record.shared &&
 				(hasMessages(record.type) || isThreadType(record.type)),
 		)
 		.map((record) => record.channelId);
 	if (targets.length === 0) {
-		await deps.editOriginal(NO_PUBLIC_CHANNELS);
+		await deps.editOriginal(NO_SHARED_CHANNELS);
 		return;
 	}
 
@@ -242,38 +243,44 @@ async function estimateMessages(
 }
 
 /**
- * サーバーのチャンネルとスレッドを、DiscordのAPIで列挙する。
- * アーカイブされた公開スレッドは、公開チャンネルの分だけ読む(権限付きのチャンネルのスレッドは取り込まないため)
+ * サーバーのチャンネルとスレッド、ロールの権限とBotのロールを、DiscordのAPIで列挙する。
+ * アーカイブされた公開スレッドは、共有チャンネルの分だけ読む(共有しないチャンネルのスレッドは取り込まないため)
  */
 export async function listGuild(
 	botToken: string,
 	guildId: string,
+	botUserId: string,
 ): Promise<GuildSnapshot> {
-	const [channels, roles, active] = await Promise.all([
+	const [channels, roles, member, active] = await Promise.all([
 		getGuildChannels(botToken, guildId),
 		getGuildRoles(botToken, guildId),
+		getGuildMember(botToken, guildId, botUserId),
 		getActiveGuildThreads(botToken, guildId),
 	]);
-	const everyonePermissions = everyonePermissionsOf(roles, guildId);
+	const guildRoles: GuildRoles = {
+		roles: roles.map((role) => ({
+			id: role.id,
+			permissions: role.permissions,
+		})),
+		botRoleIds: member.roles,
+	};
 	const infos = channels.map((channel) =>
 		toChannelInfo(channel as DiscordChannel, guildId),
 	);
 	const threads = active.threads.map((thread) =>
 		toChannelInfo(thread as DiscordChannel, guildId),
 	);
-	if (everyonePermissions !== null) {
-		for (const parent of infos) {
-			if (
-				canHaveThreads(parent.type) &&
-				isPublicChannel(parent, undefined, everyonePermissions)
-			) {
-				threads.push(
-					...(await archivedPublicThreads(botToken, parent.channelId, guildId)),
-				);
-			}
+	for (const parent of infos) {
+		if (
+			canHaveThreads(parent.type) &&
+			isSharedChannel(parent, undefined, guildRoles, botUserId)
+		) {
+			threads.push(
+				...(await archivedPublicThreads(botToken, parent.channelId, guildId)),
+			);
 		}
 	}
-	return { everyonePermissions, channels: infos, threads };
+	return { roles: guildRoles, channels: infos, threads };
 }
 
 /** チャンネルの、アーカイブされた公開スレッドを全部読む。Botにメッセージ履歴を読む権限がなければ、読まない */
@@ -318,7 +325,9 @@ function importStartDeps(env: Env, job: ImportCommandJob): ImportStartDeps {
 	return {
 		db: env.DB,
 		channels: ingestDeps(env),
-		listGuild: (guildId) => listGuild(token, guildId),
+		// BotのユーザーIDは、アプリケーションのIDと同じ
+		listGuild: (guildId) =>
+			listGuild(token, guildId, env.DISCORD_APPLICATION_ID),
 		countMessages: (guildId, channelIds) =>
 			countGuildMessages(token, guildId, channelIds),
 		enqueueImports: (jobs) => enqueueImports(env, jobs),

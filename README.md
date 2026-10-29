@@ -21,7 +21,7 @@ Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のも�
 | `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)                                        |
 | `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                                                                  |
 | `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)                                            |
-| `src/import/`          | `/import`(公開チャンネルの過去ログの取り込みの始め方と、進み具合を見張るDurable Object)                    |
+| `src/import/`          | `/import`(Botが見られるチャンネルの過去ログの取り込みの始め方と、進み具合を見張るDurable Object)           |
 | `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認                                                 |
 | `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                                                       |
 | `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                                      |

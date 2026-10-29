@@ -1,30 +1,16 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it, type Mock, vi } from "vitest";
-import type { ChannelInfo } from "../src/discord/channels";
+import { ChannelType } from "../src/discord/constants";
 import { type JobHandlers, processBatch } from "../src/queue/consumer";
 import { deleteMessages, ingestMessages } from "../src/queue/ingest";
 import type { QueueMessage, StoredMessageInput } from "../src/queue/messages";
-import {
-	recomputeVisibility,
-	saveChannels,
-	saveEveryonePermissions,
-} from "../src/store/channels";
 import { deleteStoredMessages } from "../src/store/messages";
-import { EVERYONE_CAN_READ, fakeIngestDeps } from "./helpers";
-
-/** テキストチャンネルの記録 */
-function channelInfo(channelId: string, guildId: string): ChannelInfo {
-	return {
-		channelId,
-		guildId,
-		parentId: null,
-		type: 0,
-		name: `channel-${channelId}`,
-		nsfw: false,
-		everyoneAllow: null,
-		everyoneDeny: null,
-	};
-}
+import {
+	fakeIngestDeps,
+	hiddenFromEveryone,
+	recordChannels,
+	shownToBotRole,
+} from "./helpers";
 
 const BOT_ID = "1000";
 const CREATED_AT = Date.parse("2026-10-27T00:00:00.000Z");
@@ -120,29 +106,43 @@ describe("メッセージの保存とベクトル化", () => {
 		]);
 	});
 
-	it("権限付きのチャンネルのメッセージは、保存しない", async () => {
+	it("保存するのは、共有チャンネル(Botが見られて、年齢制限がないチャンネル)のメッセージだけ。年齢制限のチャンネルと非公開スレッドの分は保存しない", async () => {
 		const { deps, embedded } = fakeDeps();
 		const guildId = "4100";
-		await saveEveryonePermissions(env.DB, guildId, EVERYONE_CAN_READ, 1);
-		await saveChannels(
-			env.DB,
-			[
-				channelInfo("3101", guildId),
-				// @everyoneに「チャンネルを見る」がない
-				{ ...channelInfo("3102", guildId), everyoneDeny: String(1n << 10n) },
-			],
-			1,
+		await recordChannels(guildId, [
+			{ channelId: "3101" },
+			// @everyoneは見られないが、Botのロールは見られる
+			{ channelId: "3102", overwrites: shownToBotRole(guildId) },
+			// Botも見られない(このようなメッセージは、ふつうは届かない)
+			{ channelId: "3103", overwrites: hiddenFromEveryone(guildId) },
+			{ channelId: "3104", nsfw: true },
+			{
+				channelId: "3105",
+				type: ChannelType.PrivateThread,
+				parentId: "3101",
+			},
+		]);
+		const messages = ["3101", "3102", "3103", "3104", "3105"].map((channelId) =>
+			storedMessage({ guildId, channelId }),
 		);
-		await recomputeVisibility(env.DB, guildId);
-		const open = storedMessage({ guildId, channelId: "3101" });
-		const closed = storedMessage({ guildId, channelId: "3102" });
 
-		const saved = await ingestMessages([open, closed], deps);
+		const saved = await ingestMessages(messages, deps);
 
-		expect(saved).toBe(1);
-		expect(await storedRow(open.messageId)).not.toBeNull();
-		expect(await storedRow(closed.messageId)).toBeNull();
-		expect(embedded).toEqual(["明日は10時から集まろう"]);
+		expect(saved).toBe(2);
+		const rows = await Promise.all(
+			messages.map((message) => storedRow(message.messageId)),
+		);
+		expect(rows.map((row) => row !== null)).toEqual([
+			true,
+			true,
+			false,
+			false,
+			false,
+		]);
+		expect(embedded).toEqual([
+			"明日は10時から集まろう",
+			"明日は10時から集まろう",
+		]);
 	});
 
 	it("記録にないチャンネルは、DiscordのAPIで確かめる。Botが見られなければ、保存しない", async () => {

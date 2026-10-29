@@ -3,8 +3,8 @@ import { GatewayCloseCodes, GatewayIntentBits } from "../discord/constants";
 /**
  * Bobertが使うGatewayのインテント。
  * Message Contentは必須(仕様: docs/spec/architecture.md「決定事項」)。
- * Guildsは、チャンネル・スレッド・ロールの変更を受け取り、公開チャンネルかどうかを判定するため
- * (仕様: docs/spec/architecture.md「サーバー全体の公開チャンネル」)
+ * Guildsは、チャンネル・スレッド・ロールの変更を受け取り、共有チャンネルかどうかを判定するため
+ * (仕様: docs/spec/architecture.md「サーバー全体の共有チャンネル」)
  */
 export const BOBERT_INTENTS =
 	GatewayIntentBits.Guilds |

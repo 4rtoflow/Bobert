@@ -30,7 +30,7 @@ export interface SearchOptions {
 /**
  * 検索語に意味が近いメッセージのIDを、近い順に返す(仕様: docs/spec/architecture.md「過去メッセージを参照する道具」)。
  * 検索語はWorkers AIでベクトルにし、Vectorizeで探す。チャンネルの中なら、そのチャンネルの名前空間から探す。
- * サーバー全体なら、メタデータのサーバーID(guild_id)で絞り込む(保存しているのは、公開チャンネルのメッセージだけ)。
+ * サーバー全体なら、メタデータのサーバーID(guild_id)で絞り込む(保存しているのは、共有チャンネルのメッセージだけ)。
  * 発言者と期間は、メタデータ(author_id、created_at)で絞り込む。
  */
 export async function searchSimilarMessages(

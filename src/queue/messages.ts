@@ -1,4 +1,4 @@
-import type { ChannelInfo } from "../discord/channels";
+import type { ChannelInfo, RoleInfo } from "../discord/channels";
 
 /**
  * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとCompactJobとImportCommandJob、
@@ -112,15 +112,23 @@ export interface ImportCommandJob {
 }
 
 /**
- * チャンネル・スレッド・ロールの作成・変更・削除を、記録に反映する
- * (仕様: docs/spec/architecture.md「サーバー全体の公開チャンネル」)。
+ * チャンネル・スレッド・ロールの作成・変更・削除と、Bot自身のメンバーの変更を、記録に反映する
+ * (仕様: docs/spec/architecture.md「サーバー全体の共有チャンネル」)。
  */
 export interface ChannelSyncJob {
 	kind: "channels";
 	guildId: string;
 	/** 通知を受け取った時刻(UNIX時間のミリ秒)。古い通知で上書きしないため */
 	syncedAt: number;
-	/** @everyoneの権限(サーバーの情報や、ロールの変更の通知で分かったとき) */
+	/** 作成・変更されたロール(サーバーの情報や、ロールの通知で分かったとき) */
+	roles?: RoleInfo[];
+	/** rolesが、サーバーの全ロールの一覧か(GUILD_CREATEなど)。trueなら、一覧にないロールの記録を消す */
+	allRoles?: boolean;
+	/** 削除されたロール */
+	deletedRoleIds?: string[];
+	/** Botが持つロール(サーバーの情報や、Bot自身のメンバーの変更の通知で分かったとき) */
+	botRoleIds?: string[];
+	/** @everyoneの権限。デプロイの前に入った仕事にだけある(今は、rolesで渡す) */
 	everyonePermissions?: string;
 	/** 作成・変更されたチャンネルとスレッド */
 	channels?: ChannelInfo[];

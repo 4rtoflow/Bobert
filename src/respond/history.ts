@@ -42,7 +42,7 @@ export interface HistoryDeps {
 	listMessages: MessageLister;
 	/**
 	 * 検索語に意味が近いメッセージのIDを、近い順に探す(意味で検索)。
-	 * scopeがchannelなら、このチャンネルから。serverなら、このサーバーの公開チャンネル全体から
+	 * scopeがchannelなら、このチャンネルから。serverなら、このサーバーの共有チャンネル全体から
 	 */
 	searchMessages: (
 		query: string,
@@ -275,7 +275,7 @@ const DISCORD_EPOCH = 1420070400000n;
  * チャンネルの履歴を、範囲を指定して読む(時系列で読む道具)。返すのは古い順。
  * channelIdを省くと、今いるチャンネルを読む。
  * 過去ログの取り込みが済んでいれば、保存したもの(D1)から読む。
- * 済んでいなければ、保存していない期間があるので、Discordから読み、保存にも回す(保存するのは、公開チャンネルの分だけ)。
+ * 済んでいなければ、保存していない期間があるので、Discordから読み、保存にも回す(保存するのは、共有チャンネルの分だけ)。
  */
 export async function readChannelTimeline(
 	range: TimelineRange,

@@ -10,7 +10,7 @@ import {
 	type StartedImport,
 	startQueuedImports,
 } from "../store/imports";
-import { resolvePublicChannels } from "./channels";
+import { resolveSharedChannels } from "./channels";
 import { type IngestDeps, ingestMessages } from "./ingest";
 import type { ImportJob } from "./messages";
 
@@ -45,19 +45,19 @@ export function firstImportJob(started: StartedImport): ImportJob {
  * (仕様: docs/spec/architecture.md「過去ログの取り込み」)。
  * 100件に満たなければ、最後まで読んだので終える。読む権限がなければ、取り込めなかったと記録する。
  * 終えたら、同じ`/import`の回の、順番待ちのチャンネルの取り込みを始める。
- * 取り込み中に権限付きになったチャンネルは、取り込みをやめる(保存もしない)
+ * 取り込み中に共有しなくなったチャンネル(Botが見られなくなったものなど)は、取り込みをやめる(保存もしない)
  */
 export async function importChannelPage(
 	job: ImportJob,
 	deps: ImportDeps,
 ): Promise<void> {
-	const visible = await resolvePublicChannels(
+	const visible = await resolveSharedChannels(
 		[{ channelId: job.channelId, guildId: job.guildId }],
 		deps,
 	);
 	if (!visible.has(job.channelId)) {
 		await failChannelImport(deps.db, job.channelId);
-		logEvent("queue", "import_not_public", { channelId: job.channelId });
+		logEvent("queue", "import_not_shared", { channelId: job.channelId });
 		await startNextImports(job.channelId, deps);
 		return;
 	}
