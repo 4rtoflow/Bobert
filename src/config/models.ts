@@ -16,6 +16,8 @@ export interface ModelCandidate {
 	/** 100万トークンあたりの価格(USD) */
 	price: { input: number; output: number };
 	supportsImages: boolean;
+	/** PDFをそのまま読めるか。OpenRouterのモデル情報の入力の種類(input_modalities)に、fileがあるもの */
+	supportsPdf: boolean;
 	/** 入力がこのトークン数を超えると単価が上がる(要約を勧める案内の境目) */
 	priceIncreaseAboveTokens?: number;
 	note?: string;
@@ -30,6 +32,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "anthropic/claude-haiku-5.5",
 		price: { input: 0.1, output: 0.5 },
 		supportsImages: true,
+		supportsPdf: true,
 		priceIncreaseAboveTokens: 100_000,
 		note: "入力が10万トークンを超えると 0.50 / 2.50",
 	},
@@ -41,6 +44,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "anthropic/claude-sonnet-5.5",
 		price: { input: 2, output: 10 },
 		supportsImages: true,
+		supportsPdf: true,
 	},
 	{
 		key: "claude-opus-5.5",
@@ -50,6 +54,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "anthropic/claude-opus-5.5",
 		price: { input: 4, output: 20 },
 		supportsImages: true,
+		supportsPdf: true,
 	},
 	{
 		key: "claude-fable-5.1",
@@ -59,6 +64,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "anthropic/claude-fable-5.1",
 		price: { input: 10, output: 50 },
 		supportsImages: true,
+		supportsPdf: true,
 	},
 	{
 		key: "gpt-6-astra",
@@ -67,6 +73,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "openai/gpt-6-astra",
 		price: { input: 10, output: 50 },
 		supportsImages: true,
+		supportsPdf: true,
 		priceIncreaseAboveTokens: 272_000,
 	},
 	{
@@ -76,6 +83,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "google/gemini-4-argon",
 		price: { input: 2, output: 10 },
 		supportsImages: true,
+		supportsPdf: true,
 		note: "2026-12-01に約2倍へ値上げ予定",
 	},
 	{
@@ -85,6 +93,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "openai/gpt-6.1-sol",
 		price: { input: 2, output: 10 },
 		supportsImages: true,
+		supportsPdf: true,
 		priceIncreaseAboveTokens: 272_000,
 	},
 	{
@@ -94,6 +103,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "x-ai/grok-4.7",
 		price: { input: 2, output: 6 },
 		supportsImages: true,
+		supportsPdf: true,
 		priceIncreaseAboveTokens: 200_000,
 	},
 	{
@@ -103,6 +113,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "qwen/qwen3.8-max-0902",
 		price: { input: 2, output: 6 },
 		supportsImages: true,
+		supportsPdf: false,
 	},
 	{
 		key: "kimi-k3",
@@ -111,6 +122,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "moonshotai/kimi-k3",
 		price: { input: 3, output: 15 },
 		supportsImages: true,
+		supportsPdf: false,
 	},
 	{
 		key: "muse-spark-1.3",
@@ -119,6 +131,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "meta/muse-spark-1.3",
 		price: { input: 1.25, output: 4.25 },
 		supportsImages: true,
+		supportsPdf: true,
 	},
 	{
 		key: "mistral-large-4",
@@ -127,6 +140,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "mistralai/mistral-large-4-0",
 		price: { input: 1.36, output: 4.18 },
 		supportsImages: true,
+		supportsPdf: false,
 	},
 	{
 		key: "glm-5.3",
@@ -135,6 +149,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "z-ai/glm-5.3",
 		price: { input: 1.4, output: 4.4 },
 		supportsImages: false,
+		supportsPdf: false,
 		note: "画像を読めない",
 	},
 	{
@@ -144,6 +159,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "google/gemini-3.8-flash",
 		price: { input: 0.75, output: 3.75 },
 		supportsImages: true,
+		supportsPdf: true,
 		note: "2027-01-01に約2倍へ値上げ予定",
 	},
 	{
@@ -153,6 +169,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "xiaomi/mimo-v2.6-pro",
 		price: { input: 0.435, output: 0.87 },
 		supportsImages: true,
+		supportsPdf: false,
 	},
 	{
 		key: "gemini-3.5-flash-lite",
@@ -161,6 +178,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "google/gemini-3.5-flash-lite",
 		price: { input: 0.3, output: 2.5 },
 		supportsImages: true,
+		supportsPdf: true,
 	},
 	{
 		key: "deepseek-v4.1-flash",
@@ -169,6 +187,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "deepseek/deepseek-v4.1-flash-1017",
 		price: { input: 0.3, output: 1.2 },
 		supportsImages: true,
+		supportsPdf: false,
 		note: "DeepSeek自身の窓口は学習に使うため除外され、他社の提供分だけを使う",
 	},
 	{
@@ -178,6 +197,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "minimax/minimax-m3.1-flash",
 		price: { input: 0.15, output: 0.6 },
 		supportsImages: true,
+		supportsPdf: false,
 	},
 	{
 		key: "glm-5.3-flash",
@@ -186,6 +206,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "z-ai/glm-5.3-flash",
 		price: { input: 0.15, output: 0.5 },
 		supportsImages: true,
+		supportsPdf: false,
 	},
 	{
 		key: "gpt-6-luna",
@@ -194,6 +215,7 @@ export const MODEL_CANDIDATES: readonly ModelCandidate[] = [
 		openRouterId: "openai/gpt-6-luna",
 		price: { input: 0.1, output: 0.5 },
 		supportsImages: true,
+		supportsPdf: true,
 	},
 ];
 
@@ -211,6 +233,14 @@ export const MAX_TOOL_CALLS = 5;
  * 道具の呼び出しの上限(MAX_TOOL_CALLS)とは別に数える。スキルの手順で過去のメッセージを読むときに、その回数が減らないように
  */
 export const MAX_SKILL_READS = 3;
+
+/**
+ * 1回の返答で、ファイルを読む道具を使える回数の上限(仕様: docs/spec/architecture.md「添付ファイルの読み取り」)。
+ * 道具の呼び出しの上限(MAX_TOOL_CALLS)とは別に数える。
+ * 会話で渡す画像(10枚まで)と合わせて、1回のリクエストの画像を20枚に収める。
+ * Anthropicは、20枚を超えると、1枚あたりの大きさの制限が厳しくなるため
+ */
+export const MAX_FILE_READS = 10;
 
 /** 思考の深さ(effort)を設定していない人に使う段階。モデルが選べなければ、いちばん近い段階を使う */
 export const DEFAULT_EFFORT = "low";

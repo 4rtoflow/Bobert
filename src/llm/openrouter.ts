@@ -1,10 +1,18 @@
 import {
+	MAX_FILE_READS,
 	MAX_SKILL_READS,
 	MAX_TOOL_CALLS,
 	MAX_WEB_SEARCHES,
 } from "../config/models";
-import { countsTowardLimit, runChatTool, TOOL_LIMIT_REACHED } from "./tools";
 import {
+	countsTowardLimit,
+	FILES_REJECTED,
+	runChatTool,
+	TOOL_LIMIT_REACHED,
+	type ToolOutcome,
+} from "./tools";
+import {
+	type ChatFile,
 	type ChatMessage,
 	type ChatRequest,
 	type ChatResult,
@@ -64,16 +72,41 @@ interface OpenRouterResponse {
 
 /**
  * 1回の返答で、AIとやり取りする回数の上限。道具の結果を返すときに数える。
- * スキルを読む分は、道具の呼び出しの上限とは別に数えるので、その回数を足す
+ * スキルを読む分とファイルを読む分は、道具の呼び出しの上限とは別に数えるので、その回数を足す
  */
-const MAX_ROUNDS = 10 + MAX_SKILL_READS;
+const MAX_ROUNDS = 10 + MAX_SKILL_READS + MAX_FILE_READS;
+
+/** 道具の結果で読んだ画像とPDFを、道具の結果の後に人の発言として渡すときの、前置き */
+const TOOL_FILES_INTRO = "(ファイルを読む道具で読んだファイルです)";
+
+/** 画像やPDFを読んだ道具の結果に書き足す文。OpenRouterでは、道具の結果に文しか入れられないため */
+const FILES_ATTACHED_BELOW = "(このファイルは、この後の発言に添付しました)";
+
+/**
+ * PDFを渡すときの読み取り方。モデルが直接読む(native)に決める。
+ * 指定しないと、モデルが読めなかったときに、有料の読み取り(mistral-ocr)が使われるため
+ */
+const NATIVE_PDF_PLUGIN = { id: "file-parser", pdf: { engine: "native" } };
+
+/** 発言の中身の1つ(文、画像、PDF) */
+type OpenRouterContentPart =
+	| { type: "text"; text: string }
+	| { type: "image_url"; image_url: { url: string } }
+	| { type: "file"; file: { filename: string; file_data: string } };
+
+/** 道具の結果。中身は文だけ */
+interface OpenRouterToolMessage {
+	role: "tool";
+	tool_call_id: string;
+	content: string;
+}
 
 /** OpenRouterに送る会話の1件 */
 type OpenRouterMessage =
-	| ReturnType<typeof toOpenRouterMessage>
+	| { role: "user" | "assistant"; content: string | OpenRouterContentPart[] }
 	| { role: "system"; content: string }
 	| { role: "assistant"; content: string | null; tool_calls: ToolCall[] }
-	| { role: "tool"; tool_call_id: string; content: string };
+	| OpenRouterToolMessage;
 
 /** AIが呼んだ道具 */
 interface ToolCall {
@@ -108,8 +141,13 @@ export async function chatWithOpenRouter(
 	/** 最後の答えが始まる応答。道具の結果を返したら、その次の応答から数え直す */
 	let answerFrom = 0;
 	let toolCalls = 0;
-	while (responses.length < MAX_ROUNDS) {
-		const data = await post(apiKey, {
+	/**
+	 * 最後に返した道具の結果のうち、画像やPDFを、後の人の発言に添付したもの(textは、道具の結果の文)。
+	 * 受け付けられたら空にする
+	 */
+	let withFiles: { message: OpenRouterToolMessage; text: string }[] = [];
+	const send = () =>
+		post(apiKey, {
 			model: request.model,
 			max_tokens: request.maxTokens,
 			messages,
@@ -127,7 +165,27 @@ export async function chatWithOpenRouter(
 			...(request.tools.length > 0 && toolCalls >= MAX_TOOL_CALLS
 				? { tool_choice: "none" }
 				: {}),
+			...(messages.some(hasPdf) ? { plugins: [NATIVE_PDF_PLUGIN] } : {}),
 		});
+	while (responses.length < MAX_ROUNDS) {
+		let data: OpenRouterResponse;
+		try {
+			data = await send();
+		} catch (error) {
+			// 道具の結果で読んだファイルを、受け付けなかった(大きすぎる、壊れている、パスワード付きなど)。
+			// 1つのファイルのために返答全体が失敗しないよう、そのファイルを外して、1回だけ送り直す。
+			// 道具の結果の後の人の発言ごと外すので、その形を受け付けないモデルでも答えられる
+			if (!filesRejected(error) || withFiles.length === 0) {
+				throw error;
+			}
+			messages.pop();
+			for (const { message, text } of withFiles) {
+				message.content = `${text}\n${FILES_REJECTED}`;
+			}
+			withFiles = [];
+			data = await send();
+		}
+		withFiles = [];
 		responses.push(data);
 		const choice = data.choices?.[0];
 		const calls = choice?.message?.tool_calls ?? [];
@@ -139,8 +197,9 @@ export async function chatWithOpenRouter(
 			content: choice.message?.content ?? null,
 			tool_calls: calls,
 		});
+		const files: ToolOutcome["files"] = [];
 		for (const call of calls) {
-			// スキルを読む道具は、上限に数えない(道具が自分で回数を数える)
+			// スキルを読む道具とファイルを読む道具は、上限に数えない(道具が自分で回数を数える)
 			const name = call.function?.name ?? "";
 			const counted = countsTowardLimit(request.tools, name);
 			const outcome =
@@ -154,10 +213,31 @@ export async function chatWithOpenRouter(
 			if (counted) {
 				toolCalls++;
 			}
-			messages.push({
+			const message: OpenRouterToolMessage = {
 				role: "tool",
 				tool_call_id: call.id,
-				content: outcome.content,
+				content:
+					outcome.files.length === 0
+						? outcome.content
+						: `${outcome.content}\n${FILES_ATTACHED_BELOW}`,
+			};
+			messages.push(message);
+			if (outcome.files.length > 0) {
+				files.push(...outcome.files);
+				withFiles.push({ message, text: outcome.content });
+			}
+		}
+		// 道具の結果(role: "tool")には文しか入れられないので、画像とPDFは、すぐ後の人の発言で渡す
+		if (files.length > 0) {
+			messages.push({
+				role: "user",
+				content: [
+					{ type: "text", text: TOOL_FILES_INTRO },
+					...files.flatMap(({ label, file }): OpenRouterContentPart[] => [
+						{ type: "text", text: `${label}:` },
+						toContentPart(file),
+					]),
+				],
 			});
 		}
 		answerFrom = responses.length;
@@ -316,7 +396,7 @@ export async function exchangeOpenRouterCode(
 	return data.key;
 }
 
-function toOpenRouterMessage(message: ChatMessage) {
+function toOpenRouterMessage(message: ChatMessage): OpenRouterMessage {
 	const texts = message.parts.flatMap((part) =>
 		part.type === "text" ? [part.text] : [],
 	);
@@ -325,12 +405,36 @@ function toOpenRouterMessage(message: ChatMessage) {
 	}
 	return {
 		role: message.role,
-		content: message.parts.map((part) =>
-			part.type === "text"
-				? { type: "text", text: part.text }
-				: { type: "image_url", image_url: { url: part.url } },
+		content: message.parts.map(
+			(part): OpenRouterContentPart =>
+				part.type === "text"
+					? { type: "text", text: part.text }
+					: toContentPart(part),
 		),
 	};
+}
+
+/** 画像とPDFは、URLのまま渡す。OpenRouterが読みに行く */
+function toContentPart(file: ChatFile): OpenRouterContentPart {
+	return file.type === "image"
+		? { type: "image_url", image_url: { url: file.url } }
+		: { type: "file", file: { filename: file.filename, file_data: file.url } };
+}
+
+/** 発言に、PDFが入っているか */
+function hasPdf(message: OpenRouterMessage): boolean {
+	return (
+		Array.isArray(message.content) &&
+		message.content.some((part) => part.type === "file")
+	);
+}
+
+/** ファイルを受け付けなかったときの失敗か(400と413) */
+function filesRejected(error: unknown): boolean {
+	return (
+		error instanceof LlmError &&
+		(error.kind === "bad_request" || error.kind === "too_large")
+	);
 }
 
 /** OpenRouterのエラーコード(HTTPのステータスと同じ)を、失敗の種類に分ける */

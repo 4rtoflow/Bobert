@@ -625,6 +625,7 @@ describe("返答でスキルを使う", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_file",
 			"read_skill",
 		]);
 		expect(second?.messages.at(-1)).toEqual({
@@ -682,6 +683,7 @@ describe("返答でスキルを使う", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_file",
 			"read_skill",
 		]);
 		expect(posted(calls)).toEqual([
@@ -705,6 +707,7 @@ describe("返答でスキルを使う", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_file",
 		]);
 		expect(posted(calls)).toEqual(["こんにちは!"]);
 	});

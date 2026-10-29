@@ -36,6 +36,7 @@ import {
 	getUserSettings,
 	type UserSettings,
 } from "../store/users";
+import { FileCatalog, type FileSupport } from "./attachments";
 import { compactButtonRow } from "./compact-button";
 import { toConversation } from "./conversation";
 import { replyEffort } from "./effort";
@@ -74,6 +75,8 @@ import {
 import {
 	channelHistoryTool,
 	channelListTool,
+	type FileReads,
+	readFileTool,
 	readSkillTool,
 	replyChainTool,
 	type SkillReads,
@@ -390,23 +393,29 @@ export async function answer(
 	const { summary, summaryUsages } = conversation;
 	const botUserId = env.DISCORD_APPLICATION_ID;
 	const startedAt = Date.now();
-	// 添付がなければ、画像を読めるかは確かめない(「その他」のモデルでは、モデル情報の取得が要るため)
+	const usesTools = await toolsAvailable(settings, model);
+	// 道具を使わず、添付もなければ、読めるファイルは確かめない(「その他」のモデルでは、モデル情報の取得が要るため)
 	const hasAttachments = conversation.messages.some(
 		(message) => message.attachments.length > 0,
 	);
-	const includeImages =
-		hasAttachments &&
-		settings.featImageInput &&
-		(await readsImages(model, settings));
+	const support =
+		usesTools || hasAttachments
+			? await fileSupport(model, settings)
+			: { images: false, pdfs: false };
+	const includeImages = hasAttachments && support.images;
 	// 保存した添付のURLは期限付きなので、AIに渡す画像は、期限が近ければ取り直す
 	const chain = includeImages
 		? await refreshImageUrls(conversation.messages, history, botUserId)
 		: conversation.messages;
+	// 道具を使えるモデルでは、AIに見せる添付ファイルに番号を付け、ファイルを読む道具で読めるようにする
+	// (仕様: docs/spec/architecture.md「添付ファイルの読み取り」)。会話を先に書くので、会話の番号は毎回同じになる
+	const files = usesTools ? new FileCatalog(support) : undefined;
 	const messages = toConversation(chain, {
 		botUserId,
 		includeImages,
 		names: await namesFor(chain, history),
 		summary: summary?.summary ?? null,
+		files,
 	});
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
@@ -416,21 +425,22 @@ export async function answer(
 	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
 	// 道具の定義は、毎回同じ並びにする(キャッシュのため)
 	const root = chain[0];
-	const usesTools = await toolsAvailable(settings, model);
 	const guildId = history.guildId;
 	const skills =
 		usesTools && guildId !== null ? await listSkills(env.DB, guildId) : [];
 	const skillReads: SkillReads = { calls: 0, names: [] };
-	const tools = usesTools
+	const fileReads: FileReads = { calls: 0, kinds: [] };
+	const tools = files
 		? [
-				channelHistoryTool(history, botUserId),
-				searchMessagesTool(history, botUserId),
+				channelHistoryTool(history, botUserId, files),
+				searchMessagesTool(history, botUserId, files),
 				channelListTool(history),
+				readFileTool(files, history, fileReads),
 				...(guildId !== null && skills.length > 0
 					? [readSkillTool(env.DB, guildId, skills, skillReads)]
 					: []),
 				...(summary === null && startsWithReply(root)
-					? [replyChainTool(root, history, botUserId)]
+					? [replyChainTool(root, history, botUserId, files)]
 					: []),
 			]
 		: [];
@@ -454,6 +464,9 @@ export async function answer(
 		durationMs: Date.now() - startedAt,
 		toolCalls: result.toolCalls,
 		skills: skillReads.names,
+		// 読んだファイルは、種類だけを残す(名前と中身は残さない)
+		fileReads: fileReads.calls,
+		fileKinds: fileReads.kinds,
 		...result.usage,
 	});
 	// 料金が上がる境目を超えたら(1回の呼び出しごとの入力で見る)、その会話・その人・そのモデルで1回だけ、要約を勧める
@@ -470,8 +483,7 @@ export async function answer(
 		}));
 	return {
 		text: formatReply(result, {
-			// 本人が画像の読み取りをOFFにしているときは、注記しない
-			imagesSkipped: messages.imagesSkipped && settings.featImageInput,
+			imagesSkipped: messages.imagesSkipped,
 			webSearchSkipped: settings.featWebSearch && webSearch === false,
 			skills: skillReads.names,
 			// 要約を作ったときは、その費用も含める
@@ -493,23 +505,27 @@ export async function answer(
 }
 
 /**
- * モデルが画像を読めるか。「その他」で入力したOpenRouterのモデルは、モデル情報で確かめる。
- * モデル情報を取得できなければ、画像は渡さない。
+ * モデルが読めるファイル(画像とPDF)。「その他」で入力したOpenRouterのモデルは、モデル情報で確かめる。
+ * モデル情報を取得できなければ、どちらも渡さない。
  */
-async function readsImages(
+async function fileSupport(
 	model: ResolvedModel,
 	settings: UserSettings,
-): Promise<boolean> {
+): Promise<FileSupport> {
 	if (!usesCustomModel(settings) || model.provider !== "openrouter") {
-		return model.supportsImages;
+		return { images: model.supportsImages, pdfs: model.supportsPdf };
 	}
 	try {
-		return (await findOpenRouterModel(model.modelId))?.supportsImages ?? false;
+		const info = await findOpenRouterModel(model.modelId);
+		return {
+			images: info?.supportsImages ?? false,
+			pdfs: info?.supportsFiles ?? false,
+		};
 	} catch (error) {
 		log("model_info_unavailable", {
 			error: error instanceof Error ? error.message : "unknown",
 		});
-		return false;
+		return { images: false, pdfs: false };
 	}
 }
 

@@ -31,11 +31,6 @@ const FEATURES = [
 		customId: `${FEAT_BUTTON_PREFIX}usage_display`,
 		label: "利用量の表示",
 	},
-	{
-		setting: "featImageInput",
-		customId: `${FEAT_BUTTON_PREFIX}image_input`,
-		label: "画像の読み取り",
-	},
 ] as const satisfies readonly {
 	setting: keyof UserSettings;
 	customId: string;

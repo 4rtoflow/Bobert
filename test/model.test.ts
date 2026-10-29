@@ -23,6 +23,7 @@ describe("使うモデルと呼び出し先の決定", () => {
 				modelId: "claude-haiku-5-5",
 				label: "Claude Haiku 5.5",
 				supportsImages: true,
+				supportsPdf: true,
 			},
 		});
 	});
@@ -77,6 +78,7 @@ describe("使うモデルと呼び出し先の決定", () => {
 				modelId: "x-ai/grok-4.7-mini",
 				label: "x-ai/grok-4.7-mini",
 				supportsImages: false,
+				supportsPdf: false,
 			},
 		});
 	});

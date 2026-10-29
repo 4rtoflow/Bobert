@@ -244,6 +244,7 @@ describe("説明の仕事", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_file",
 		]);
 		const edit = calls.find((call) => call.method === "PATCH");
 		expect(edit?.url.pathname).toBe(
@@ -288,6 +289,7 @@ describe("説明の仕事", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_file",
 			"read_reply_chain",
 		]);
 	});

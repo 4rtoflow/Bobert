@@ -59,7 +59,6 @@ describe("/settings", () => {
 				"- 思考の深さ: low(既定)",
 				"- Web検索: OFF",
 				"- 利用量の表示: OFF",
-				"- 画像の読み取り: ON",
 				"- 自分用の指示: なし",
 			].join("\n"),
 			components: [],
@@ -73,7 +72,6 @@ describe("/settings", () => {
 			effort: "high",
 			featWebSearch: true,
 			featUsageDisplay: true,
-			featImageInput: false,
 			customPrompt: `${"あ".repeat(30)}\n${"い".repeat(30)}`,
 		});
 		const calls = mockModelApis([
@@ -92,7 +90,6 @@ describe("/settings", () => {
 			"- 思考の深さ: high",
 			"- Web検索: ON",
 			"- 利用量の表示: ON",
-			"- 画像の読み取り: OFF",
 			// 改行は空白にする
 			`- 自分用の指示: ${"あ".repeat(30)} ${"い".repeat(19)}…`,
 		]);

@@ -301,6 +301,7 @@ describe("モデルの入力の上限", () => {
 		modelId: "claude-haiku-5-5",
 		label: "Claude Haiku 5.5",
 		supportsImages: true,
+		supportsPdf: true,
 	};
 
 	it("候補は、OpenRouterのモデル一覧から取る", async () => {

@@ -254,7 +254,7 @@ export async function refreshImageUrls(
 }
 
 /** 添付のURLの期限が近いか。DiscordのURLは、期限をexに16進数のUNIX時間(秒)で持つ。期限がなければ、取り直さない */
-function expiresSoon(url: string, now: number): boolean {
+export function expiresSoon(url: string, now: number): boolean {
 	let expires: string | null;
 	try {
 		expires = new URL(url).searchParams.get("ex");

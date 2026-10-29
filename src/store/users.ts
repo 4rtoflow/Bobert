@@ -18,7 +18,6 @@ export interface UserSettings {
 	customPrompt: string | null;
 	featWebSearch: boolean;
 	featUsageDisplay: boolean;
-	featImageInput: boolean;
 }
 
 /** まだ設定を変えていない人の設定 */
@@ -29,9 +28,12 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 	customPrompt: null,
 	featWebSearch: false,
 	featUsageDisplay: false,
-	featImageInput: true,
 };
 
+/**
+ * usersの行のうち、設定に使う列。
+ * feat_image_input(画像の読み取りのON/OFF)は、読み取りを常にONにしたので使わない(#59)
+ */
 interface UserRow {
 	model_key: string | null;
 	custom_model_id: string | null;
@@ -39,7 +41,6 @@ interface UserRow {
 	custom_prompt: string | null;
 	feat_web_search: number;
 	feat_usage_display: number;
-	feat_image_input: number;
 }
 
 export async function getUserSettings(
@@ -49,7 +50,7 @@ export async function getUserSettings(
 	const row = await db
 		.prepare(
 			`SELECT model_key, custom_model_id, effort, custom_prompt,
-				feat_web_search, feat_usage_display, feat_image_input
+				feat_web_search, feat_usage_display
 			FROM users WHERE user_id = ?`,
 		)
 		.bind(userId)
@@ -64,7 +65,6 @@ export async function getUserSettings(
 		customPrompt: row.custom_prompt,
 		featWebSearch: row.feat_web_search === 1,
 		featUsageDisplay: row.feat_usage_display === 1,
-		featImageInput: row.feat_image_input === 1,
 	};
 }
 
@@ -76,7 +76,6 @@ const SETTING_COLUMNS = {
 	customPrompt: "custom_prompt",
 	featWebSearch: "feat_web_search",
 	featUsageDisplay: "feat_usage_display",
-	featImageInput: "feat_image_input",
 } as const satisfies Record<keyof UserSettings, string>;
 
 /** 設定を保存する。渡した項目だけを変える。usersの行がなければ作り、ほかの項目は既定のままにする */
