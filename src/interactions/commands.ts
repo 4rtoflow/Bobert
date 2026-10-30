@@ -1,5 +1,11 @@
 import type { RESTPutAPIApplicationCommandsJSONBody } from "discord-api-types/v10";
 import {
+	AGENT_COMMAND_DESCRIPTION,
+	AGENT_COMMAND_NAME,
+	ENDAGENT_COMMAND_DESCRIPTION,
+	ENDAGENT_COMMAND_NAME,
+} from "../agent/texts";
+import {
 	ApplicationCommandOptionType,
 	ApplicationCommandType,
 	ApplicationIntegrationType,
@@ -79,6 +85,16 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: SKILLS_COMMAND_NAME,
 		description: "このサーバーでAIが使うスキル(手順や知識)の一覧と編集",
+	},
+	{
+		...GUILD_ONLY,
+		name: AGENT_COMMAND_NAME,
+		description: AGENT_COMMAND_DESCRIPTION,
+	},
+	{
+		...GUILD_ONLY,
+		name: ENDAGENT_COMMAND_NAME,
+		description: ENDAGENT_COMMAND_DESCRIPTION,
 	},
 	{
 		...GUILD_ONLY,

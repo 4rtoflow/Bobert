@@ -1,4 +1,5 @@
 import type {
+	APIChannel,
 	APIGuildMember,
 	APIMessage,
 	RESTGetAPIChannelResult,
@@ -11,6 +12,7 @@ import type {
 	RESTPatchAPIChannelMessageJSONBody,
 	RESTPatchAPIWebhookWithTokenMessageJSONBody,
 	RESTPostAPIChannelMessageJSONBody,
+	RESTPostAPIGuildChannelJSONBody,
 	RESTPostAPIInteractionFollowupJSONBody,
 	RESTPutAPIApplicationCommandsJSONBody,
 	RESTPutAPIApplicationCommandsResult,
@@ -286,6 +288,58 @@ export async function editChannelMessage(
 		`/channels/${channelId}/messages/${messageId}`,
 		{ botToken, body },
 	);
+}
+
+/** チャンネルのメッセージを消す。ほかの人のメッセージを消すには、メッセージの管理の権限が必要 */
+export async function deleteMessage(
+	botToken: string,
+	channelId: string,
+	messageId: string,
+): Promise<void> {
+	await discordRequest(
+		"DELETE channel message",
+		"DELETE",
+		`/channels/${channelId}/messages/${messageId}`,
+		{ botToken },
+	);
+}
+
+/** メッセージをピン留めする(メッセージの管理の権限が必要) */
+export async function pinMessage(
+	botToken: string,
+	channelId: string,
+	messageId: string,
+): Promise<void> {
+	await discordRequest(
+		"PUT channel pin",
+		"PUT",
+		`/channels/${channelId}/messages/pins/${messageId}`,
+		{ botToken },
+	);
+}
+
+/** サーバーにチャンネルを作る(チャンネルの管理の権限が必要) */
+export function createGuildChannel(
+	botToken: string,
+	guildId: string,
+	body: RESTPostAPIGuildChannelJSONBody,
+): Promise<APIChannel> {
+	return discordRequest(
+		"POST guild channel",
+		"POST",
+		`/guilds/${guildId}/channels`,
+		{ botToken, body },
+	);
+}
+
+/** チャンネルを消す(チャンネルの管理の権限が必要) */
+export async function deleteChannel(
+	botToken: string,
+	channelId: string,
+): Promise<void> {
+	await discordRequest("DELETE channel", "DELETE", `/channels/${channelId}`, {
+		botToken,
+	});
 }
 
 /** 「入力中…」を表示する。約10秒で消えるか、メッセージを投稿すると消える */

@@ -408,7 +408,7 @@ function claudeEfforts(
  * SDKのクライアントを作る。
  * ワークスペースに属さないキーでは、使うワークスペースのIDをリクエストのたびにヘッダーで送る。
  */
-function createClient(
+export function createClient(
 	credential: AnthropicCredential,
 	maxRetries?: number,
 ): Anthropic {
@@ -439,7 +439,7 @@ function toMessageParam(message: ChatMessage): Anthropic.MessageParam {
  * SDKの例外を、失敗の種類に分ける。
  * APIのエラーは、種類とステータスだけを持つ(エラーの文に、送った内容の一部が入ることがあるため)
  */
-function toLlmError(error: unknown): LlmError {
+export function toLlmError(error: unknown): LlmError {
 	if (error instanceof Anthropic.APIConnectionError) {
 		return new LlmError(
 			"unavailable",
