@@ -1,18 +1,32 @@
 import type { APIInteractionResponse } from "discord-api-types/v10";
+import { agentClient, retireAgentResources } from "../agent/managed";
+import {
+	type AgentChannel,
+	type AgentResources,
+	agentChannelsOf,
+	deleteAgentRecordsOf,
+	getAgentResources,
+} from "../agent/store";
+import { agentSessionStub, gatewayStub } from "../agent/stubs";
+import { DELETE_AGENTS_NOTE } from "../agent/texts";
 import {
 	ButtonStyle,
 	ComponentType,
 	InteractionResponseType,
 	MessageFlags,
 } from "../discord/constants";
+import type { AnthropicCredential } from "../llm/anthropic";
 import { logEvent } from "../log";
 import { isDonating } from "../store/donations";
-import { deleteUserData } from "../store/users";
+import { deleteUserData, loadCredential } from "../store/users";
 
 /** /delete の確認のボタンのID */
 export const DELETE_CONFIRM_ID = "delete:confirm";
 
-/** /delete: 消してよいか、本人にだけ確かめる。寄付している人には、寄付も使われなくなることを書く */
+/**
+ * /delete: 消してよいか、本人にだけ確かめる。寄付している人には、寄付も使われなくなることを書く。
+ * エージェントのチャンネルがある人には、チャンネルとセッションも消すことを書く
+ */
 export async function deleteCommand(
 	env: Env,
 	userId: string,
@@ -20,11 +34,15 @@ export async function deleteCommand(
 	const donation = (await isDonating(env.DB, userId))
 		? "寄付したクレジットも、使われなくなります。"
 		: "";
+	const agents =
+		(await agentChannelsOf(env.DB, userId)).length > 0
+			? DELETE_AGENTS_NOTE
+			: "";
 	return {
 		type: InteractionResponseType.ChannelMessageWithSource,
 		data: {
 			flags: MessageFlags.Ephemeral,
-			content: `登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${donation}よろしいですか?`,
+			content: `登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${donation}${agents}よろしいですか?`,
 			components: [
 				{
 					type: ComponentType.ActionRow,
@@ -42,13 +60,27 @@ export async function deleteCommand(
 	};
 }
 
-/** 確認のボタン: キーと設定を消す(仕様: docs/spec/llm-cost.md「資格情報の登録・保存・削除」) */
+/**
+ * 確認のボタン: キーと設定を消す(仕様: docs/spec/llm-cost.md「資格情報の登録・保存・削除」)。
+ * エージェントのセッションは、本人のキーでないと消せないので、キーを読んでおき、記録を消してから、裏でセッションとチャンネルを消す
+ */
 export async function confirmDelete(
 	env: Env,
+	ctx: ExecutionContext,
 	userId: string,
 ): Promise<APIInteractionResponse> {
+	const channels = await agentChannelsOf(env.DB, userId);
+	const resources = await getAgentResources(env.DB, userId);
+	const hasAgents = channels.length > 0 || resources !== null;
+	const credential = hasAgents
+		? await loadCredential(env, userId, "anthropic")
+		: null;
+	await deleteAgentRecordsOf(env.DB, userId);
 	await deleteUserData(env.DB, userId);
 	logEvent("interactions", "user_data_deleted", { userId });
+	if (hasAgents) {
+		ctx.waitUntil(removeAgents(env, userId, channels, resources, credential));
+	}
 	return {
 		type: InteractionResponseType.UpdateMessage,
 		data: {
@@ -57,4 +89,38 @@ export async function confirmDelete(
 			components: [],
 		},
 	};
+}
+
+/**
+ * 本人のエージェントのセッションとチャンネルを消し、本人のアカウントに作った環境を消して、エージェントの設定をアーカイブする。
+ * 失敗しても、キーと設定はもう消してあるので、記録を残すだけにする
+ */
+async function removeAgents(
+	env: Env,
+	userId: string,
+	channels: readonly AgentChannel[],
+	resources: AgentResources | null,
+	credential: AnthropicCredential | null,
+): Promise<void> {
+	for (const channel of channels) {
+		try {
+			await agentSessionStub(env, channel.channelId).purge(credential);
+			await gatewayStub(env).removeAgentChannel(channel.channelId);
+		} catch (error) {
+			logEvent("agent", "delete_cleanup_failed", {
+				userId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	if (resources !== null && credential !== null) {
+		await retireAgentResources(agentClient(credential), resources).catch(
+			(error: unknown) => {
+				logEvent("agent", "resources_cleanup_failed", {
+					userId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
+		);
+	}
 }
