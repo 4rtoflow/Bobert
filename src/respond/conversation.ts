@@ -25,6 +25,10 @@ export interface ConversationOptions {
 	files?: FileCatalog;
 	/** いちばん古い発言の返信先が削除されている。そのことを、いちばん古い発言に書き添える */
 	parentDeleted?: boolean;
+	/** スレッドが作られたメッセージと、そのスレッドの名前(メッセージIDごと)。スレッドの名前を書き添える */
+	threads?: ReadonlyMap<string, string>;
+	/** 会話の最初に書く前置き(スレッドの中での会話なら、スレッドと親のチャンネルの説明) */
+	preface?: string | null;
 }
 
 /** 編集されたメッセージ(Bobert以外)の本文の後に書き添える。Discordの画面の表示と同じ */
@@ -46,6 +50,8 @@ export interface Conversation {
  * - 画像は、新しいものから上限の枚数まで渡す。渡さない添付は、番号(ファイルを読む道具で読める)か、ファイル名を書き添える
  * - 古い部分の要約があれば、会話の最初に、人の発言として渡す
  * - いちばん古い発言の返信先が削除されていれば、そのことを書き添える
+ * - スレッドが作られたメッセージには、スレッドの名前を書き添える
+ * - 前置き(スレッドの説明など)があれば、いちばん最初に、人の発言として渡す
  */
 export function toConversation(
 	chain: readonly StoredMessageInput[],
@@ -70,6 +76,7 @@ export function toConversation(
 				.map((attachment) =>
 					attachmentNote(message, attachment, options.files),
 				),
+			...threadNote(message, options.threads),
 			...(index === 0 && options.parentDeleted ? [PARENT_DELETED_NOTE] : []),
 		];
 		messages.push({
@@ -103,6 +110,12 @@ export function toConversation(
 						: "(これより前の会話は残っていません)",
 				},
 			],
+		});
+	}
+	if (options.preface) {
+		messages.unshift({
+			role: "user",
+			parts: [{ type: "text", text: options.preface }],
 		});
 	}
 
@@ -146,7 +159,8 @@ export function selectImages(
  * メッセージを「[時刻] 名前: 本文」の文にする(道具の結果で使う)。Bobertの発言にも時刻を付ける。Embedの中身と、添付ファイルを書き添える。
  * Bobertの発言は、末尾の注記を外す。
  * placeを渡すと、時刻の後に書く(今いるチャンネル以外のメッセージの、チャンネルの名前。例: 「[時刻] #雑談 名前: 本文」)。
- * filesを渡すと、添付ファイルに番号を付ける(ファイルを読む道具で読める)。なければ、ファイル名だけを書き添える
+ * filesを渡すと、添付ファイルに番号を付ける(ファイルを読む道具で読める)。なければ、ファイル名だけを書き添える。
+ * threadsを渡すと、スレッドが作られたメッセージに、スレッドの名前を書き添える
  */
 export function messageLine(
 	message: StoredMessageInput,
@@ -154,6 +168,7 @@ export function messageLine(
 	names: ReadonlyMap<string, string>,
 	place: string | null = null,
 	files?: FileCatalog,
+	threads?: ReadonlyMap<string, string>,
 ): string {
 	const where = place === null ? "" : `${place} `;
 	if (message.authorId === botUserId) {
@@ -162,11 +177,23 @@ export function messageLine(
 	return humanLine(
 		message,
 		names,
-		message.attachments.map((attachment) =>
-			attachmentNote(message, attachment, files),
-		),
+		[
+			...message.attachments.map((attachment) =>
+				attachmentNote(message, attachment, files),
+			),
+			...threadNote(message, threads),
+		],
 		where,
 	);
+}
+
+/** スレッドが作られたメッセージに書き添える、スレッドの名前。例: 「[スレッド「旅行の計画」]」 */
+function threadNote(
+	message: StoredMessageInput,
+	threads: ReadonlyMap<string, string> | undefined,
+): string[] {
+	const name = threads?.get(message.messageId);
+	return name === undefined ? [] : [`[スレッド「${name}」]`];
 }
 
 /**

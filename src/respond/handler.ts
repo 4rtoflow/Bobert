@@ -50,6 +50,7 @@ import {
 	type PinLister,
 	readConversation,
 	refreshImageUrls,
+	threadNamesFor,
 } from "./history";
 import {
 	allowedMentions,
@@ -81,6 +82,7 @@ import {
 	SUMMARY_THRESHOLD,
 	summarizeOlderPart,
 } from "./summary";
+import { threadPreface } from "./thread";
 import {
 	channelHistoryTool,
 	channelListTool,
@@ -447,6 +449,9 @@ export async function answer(
 	// 道具を使えるモデルでは、AIに見せる添付ファイルに番号を付け、ファイルを読む道具で読めるようにする
 	// (仕様: docs/spec/architecture.md「添付ファイルの読み取り」)。会話を先に書くので、会話の番号は毎回同じになる
 	const files = usesTools ? new FileCatalog(support) : undefined;
+	// スレッドの中なら、スレッドと親のチャンネルのことを、会話の最初に書く(仕様: docs/spec/architecture.md「スレッド」)。
+	// スレッドを始めたメッセージは会話より前なので、その添付ファイルの番号を、会話より先に付ける
+	const preface = await threadPreface(history, chain, botUserId, files);
 	const messages = toConversation(chain, {
 		botUserId,
 		includeImages,
@@ -457,6 +462,8 @@ export async function answer(
 		parentDeleted:
 			conversation.parentDeleted === true &&
 			chain[0]?.messageId === conversation.messages[0]?.messageId,
+		threads: await threadNamesFor(chain, history),
+		preface,
 	});
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
