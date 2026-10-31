@@ -23,7 +23,15 @@ export interface ConversationOptions {
 	 * なければ、ファイル名だけを書き添える
 	 */
 	files?: FileCatalog;
+	/** いちばん古い発言の返信先が削除されている。そのことを、いちばん古い発言に書き添える */
+	parentDeleted?: boolean;
 }
+
+/** 編集されたメッセージ(Bobert以外)の本文の後に書き添える。Discordの画面の表示と同じ */
+export const EDITED_NOTE = "(編集済み)";
+
+/** 返信先が削除されていて、それより前をたどれなかったメッセージに書き添える */
+export const PARENT_DELETED_NOTE = "(返信先のメッセージは削除されています)";
 
 export interface Conversation {
 	messages: ChatMessage[];
@@ -37,6 +45,7 @@ export interface Conversation {
  *   話しかけた発言の時刻が今の日時にあたる。発言の形は毎回同じなので、キャッシュは崩れない
  * - 画像は、新しいものから上限の枚数まで渡す。渡さない添付は、番号(ファイルを読む道具で読める)か、ファイル名を書き添える
  * - 古い部分の要約があれば、会話の最初に、人の発言として渡す
+ * - いちばん古い発言の返信先が削除されていれば、そのことを書き添える
  */
 export function toConversation(
 	chain: readonly StoredMessageInput[],
@@ -46,7 +55,7 @@ export function toConversation(
 		? selectImages(chain, options.botUserId)
 		: new Map<string, AttachmentInfo[]>();
 	const messages: ChatMessage[] = [];
-	for (const message of chain) {
+	for (const [index, message] of chain.entries()) {
 		if (message.authorId === options.botUserId) {
 			messages.push({
 				role: "assistant",
@@ -55,9 +64,14 @@ export function toConversation(
 			continue;
 		}
 		const passed = images.get(message.messageId) ?? [];
-		const notes = message.attachments
-			.filter((attachment) => !passed.includes(attachment))
-			.map((attachment) => attachmentNote(message, attachment, options.files));
+		const notes = [
+			...message.attachments
+				.filter((attachment) => !passed.includes(attachment))
+				.map((attachment) =>
+					attachmentNote(message, attachment, options.files),
+				),
+			...(index === 0 && options.parentDeleted ? [PARENT_DELETED_NOTE] : []),
+		];
 		messages.push({
 			role: "user",
 			parts: [
@@ -77,11 +91,18 @@ export function toConversation(
 			],
 		});
 	}
-	// AIへの会話は人の発言から始める必要がある
+	// AIへの会話は人の発言から始める必要がある。Bobertの発言の返信先が削除されていれば、そのことを伝える
 	if (messages[0]?.role === "assistant") {
 		messages.unshift({
 			role: "user",
-			parts: [{ type: "text", text: "(これより前の会話は残っていません)" }],
+			parts: [
+				{
+					type: "text",
+					text: options.parentDeleted
+						? PARENT_DELETED_NOTE
+						: "(これより前の会話は残っていません)",
+				},
+			],
 		});
 	}
 
@@ -150,7 +171,8 @@ export function messageLine(
 
 /**
  * Bobert以外の発言を「[時刻] 名前: 本文」の文にする。本文の後に、Embedの中身と、notes(添付のファイル名など)を書き添える。
- * ほかのBotの発言は、名前にBotであることと、どのコマンドへの返答かを書き添える。whereは、時刻の後に書く
+ * ほかのBotの発言は、名前にBotであることと、どのコマンドへの返答かを書き添える。whereは、時刻の後に書く。
+ * 編集されたメッセージは、本文の後に「(編集済み)」と書き添える
  */
 function humanLine(
 	message: StoredMessageInput,
@@ -166,10 +188,12 @@ function humanLine(
 			`[Embed] ${resolveMentions(embedLines(embed).join("\n"), mentioned)}`,
 	);
 	const content = resolveMentions(message.content, mentioned);
-	const body = [
+	const text =
 		!message.authorIsBot && looksLikeCommand(content)
 			? `${content}${TEXT_COMMAND_NOTE}`
-			: content,
+			: content;
+	const body = [
+		message.editedAt === null ? text : `${text}${EDITED_NOTE}`,
 		...embeds,
 		...notes,
 	]

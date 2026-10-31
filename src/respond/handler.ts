@@ -362,6 +362,7 @@ async function composeAnswer(
 	const read = await readConversation(trigger, history);
 	let summary = read.summary;
 	let messages = read.messages;
+	let parentDeleted = read.parentDeleted;
 	// 会話が入力の上限の8割を超えていたら、新しい20件を残して、それより前を要約する
 	const summaryUsages: TokenUsage[] = [];
 	const size = await conversationSize(env.DB, messages, botUserId);
@@ -387,6 +388,8 @@ async function composeAnswer(
 		if (result.summary !== null) {
 			summary = result.summary;
 			messages = messages.slice(-KEEP_RECENT_MESSAGES);
+			// 返信先が削除されていた、いちばん古い発言は、要約の中に入った
+			parentDeleted = false;
 		}
 		log("summarized", {
 			userId: context.userId,
@@ -399,7 +402,12 @@ async function composeAnswer(
 			...sumUsage(result.usages),
 		});
 	}
-	return answer(context, env, history, { messages, summary, summaryUsages });
+	return answer(context, env, history, {
+		messages,
+		summary,
+		summaryUsages,
+		parentDeleted,
+	});
 }
 
 /**
@@ -414,6 +422,8 @@ export async function answer(
 		summary: ConversationSummary | null;
 		/** 要約を作ったときの使用量(費用の表示に含める) */
 		summaryUsages: TokenUsage[];
+		/** いちばん古い発言の返信先が削除されていた */
+		parentDeleted?: boolean;
 	},
 ): Promise<ComposedReply> {
 	const { userId, settings, model } = context;
@@ -443,6 +453,10 @@ export async function answer(
 		names: await namesFor(chain, history),
 		summary: summary?.summary ?? null,
 		files,
+		// 画像のURLを取り直すときに、いちばん古い発言が消えていて外れたら、書き添える先がない
+		parentDeleted:
+			conversation.parentDeleted === true &&
+			chain[0]?.messageId === conversation.messages[0]?.messageId,
 	});
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
