@@ -24,6 +24,7 @@ import {
 	describeAgentError,
 	describeSessionError,
 	isSessionGone,
+	READ_SKILL_TOOL,
 	SEND_FILES_TOOL,
 } from "./managed";
 import {
@@ -239,6 +240,8 @@ export interface RelayDeps {
 	fetchAttachment(url: string): Promise<Uint8Array>;
 	/** このサーバーで、Discordに1つ上げられるファイルの大きさ(バイト) */
 	uploadLimit(): Promise<number>;
+	/** サーバーのスキルを、名前で読む。なければnull */
+	readSkill(name: string): Promise<{ name: string; body: string } | null>;
 	sleep(ms: number): Promise<void>;
 	now(): number;
 }
@@ -670,7 +673,9 @@ export class SessionRelay {
 		const result =
 			event.name === SEND_FILES_TOOL
 				? await this.sendFiles(client, sessionId, event.input)
-				: { text: `Unknown tool: ${event.name}`, error: true };
+				: event.name === READ_SKILL_TOOL
+					? await this.readSkill(event.name, event.input)
+					: { text: `Unknown tool: ${event.name}`, error: true };
 		try {
 			await client.beta.sessions.events.send(sessionId, {
 				events: [
@@ -690,6 +695,30 @@ export class SessionRelay {
 			}
 			log("tool_result_failed", state, error);
 		}
+	}
+
+	/**
+	 * read_skillの道具: サーバーのスキルの本文を返す。作業の様子に「スキルを読む」の行を書く。
+	 * 一覧を渡した後に、ほかの人が消したり名前を変えたりしていることがある
+	 */
+	private async readSkill(
+		toolName: string,
+		input: Record<string, unknown>,
+	): Promise<{ text: string; error: boolean }> {
+		const { label, value } = toolOperation(toolName, input);
+		await this.appendProgress(`-# ${label}: ${value}`);
+		const name = typeof input.name === "string" ? input.name.trim() : "";
+		const skill = await this.deps.readSkill(name);
+		if (skill === null) {
+			return {
+				text: `「${name}」というスキルはありません。一覧にある名前で指定してください。`,
+				error: true,
+			};
+		}
+		return {
+			text: `スキル「${skill.name}」の本文です。この手順に従ってください。\n\n${skill.body}`,
+			error: false,
+		};
 	}
 
 	/**
@@ -1070,7 +1099,7 @@ export function toolOperation(
 ): { label: string; value: string } {
 	const label = TOOL_LABELS[name] ?? name;
 	const raw =
-		["command", "file_path", "pattern", "url", "query", "path"]
+		["command", "file_path", "pattern", "url", "query", "path", "name"]
 			.map((key) => input[key])
 			.find((value): value is string => typeof value === "string") ?? "";
 	const flat = truncate(raw.replace(/\s+/g, " ").trim());

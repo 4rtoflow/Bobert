@@ -86,6 +86,7 @@ function relayOf(
 	state: SessionState,
 	discord: ReturnType<typeof fakeDiscord>["discord"],
 	client: Anthropic | null,
+	overrides: Partial<RelayDeps> = {},
 ) {
 	const markEnded = vi.fn(async () => {});
 	const deps: RelayDeps = {
@@ -94,8 +95,10 @@ function relayOf(
 		markEnded,
 		fetchAttachment: async () => new Uint8Array([1, 2, 3]),
 		uploadLimit: async () => 10 * 1024 * 1024,
+		readSkill: async () => null,
 		sleep: async () => {},
 		now: () => 1_000,
+		...overrides,
 	};
 	return { relay: new SessionRelay(state, deps), markEnded };
 }
@@ -782,5 +785,72 @@ describe("ファイルの受け渡し", () => {
 		expect(safeFileName(String.raw`a/b\c.txt`)).toBe("a_b_c.txt");
 		expect(safeFileName("..")).toBe("file");
 		expect(safeFileName("レポート.pdf")).toBe("レポート.pdf");
+	});
+});
+
+describe("スキル", () => {
+	it("read_skillの道具で、スキルの本文を返し、作業の様子に読んだことを書く", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeClient();
+		const { relay } = relayOf(state, discord, client, {
+			readSkill: async (name) =>
+				name === "meeting-notes"
+					? { name, body: "決まったことと宿題に分けて書く" }
+					: null,
+		});
+		const call = event({
+			type: "agent.custom_tool_use",
+			name: "read_skill",
+			input: { name: "meeting-notes" },
+		});
+
+		await relay.handle(call);
+
+		expect(posts[0]?.content).toBe("-# スキルを読む: meeting-notes");
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				{
+					type: "user.custom_tool_result",
+					custom_tool_use_id: (call as { id: string }).id,
+					content: [
+						{
+							type: "text",
+							text: "スキル「meeting-notes」の本文です。この手順に従ってください。\n\n決まったことと宿題に分けて書く",
+						},
+					],
+					is_error: false,
+				},
+			],
+		});
+	});
+
+	it("スキルが消されていたら、ないことをエージェントに返す", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, send } = fakeClient();
+		const { relay } = relayOf(state, discord, client);
+
+		await relay.handle(
+			event({
+				type: "agent.custom_tool_use",
+				name: "read_skill",
+				input: { name: "gone" },
+			}),
+		);
+
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				expect.objectContaining({
+					content: [
+						{
+							type: "text",
+							text: "「gone」というスキルはありません。一覧にある名前で指定してください。",
+						},
+					],
+					is_error: true,
+				}),
+			],
+		});
 	});
 });

@@ -26,6 +26,7 @@ import {
 import { type MessageEdit, respondLater } from "../interactions/deferred";
 import { logEvent } from "../log";
 import { LLM_ERROR_TEXT } from "../respond/replies";
+import { listSkills } from "../store/skills";
 import { getUserSettings, loadCredential } from "../store/users";
 import {
 	agentClient,
@@ -147,7 +148,9 @@ async function startAgent(
 	const client = agentClient(credential);
 	let sessionId: string;
 	try {
+		const skills = await listSkills(db, guildId);
 		sessionId = await startSession(db, user.id, client, {
+			skills,
 			model,
 			effort,
 			title: `#${name}`,

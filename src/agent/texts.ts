@@ -120,6 +120,7 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
 	grep: "文字を探す",
 	web_search: "Webで検索",
 	web_fetch: "Webを読む",
+	read_skill: "スキルを読む",
 };
 
 /** Anthropic側で、危険だと判断されて断られた道具の行 */
