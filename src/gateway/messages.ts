@@ -26,6 +26,7 @@ export type GatewayMessage = Pick<
 	| "message_reference"
 	| "referenced_message"
 	| "interaction_metadata"
+	| "webhook_id"
 > & {
 	guild_id?: string;
 	/** 発言者のサーバーでの情報。サーバーの中のメッセージで、Gatewayで届いたときだけ付く */

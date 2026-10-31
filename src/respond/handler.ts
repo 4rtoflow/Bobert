@@ -1,4 +1,5 @@
 import type { APIMessage } from "discord-api-types/v10";
+import { getAgentChannel } from "../agent/store";
 import {
 	createMessage,
 	DiscordApiError,
@@ -115,6 +116,12 @@ export async function handleRespondJob(
 }
 
 async function respond(job: RespondJob, env: Env): Promise<void> {
+	// エージェントのチャンネルでは、普通のBobertは返答しない。
+	// Gatewayは記録を覚えて振り分けるが、作った直後などに、ここまで届くことがあるため
+	if ((await getAgentChannel(env.DB, job.channelId)) !== null) {
+		log("agent_channel", { userId: job.authorId });
+		return;
+	}
 	const token = env.DISCORD_BOT_TOKEN;
 	// 話しかけたメッセージは、保存より先に応答の処理が動くことがあり、消されていないかも確かめたいので、Discordから読む
 	const trigger = await getMessageOrNull(token, job.channelId, job.messageId);

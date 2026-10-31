@@ -15,7 +15,8 @@
   - **Privileged Gateway Intents:** Message Content IntentをONにする(必須)。
   - **General Information:** Application IDとPublic Keyを控える。Public KeyはInteractionsの署名の確認に使う。
   - **Interactions Endpoint URL:** WorkerのURLを、デプロイした後に設定する。保存するとDiscordが確認の要求(PING)を送るので、その時点でWorker側が応答できている必要がある。
-  - **OAuth2 → URL Generator:** スコープは`bot`と`applications.commands`。権限は「チャンネルを見る」「メッセージを送信」「スレッドでメッセージを送信」「メッセージ履歴を読む」。生成した招待URLで、Botをサーバーに追加する。
+  - **OAuth2 → URL Generator:** スコープは`bot`と`applications.commands`。権限は「チャンネルを見る」「メッセージを送信」「スレッドでメッセージを送信」「メッセージ履歴を読む」と、エージェント(`/agent`)のための「チャンネルの管理」「メッセージの管理」「埋め込みリンク」「ファイルを添付」。生成した招待URLで、Botをサーバーに追加する。
+    - すでにBotを入れたサーバーでは、サーバーの管理者が、Botの役職に、エージェントのための4つの権限を足す。
 - **テストサーバー:** 開発用のテストサーバーを1つ作る。開発用のBotは、このサーバーだけで使う。
 - **障害の通知先:** 開発者用のチャンネルを作り、そのWebhook URLを発行する。開発用と本番用でそれぞれ用意する。
 

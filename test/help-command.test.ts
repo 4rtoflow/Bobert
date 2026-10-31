@@ -25,7 +25,7 @@ describe("/help", () => {
 		expect(body.type).toBe(InteractionResponseType.ChannelMessageWithSource);
 		expect(body.data.flags).toBe(MessageFlags.Ephemeral);
 		const lines: string[] = body.data.content.split("\n");
-		expect(lines.slice(0, 12)).toEqual([
+		expect(lines.slice(0, 13)).toEqual([
 			"**Bobertの使い方**",
 			"- Bobertにメンションするか、Bobertの返答に返信すると、AIが答えます。",
 			"- メッセージに返信しながらBobertにメンションすると、そのメッセージについて聞けます。",
@@ -36,16 +36,17 @@ describe("/help", () => {
 			"- 費用は、登録した本人のアカウントに請求されます。まず `/setup` でキーを登録してください。",
 			"- サーバーに寄付されたクレジット(`/donate`)があれば、先にそれを使います。キーがなくても使えます。",
 			"- `/regskills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。一覧と編集は `/skills` で行います。",
+			"- `/agent` で、Claudeのエージェントに作業を頼めます。",
 			"",
 			"**コマンド**",
 		]);
 		// コマンドの一覧は、登録するスラッシュコマンドの説明から、登録する順に作る(右クリックメニューの項目は入れない)
-		expect(lines.slice(12)).toHaveLength(
+		expect(lines.slice(13)).toHaveLength(
 			COMMANDS.filter(
 				(command) => command.type === ApplicationCommandType.ChatInput,
 			).length,
 		);
-		expect(lines[12]).toBe(
+		expect(lines[13]).toBe(
 			"- `/setup`: Anthropic APIキーの登録・OpenRouterへのログイン",
 		);
 		expect(lines).toContain(
@@ -59,6 +60,12 @@ describe("/help", () => {
 		);
 		expect(lines).toContain(
 			"- `/skills`: このサーバーでAIが使うスキル(手順や知識)の一覧と編集",
+		);
+		expect(lines).toContain(
+			"- `/agent`: Claudeのエージェントに作業を頼む、自分専用のチャンネルの作成(Anthropicのキーが必要)",
+		);
+		expect(lines).toContain(
+			"- `/endagent`: エージェントのセッションの終了(エージェントのチャンネルの中で使う)",
 		);
 		expect(lines.at(-1)).toBe("- `/help`: 使い方");
 	});
