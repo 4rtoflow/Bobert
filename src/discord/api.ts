@@ -1,4 +1,5 @@
 import type {
+	APIChannel,
 	APIGuildMember,
 	APIMessage,
 	RESTGetAPIChannelResult,
@@ -6,11 +7,13 @@ import type {
 	RESTGetAPIGatewayBotResult,
 	RESTGetAPIGuildChannelsResult,
 	RESTGetAPIGuildMessagesSearchResult,
+	RESTGetAPIGuildResult,
 	RESTGetAPIGuildRolesResult,
 	RESTGetAPIGuildThreadsResult,
 	RESTPatchAPIChannelMessageJSONBody,
 	RESTPatchAPIWebhookWithTokenMessageJSONBody,
 	RESTPostAPIChannelMessageJSONBody,
+	RESTPostAPIGuildChannelJSONBody,
 	RESTPostAPIInteractionFollowupJSONBody,
 	RESTPutAPIApplicationCommandsJSONBody,
 	RESTPutAPIApplicationCommandsResult,
@@ -38,10 +41,12 @@ export class DiscordApiError extends Error {
 	}
 }
 
-/** メッセージに添付する、テキストのファイル */
+/** メッセージに添付するファイル。中身が文字列ならテキストのファイル、バイト列ならそのまま送る */
 export interface MessageFile {
 	name: string;
-	content: string;
+	content: string | Uint8Array;
+	/** バイト列のときの種類(MIMEタイプ)。なければapplication/octet-stream */
+	contentType?: string;
 }
 
 interface RequestOptions {
@@ -280,18 +285,29 @@ export function listGuildMembers(
 	);
 }
 
-/** チャンネルにメッセージを投稿する */
+/** チャンネルにメッセージを投稿する。filesを渡すと添付する(ファイルを添付する権限が必要) */
 export function createMessage(
 	botToken: string,
 	channelId: string,
 	body: RESTPostAPIChannelMessageJSONBody,
+	files: MessageFile[] = [],
 ): Promise<APIMessage> {
 	return discordRequest(
 		"POST channel message",
 		"POST",
 		`/channels/${channelId}/messages`,
-		{ botToken, body },
+		{ botToken, body, files },
 	);
+}
+
+/** サーバーの情報を取得する(ブーストの段階などを読むため) */
+export function getGuild(
+	botToken: string,
+	guildId: string,
+): Promise<RESTGetAPIGuildResult> {
+	return discordRequest("GET guild", "GET", `/guilds/${guildId}`, {
+		botToken,
+	});
 }
 
 /** チャンネルのメッセージを書き換える(Bot自身のメッセージだけ) */
@@ -307,6 +323,58 @@ export async function editChannelMessage(
 		`/channels/${channelId}/messages/${messageId}`,
 		{ botToken, body },
 	);
+}
+
+/** チャンネルのメッセージを消す。ほかの人のメッセージを消すには、メッセージの管理の権限が必要 */
+export async function deleteMessage(
+	botToken: string,
+	channelId: string,
+	messageId: string,
+): Promise<void> {
+	await discordRequest(
+		"DELETE channel message",
+		"DELETE",
+		`/channels/${channelId}/messages/${messageId}`,
+		{ botToken },
+	);
+}
+
+/** メッセージをピン留めする(メッセージの管理の権限が必要) */
+export async function pinMessage(
+	botToken: string,
+	channelId: string,
+	messageId: string,
+): Promise<void> {
+	await discordRequest(
+		"PUT channel pin",
+		"PUT",
+		`/channels/${channelId}/messages/pins/${messageId}`,
+		{ botToken },
+	);
+}
+
+/** サーバーにチャンネルを作る(チャンネルの管理の権限が必要) */
+export function createGuildChannel(
+	botToken: string,
+	guildId: string,
+	body: RESTPostAPIGuildChannelJSONBody,
+): Promise<APIChannel> {
+	return discordRequest(
+		"POST guild channel",
+		"POST",
+		`/guilds/${guildId}/channels`,
+		{ botToken, body },
+	);
+}
+
+/** チャンネルを消す(チャンネルの管理の権限が必要) */
+export async function deleteChannel(
+	botToken: string,
+	channelId: string,
+): Promise<void> {
+	await discordRequest("DELETE channel", "DELETE", `/channels/${channelId}`, {
+		botToken,
+	});
 }
 
 /** 「入力中…」を表示する。約10秒で消えるか、メッセージを投稿すると消える */
@@ -385,7 +453,11 @@ function formDataOf(body: unknown, files: MessageFile[]): FormData {
 	files.forEach((file, index) => {
 		form.append(
 			`files[${index}]`,
-			new Blob([file.content], { type: "text/plain; charset=utf-8" }),
+			typeof file.content === "string"
+				? new Blob([file.content], { type: "text/plain; charset=utf-8" })
+				: new Blob([file.content], {
+						type: file.contentType ?? "application/octet-stream",
+					}),
 			file.name,
 		);
 	});

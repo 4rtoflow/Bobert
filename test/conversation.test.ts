@@ -63,6 +63,24 @@ describe("AIに渡す会話への変換", () => {
 		]);
 	});
 
+	it("Bobertの過去の返答の先頭に付いた「[時刻] Bobert: 」は、AIに渡す前に外す(AIがまたまねないように)", () => {
+		const chain = stored(
+			discordMessage("1", ALICE, `<@${BOT.id}> こんにちは`, {
+				mentions: [BOT],
+			}),
+			discordMessage(
+				"2",
+				BOT,
+				"[2026-10-30(金) 00:01] Bobert: こんにちは！\n-# 入力 10 / 出力 5",
+			),
+		);
+
+		expect(toConversation(chain, OPTIONS).messages[1]).toEqual({
+			role: "assistant",
+			parts: [{ type: "text", text: "こんにちは！" }],
+		});
+	});
+
 	it("名前は、サーバーで見えている名前に揃える(発言者も、メンションされた人も)", () => {
 		const chain = stored(
 			discordMessage("1", BOB, "<@100> これ見て", { mentions: [ALICE] }),
