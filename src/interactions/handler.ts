@@ -5,6 +5,17 @@ import type {
 	APIMessageApplicationCommandInteraction,
 } from "discord-api-types/v10";
 import {
+	agentCommand,
+	agentComponent,
+	endagentCommand,
+} from "../agent/interactions";
+import { getAgentChannel } from "../agent/store";
+import {
+	AGENT_COMMAND_NAME,
+	COMPACT_UNAVAILABLE,
+	ENDAGENT_COMMAND_NAME,
+} from "../agent/texts";
+import {
 	ApplicationCommandType,
 	ComponentType,
 	InteractionResponseType,
@@ -114,11 +125,31 @@ async function route(
 				interaction.data.type === ApplicationCommandType.Message &&
 				interaction.data.name === COMPACT_COMMAND_NAME
 			) {
+				// エージェントのチャンネルでは、要約(D1に保存する)を作らない
+				if (await isAgentChannel(env, channelIdOf(interaction))) {
+					return ephemeral(COMPACT_UNAVAILABLE);
+				}
 				return compactFromMenu(
 					interaction as APIMessageApplicationCommandInteraction,
 					env,
 					user.id,
 				);
+			}
+			if (
+				interaction.data.type === ApplicationCommandType.ChatInput &&
+				interaction.data.name === AGENT_COMMAND_NAME &&
+				guildId
+			) {
+				return agentCommand(
+					interaction as APIChatInputApplicationCommandInteraction,
+					env,
+					ctx,
+					user,
+					guildId,
+				);
+			}
+			if (interaction.data.name === ENDAGENT_COMMAND_NAME) {
+				return endagentCommand(env, channelIdOf(interaction), user.id);
 			}
 			if (interaction.data.name === "setup") {
 				return setupCommand(env, origin, user, interaction.token);
@@ -167,7 +198,16 @@ async function route(
 				return helpCommand();
 			}
 			break;
-		case InteractionType.MessageComponent:
+		case InteractionType.MessageComponent: {
+			const agentResponse = await agentComponent(
+				interaction,
+				env,
+				ctx,
+				user.id,
+			);
+			if (agentResponse) {
+				return agentResponse;
+			}
 			if (interaction.data.custom_id === COMPACT_BUTTON_ID) {
 				return compactFromButton(interaction, env, user.id);
 			}
@@ -206,7 +246,7 @@ async function route(
 				}
 			}
 			if (interaction.data.custom_id === DELETE_CONFIRM_ID) {
-				return confirmDelete(env, user.id);
+				return confirmDelete(env, ctx, user.id);
 			}
 			if (interaction.data.custom_id === DONATE_GIVE_ID) {
 				return donationModal(env, user.id);
@@ -215,6 +255,7 @@ async function route(
 				return stopDonation(env, guildId, actor);
 			}
 			break;
+		}
 		case InteractionType.ModalSubmit:
 			if (interaction.data.custom_id === SETUP_ANTHROPIC_ID) {
 				return submitAnthropicKey(interaction, env, ctx, user.id);
@@ -243,6 +284,28 @@ async function route(
 			break;
 	}
 	return notReady();
+}
+
+/** Interactionが起きたチャンネルのID */
+export function channelIdOf(interaction: APIInteraction): string | undefined {
+	return interaction.channel?.id ?? interaction.channel_id;
+}
+
+async function isAgentChannel(
+	env: Env,
+	channelId: string | undefined,
+): Promise<boolean> {
+	return (
+		channelId !== undefined &&
+		(await getAgentChannel(env.DB, channelId)) !== null
+	);
+}
+
+function ephemeral(content: string): APIInteractionResponse {
+	return {
+		type: InteractionResponseType.ChannelMessageWithSource,
+		data: { content, flags: MessageFlags.Ephemeral },
+	};
 }
 
 function notReady(): APIInteractionResponse {

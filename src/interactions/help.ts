@@ -1,4 +1,5 @@
 import type { APIInteractionResponse } from "discord-api-types/v10";
+import { AGENT_HELP_LINE } from "../agent/texts";
 import {
 	ApplicationCommandType,
 	InteractionResponseType,
@@ -34,6 +35,7 @@ export function helpText(): string {
 		"- 費用は、登録した本人のアカウントに請求されます。まず `/setup` でキーを登録してください。",
 		"- サーバーに寄付されたクレジット(`/donate`)があれば、先にそれを使います。キーがなくても使えます。",
 		"- `/regskills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。一覧と編集は `/skills` で行います。",
+		AGENT_HELP_LINE,
 		"",
 		"**コマンド**",
 		...commands,

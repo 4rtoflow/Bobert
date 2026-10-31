@@ -136,7 +136,18 @@ export const ChannelType = {
 /** 権限のビット。discord-api-types の PermissionFlagsBits は実行時の値なので、ここで持つ */
 export const PermissionFlags = {
 	Administrator: 1n << 3n,
+	ManageChannels: 1n << 4n,
 	ManageGuild: 1n << 5n,
 	ViewChannel: 1n << 10n,
+	SendMessages: 1n << 11n,
+	ManageMessages: 1n << 13n,
+	EmbedLinks: 1n << 14n,
+	AttachFiles: 1n << 15n,
 	ReadMessageHistory: 1n << 16n,
+} as const;
+
+/** チャンネルの権限の上書きの種類 */
+export const OverwriteType = {
+	Role: 0,
+	Member: 1,
 } as const;

@@ -1,3 +1,4 @@
+import { agentChannelIdsAmong } from "../agent/store";
 import type { ChannelInfo, GuildRoles, RoleInfo } from "../discord/channels";
 import { logEvent } from "../log";
 import {
@@ -126,7 +127,8 @@ function withOverwrites(
 
 /**
  * 保存してよいチャンネル(共有チャンネル)のIDを返す。記録にないチャンネルと、Botのロールなどが分からないサーバーは、
- * DiscordのAPIで確かめて記録する。確かめられなかったチャンネル(Botが見られないか、消えた)は、共有しないとみなす
+ * DiscordのAPIで確かめて記録する。確かめられなかったチャンネル(Botが見られないか、消えた)は、共有しないとみなす。
+ * エージェントのチャンネルと、その中のスレッドは、共有の印に関係なく除く(チャンネルを作った直後は、印が付く前のことがあるため)
  */
 export async function resolveSharedChannels(
 	targets: readonly { channelId: string; guildId: string | null }[],
@@ -189,11 +191,25 @@ export async function resolveSharedChannels(
 		touched.size > 0
 			? await loadChannels(deps.db, [...guildOf.keys()])
 			: recorded;
+	const shared = [...records.values()].filter(
+		(record) =>
+			record.shared && guildOf.get(record.channelId) === record.guildId,
+	);
+	const agentChannelIds = await agentChannelIdsAmong(deps.db, [
+		...new Set(
+			shared.flatMap((record) =>
+				record.parentId === null
+					? [record.channelId]
+					: [record.channelId, record.parentId],
+			),
+		),
+	]);
 	return new Set(
-		[...records.values()]
+		shared
 			.filter(
 				(record) =>
-					record.shared && guildOf.get(record.channelId) === record.guildId,
+					!agentChannelIds.has(record.channelId) &&
+					(record.parentId === null || !agentChannelIds.has(record.parentId)),
 			)
 			.map((record) => record.channelId),
 	);

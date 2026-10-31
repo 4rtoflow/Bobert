@@ -1,5 +1,6 @@
 import type { ChatResult, LlmError } from "../llm/types";
 import type { Provider } from "../store/users";
+import { stripReplyHeader } from "./conversation";
 import type { ModelResolution, ResolvedModel } from "./model";
 import { formatCost } from "./usage";
 import { sourcesNote } from "./web-search";
@@ -135,7 +136,8 @@ export function formatReply(
 	if (compaction !== null) {
 		notes.push(compactionNote(compaction));
 	}
-	const text = result.text.trim() || "(返答が空でした)";
+	// AIが会話の書式をまねて、先頭に「[時刻] Bobert: 」を書くことがある
+	const text = stripReplyHeader(result.text).trim() || "(返答が空でした)";
 	return [text, ...notes].join("\n");
 }
 

@@ -22,16 +22,19 @@
 			"CREDENTIAL_ENCRYPTION_KEYS"
 		]
 	},
-	// Discord Gatewayへの常時接続を持つDurable Objectと、/importの進み具合を見張るDurable Object
+	// Discord Gatewayへの常時接続を持つDurable Objectと、/importの進み具合を見張るDurable Object、
+	// エージェントのチャンネルごとに、Managed Agentsのセッションとのやり取りを受け持つDurable Object
 	"durable_objects": {
 		"bindings": [
 			{ "name": "GATEWAY", "class_name": "Gateway" },
-			{ "name": "IMPORT_PROGRESS", "class_name": "ImportProgress" }
+			{ "name": "IMPORT_PROGRESS", "class_name": "ImportProgress" },
+			{ "name": "AGENT_SESSION", "class_name": "AgentSession" }
 		]
 	},
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["Gateway"] },
-		{ "tag": "v2", "new_sqlite_classes": ["ImportProgress"] }
+		{ "tag": "v2", "new_sqlite_classes": ["ImportProgress"] },
+		{ "tag": "v3", "new_sqlite_classes": ["AgentSession"] }
 	],
 	"queues": {
 		"producers": [
@@ -90,12 +93,14 @@
 			"durable_objects": {
 				"bindings": [
 					{ "name": "GATEWAY", "class_name": "Gateway" },
-					{ "name": "IMPORT_PROGRESS", "class_name": "ImportProgress" }
+					{ "name": "IMPORT_PROGRESS", "class_name": "ImportProgress" },
+					{ "name": "AGENT_SESSION", "class_name": "AgentSession" }
 				]
 			},
 			"migrations": [
 				{ "tag": "v1", "new_sqlite_classes": ["Gateway"] },
-				{ "tag": "v2", "new_sqlite_classes": ["ImportProgress"] }
+				{ "tag": "v2", "new_sqlite_classes": ["ImportProgress"] },
+				{ "tag": "v3", "new_sqlite_classes": ["AgentSession"] }
 			],
 			"queues": {
 				"producers": [

@@ -3,10 +3,12 @@ import type {
 	GatewayMessageDeleteBulkDispatchData,
 	GatewayMessageDeleteDispatchData,
 } from "discord-api-types/v10";
+import { agentSessionStub } from "../agent/stubs";
 import { notifyAdmin } from "../alert";
 import { getGatewayBot } from "../discord/api";
 import { isImportProgress } from "../queue/ingest";
 import type { QueueMessage, StoredMessageInput } from "../queue/messages";
+import { AgentRouter } from "./agents";
 import { channelSyncJobs, chunkBySize } from "./channels";
 import {
 	type GatewayMessage,
@@ -60,6 +62,7 @@ const MAX_BATCH_BYTES = 192 * 1024;
  * - 接続の開始は管理用エンドポイント(start)から。以降は30秒ごとのアラームで監視する
  * - 退避やデプロイで切れても、ストレージに保存したセッション情報でResumeする
  * - 受け取ったメッセージはQueueに渡す(保存用と、応答が必要なら応答用)
+ * - エージェントのチャンネルの発言は、保存も応答もせず、そのチャンネルのDurable Objectに渡す
  */
 export class Gateway extends DurableObject<Env> {
 	private socket: WebSocket | null = null;
@@ -72,6 +75,9 @@ export class Gateway extends DurableObject<Env> {
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private connecting = false;
 	private consecutiveFailures = 0;
+	private readonly agents = new AgentRouter(this.env, (event, detail) =>
+		this.log(event, detail),
+	);
 
 	/** 接続を始める。以降はアラームで監視を続ける。すでに接続中なら何もしない */
 	async start(): Promise<void> {
@@ -92,6 +98,21 @@ export class Gateway extends DurableObject<Env> {
 		// 止めていた間は、取りこぼしとして記録しない
 		await this.ctx.storage.delete("lastAliveAt");
 		await this.ctx.storage.deleteAlarm();
+	}
+
+	/** エージェントのチャンネルを作った。以降、そのチャンネルの発言をエージェントに渡す */
+	async addAgentChannel(
+		channelId: string,
+		guildId: string,
+		ownerId: string,
+	): Promise<void> {
+		await this.agents.find(channelId);
+		this.agents.add(channelId, { guildId, ownerId });
+	}
+
+	/** エージェントのチャンネルを消した */
+	async removeAgentChannel(channelId: string): Promise<void> {
+		this.agents.remove(channelId);
 	}
 
 	/** 管理用エンドポイント向けに、接続の状態を返す */
@@ -290,6 +311,11 @@ export class Gateway extends DurableObject<Env> {
 				if (!message.guild_id) {
 					return;
 				}
+				// エージェントのチャンネルの発言は、保存も応答もせず、エージェントに渡す
+				if (await this.agents.find(message.channel_id)) {
+					this.agents.deliver(message, this.session?.botUserId ?? null);
+					return;
+				}
 				// 応答を先に入れる。保存の側で失敗しても、応答は止めないため
 				const botUserId = this.session?.botUserId;
 				if (botUserId && shouldRespond(message, botUserId)) {
@@ -309,9 +335,11 @@ export class Gateway extends DurableObject<Env> {
 			}
 			case "MESSAGE_UPDATE": {
 				const message = data as Partial<GatewayMessage>;
-				// 本文を含まない更新(埋め込みの展開など)は保存内容に関係しない
+				// 本文を含まない更新(埋め込みの展開など)は保存内容に関係しない。エージェントのチャンネルは保存しない
 				if (
 					!shouldStore(message) ||
+					(message.channel_id !== undefined &&
+						(await this.agents.find(message.channel_id))) ||
 					typeof message.content !== "string" ||
 					!message.author ||
 					typeof message.timestamp !== "string"
@@ -323,6 +351,9 @@ export class Gateway extends DurableObject<Env> {
 			}
 			case "MESSAGE_DELETE": {
 				const deleted = data as GatewayMessageDeleteDispatchData;
+				if (await this.agents.find(deleted.channel_id)) {
+					return;
+				}
 				await this.env.INGEST_QUEUE.send({
 					kind: "delete",
 					channelId: deleted.channel_id,
@@ -332,6 +363,9 @@ export class Gateway extends DurableObject<Env> {
 			}
 			case "MESSAGE_DELETE_BULK": {
 				const deleted = data as GatewayMessageDeleteBulkDispatchData;
+				if (await this.agents.find(deleted.channel_id)) {
+					return;
+				}
 				await this.env.INGEST_QUEUE.send({
 					kind: "delete",
 					channelId: deleted.channel_id,
@@ -340,6 +374,7 @@ export class Gateway extends DurableObject<Env> {
 				return;
 			}
 			default: {
+				await this.forwardToAgents(event, data);
 				// リアクションの付け外し。誰がどの絵文字を付けたかを記録する
 				if (REACTION_EVENTS.has(event)) {
 					const job = reactionJob(event, data, Date.now());
@@ -362,6 +397,31 @@ export class Gateway extends DurableObject<Env> {
 					);
 				}
 			}
+		}
+	}
+
+	/**
+	 * エージェントのチャンネルが消されたか、Bobertがサーバーから外されたら、そのチャンネルのセッションを片付ける。
+	 * サーバーが一時的に使えなくなった(unavailable)だけのときは、何もしない
+	 */
+	private async forwardToAgents(event: string, data: unknown): Promise<void> {
+		let channelIds: string[] = [];
+		if (event === "CHANNEL_DELETE") {
+			const { id } = data as { id: string };
+			channelIds = (await this.agents.find(id)) ? [id] : [];
+		} else if (event === "GUILD_DELETE") {
+			const guild = data as { id: string; unavailable?: boolean };
+			channelIds = guild.unavailable ? [] : await this.agents.inGuild(guild.id);
+		}
+		for (const channelId of channelIds) {
+			this.agents.remove(channelId);
+			const stub = agentSessionStub(this.env, channelId);
+			await (event === "CHANNEL_DELETE"
+				? stub.channelDeleted()
+				: stub.guildRemoved()
+			).catch((error: unknown) => {
+				this.log("agent_cleanup_failed", { event, error: String(error) });
+			});
 		}
 	}
 
