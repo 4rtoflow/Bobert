@@ -6,20 +6,28 @@ import type {
 import { describe, expect, it, vi } from "vitest";
 import {
 	type AgentEvent,
+	discordUploadLimit,
+	type IncomingMessage,
 	initialState,
 	ownerText,
 	type RelayDeps,
 	SessionRelay,
 	type SessionState,
+	safeFileName,
 	toolOperation,
 } from "../src/agent/relay";
 import {
 	APPROVAL_INTRO,
+	attachmentTooLarge,
 	HELD_NOTICE,
 	KEY_CANNOT_OPERATE,
+	NO_ATTACH_FILES,
+	OUTPUT_FILES_LINE,
 	othersNotice,
+	outputTooLarge,
 	STOPPED_LINE,
 } from "../src/agent/texts";
+import { DiscordApiError, type MessageFile } from "../src/discord/api";
 
 const MODEL = { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" };
 
@@ -38,14 +46,20 @@ function fakeDiscord() {
 	const posts: RESTPostAPIChannelMessageJSONBody[] = [];
 	const edits: { id: string; body: RESTPatchAPIChannelMessageJSONBody }[] = [];
 	const removed: string[] = [];
+	const files: MessageFile[][] = [];
 	let next = 1;
 	return {
 		posts,
 		edits,
 		removed,
+		files,
 		discord: {
-			post: async (body: RESTPostAPIChannelMessageJSONBody) => {
+			post: async (
+				body: RESTPostAPIChannelMessageJSONBody,
+				attached?: MessageFile[],
+			) => {
 				posts.push(body);
+				files.push(attached ?? []);
 				return `m${next++}`;
 			},
 			edit: async (id: string, body: RESTPatchAPIChannelMessageJSONBody) => {
@@ -78,6 +92,9 @@ function relayOf(
 		discord,
 		client: async () => client,
 		markEnded,
+		fetchAttachment: async () => new Uint8Array([1, 2, 3]),
+		uploadLimit: async () => 10 * 1024 * 1024,
+		sleep: async () => {},
 		now: () => 1_000,
 	};
 	return { relay: new SessionRelay(state, deps), markEnded };
@@ -102,12 +119,28 @@ function toolUse(
 	return event({ type: "agent.tool_use", name, input, evaluated_permission });
 }
 
-function idle(type: string): AgentEvent {
+function idle(type: string, eventIds: string[] = []): AgentEvent {
 	return event({
 		type: "session.status_idle",
-		stop_reason: { type },
+		stop_reason:
+			type === "requires_action" ? { type, event_ids: eventIds } : { type },
 		stop_details: null,
 	});
+}
+
+/** 本人の発言 */
+function ownerMessage(
+	content: string,
+	attachments: IncomingMessage["attachments"] = [],
+): IncomingMessage {
+	return {
+		id: "1",
+		authorId: "61001",
+		fromBot: false,
+		content,
+		mentions: [],
+		attachments,
+	};
 }
 
 const notFound = () =>
@@ -131,6 +164,7 @@ describe("本人の発言", () => {
 			fromBot: false,
 			content: "テストを直して <@200>",
 			mentions: [{ id: "200", name: "bob" }],
+			attachments: [],
 		});
 
 		expect(stream).toBe(true);
@@ -164,6 +198,7 @@ describe("本人の発言", () => {
 			fromBot: false,
 			content: "ついでにREADMEも",
 			mentions: [],
+			attachments: [],
 		});
 
 		expect(stream).toBe(false);
@@ -175,7 +210,12 @@ describe("本人の発言", () => {
 				allowed_mentions: { parse: [], replied_user: false },
 			},
 		]);
-		expect(state.held).toEqual([{ noticeId: "m1", text: "ついでにREADMEも" }]);
+		expect(state.held).toEqual([
+			{
+				noticeId: "m1",
+				message: expect.objectContaining({ content: "ついでにREADMEも" }),
+			},
+		]);
 	});
 
 	it("セッションが見つからなければ(別のワークスペースのキー)、終えたことにして知らせる", async () => {
@@ -194,6 +234,7 @@ describe("本人の発言", () => {
 			fromBot: false,
 			content: "続けて",
 			mentions: [],
+			attachments: [],
 		});
 
 		expect(state.sessionId).toBeNull();
@@ -214,6 +255,7 @@ describe("本人以外の発言", () => {
 			fromBot: false,
 			content: "こんにちは",
 			mentions: [],
+			attachments: [],
 		});
 
 		expect(removed).toEqual(["5"]);
@@ -234,6 +276,7 @@ describe("本人以外の発言", () => {
 			fromBot: true,
 			content: "通知",
 			mentions: [],
+			attachments: [],
 		});
 
 		expect(removed).toEqual(["6"]);
@@ -398,7 +441,9 @@ describe("実行の許可", () => {
 		const ask = toolUse("bash", { command: "git push" }, "ask");
 
 		await relay.handle(ask);
-		const decision = await relay.handle(idle("requires_action"));
+		const decision = await relay.handle(
+			idle("requires_action", [(ask as { id: string }).id]),
+		);
 
 		expect(posts[0]?.content).toBe(`${APPROVAL_INTRO}\nコマンド: \`git push\``);
 		expect(decision).toBe("close");
@@ -412,7 +457,10 @@ describe("実行の許可", () => {
 		const { relay } = relayOf(state, discord, client);
 		const ask = toolUse("bash", { command: "git push" }, "ask");
 		await relay.handle(ask);
-		state.held.push({ noticeId: "m9", text: "そのあとテストも" });
+		state.held.push({
+			noticeId: "m9",
+			message: ownerMessage("そのあとテストも"),
+		});
 
 		const answered = await relay.answer((ask as { id: string }).id, true);
 
@@ -496,7 +544,243 @@ describe("書き方", () => {
 					{ id: "200", name: "bob" },
 					{ id: "300", name: "carol" },
 				],
+				attachments: [],
 			}),
 		).toBe("@bob と @carol と <@400>");
+	});
+});
+
+/** ファイルを扱う、Anthropicのクライアントの偽物 */
+function fakeFileClient(outputs: Record<string, unknown>[] = []) {
+	const send = vi.fn(async () => ({}));
+	const upload = vi.fn(async () => ({ id: "file_up" }));
+	const remove = vi.fn(async () => ({}));
+	const add = vi.fn(async () => ({ id: "res_1", file_id: "file_copy" }));
+	const download = vi.fn(async () => new Response("hello"));
+	const list = vi.fn(async function* () {
+		yield* outputs;
+	});
+	const client = {
+		files: { upload, delete: remove, download },
+		beta: {
+			files: { list },
+			sessions: { events: { send }, resources: { add } },
+		},
+	} as unknown as Anthropic;
+	return { client, send, upload, remove, add, download, list };
+}
+
+function customToolUse(names: unknown): AgentEvent {
+	return event({
+		type: "agent.custom_tool_use",
+		name: "send_files",
+		input: { names },
+	});
+}
+
+describe("ファイルの受け渡し", () => {
+	it("添付ファイルをサンドボックスに置き、置き場所を発言の終わりに書いて送る", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, send, upload, add, remove } = fakeFileClient();
+		const { relay } = relayOf(state, discord, client);
+
+		await relay.receiveOwner(
+			ownerMessage("このCSVを集計して", [
+				{
+					filename: "data.csv",
+					size: 3,
+					url: "https://cdn.discordapp.com/data.csv",
+					contentType: "text/csv",
+				},
+			]),
+		);
+
+		expect(upload).toHaveBeenCalledTimes(1);
+		expect(add).toHaveBeenCalledWith("sesn_1", {
+			type: "file",
+			file_id: "file_up",
+			mount_path: "/1/data.csv",
+		});
+		// 置いたファイルはセッション用の写しなので、上げた元のファイルは消す
+		expect(remove).toHaveBeenCalledWith("file_up");
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				{
+					type: "user.message",
+					content: [
+						{
+							type: "text",
+							text: "このCSVを集計して\n\n添付ファイル:\n- /mnt/session/uploads/1/data.csv",
+						},
+					],
+				},
+			],
+		});
+	});
+
+	it("25MBを超える添付ファイルは渡さず、その発言への返信で知らせる", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send, upload } = fakeFileClient();
+		const { relay } = relayOf(state, discord, client);
+
+		await relay.receiveOwner(
+			ownerMessage("見て", [
+				{
+					filename: "big.zip",
+					size: 26 * 1024 * 1024,
+					url: "https://cdn.discordapp.com/big.zip",
+					contentType: null,
+				},
+			]),
+		);
+
+		expect(upload).not.toHaveBeenCalled();
+		expect(posts).toEqual([
+			{
+				content: attachmentTooLarge("big.zip"),
+				message_reference: { message_id: "1" },
+				allowed_mentions: { parse: [], replied_user: false },
+			},
+		]);
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				{ type: "user.message", content: [{ type: "text", text: "見て" }] },
+			],
+		});
+	});
+
+	it("send_filesの道具で、置いたファイルをチャンネルに添付し、結果をエージェントに返す", async () => {
+		const state = newState();
+		const { discord, posts, files } = fakeDiscord();
+		const { client, send } = fakeFileClient([
+			{
+				id: "file_1",
+				filename: "report.txt",
+				size_bytes: 5,
+				mime_type: "text/plain",
+				created_at: "2026-10-31T00:00:00Z",
+			},
+		]);
+		const { relay } = relayOf(state, discord, client);
+		const call = customToolUse(["/mnt/session/outputs/report.txt"]);
+
+		await relay.handle(call);
+		const decision = await relay.handle(
+			idle("requires_action", [(call as { id: string }).id]),
+		);
+
+		expect(posts).toEqual([
+			{ content: OUTPUT_FILES_LINE, allowed_mentions: { parse: [] } },
+		]);
+		expect(files[0]?.map((file) => file.name)).toEqual(["report.txt"]);
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				{
+					type: "user.custom_tool_result",
+					custom_tool_use_id: (call as { id: string }).id,
+					content: [
+						{ type: "text", text: "チャンネルに出しました: report.txt" },
+					],
+					is_error: false,
+				},
+			],
+		});
+		// 答えた道具だけを待っているので、流れを閉じない
+		expect(decision).toBe("continue");
+	});
+
+	it("Discordに上げられない大きさのファイルは出さず、名前と大きさを知らせる", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send, download } = fakeFileClient([
+			{
+				id: "file_2",
+				filename: "video.mp4",
+				size_bytes: 120 * 1024 * 1024,
+				mime_type: "video/mp4",
+				created_at: "2026-10-31T00:00:00Z",
+			},
+		]);
+		const { relay } = relayOf(state, discord, client);
+
+		await relay.handle(customToolUse(["video.mp4"]));
+
+		expect(download).not.toHaveBeenCalled();
+		expect(posts.map((post) => post.content)).toEqual([
+			outputTooLarge("video.mp4", "120MB"),
+		]);
+		expect(send).toHaveBeenCalledWith(
+			"sesn_1",
+			expect.objectContaining({
+				events: [expect.objectContaining({ is_error: true })],
+			}),
+		);
+	});
+
+	it("ファイルを添付する権限がなければ、権限がないことを知らせる", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const post = discord.post;
+		discord.post = async (body, attached) => {
+			if (attached !== undefined && attached.length > 0) {
+				throw new DiscordApiError(403, 50013, "missing permissions");
+			}
+			return post(body, attached);
+		};
+		const { client } = fakeFileClient([
+			{
+				id: "file_1",
+				filename: "report.txt",
+				size_bytes: 5,
+				mime_type: "text/plain",
+				created_at: "2026-10-31T00:00:00Z",
+			},
+		]);
+		const { relay } = relayOf(state, discord, client);
+
+		await relay.handle(customToolUse(["report.txt"]));
+
+		expect(posts.map((body) => body.content)).toEqual([NO_ATTACH_FILES]);
+	});
+
+	it("置いたファイルが見つからなければ、読み直してから、見つからないとエージェントに返す", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send, list } = fakeFileClient([]);
+		const { relay } = relayOf(state, discord, client);
+
+		await relay.handle(customToolUse(["missing.txt"]));
+
+		expect(list).toHaveBeenCalledTimes(5);
+		expect(posts).toEqual([]);
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				expect.objectContaining({
+					type: "user.custom_tool_result",
+					content: [
+						{
+							type: "text",
+							text: "/mnt/session/outputs/ に見つかりませんでした: missing.txt",
+						},
+					],
+					is_error: true,
+				}),
+			],
+		});
+	});
+
+	it("Discordに上げられる大きさは、サーバーのブーストの段階で決まる", () => {
+		expect(discordUploadLimit(0)).toBe(10 * 1024 * 1024);
+		expect(discordUploadLimit(1)).toBe(10 * 1024 * 1024);
+		expect(discordUploadLimit(2)).toBe(50 * 1024 * 1024);
+		expect(discordUploadLimit(3)).toBe(100 * 1024 * 1024);
+	});
+
+	it("置き場所に使うファイルの名前から、区切りの文字を除く", () => {
+		expect(safeFileName(String.raw`a/b\c.txt`)).toBe("a_b_c.txt");
+		expect(safeFileName("..")).toBe("file");
+		expect(safeFileName("レポート.pdf")).toBe("レポート.pdf");
 	});
 });

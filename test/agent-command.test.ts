@@ -236,6 +236,7 @@ describe("/agent", () => {
 							permission_policy: { type: "auto" },
 						},
 					},
+					{ type: "custom", name: "send_files" },
 				],
 			},
 			environment_id: "env_1",

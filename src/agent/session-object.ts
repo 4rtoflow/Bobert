@@ -5,6 +5,7 @@ import {
 	deleteChannel,
 	deleteMessage,
 	editChannelMessage,
+	getGuild,
 	triggerTyping,
 } from "../discord/api";
 import type { AnthropicCredential } from "../llm/anthropic";
@@ -14,8 +15,10 @@ import { agentClient, deleteSession } from "./managed";
 import {
 	type AgentEvent,
 	type ApprovalResult,
+	discordUploadLimit,
 	type IncomingMessage,
 	initialState,
+	MAX_ATTACHMENT_BYTES,
 	type RelayDeps,
 	SessionRelay,
 	type SessionSetup,
@@ -47,6 +50,8 @@ export class AgentSession extends DurableObject<Env> {
 	private abort: AbortController | null = null;
 	private typing: ReturnType<typeof setInterval> | null = null;
 	private lastEventAt = 0;
+	/** このサーバーで出せるファイルの大きさ(読んだら覚えておく) */
+	private uploadLimitBytes: number | null = null;
 
 	/** セッションを始めたときに、チャンネルの情報を記録する */
 	async setup(setup: SessionSetup): Promise<void> {
@@ -353,7 +358,8 @@ export class AgentSession extends DurableObject<Env> {
 		const { channelId } = state;
 		const deps: RelayDeps = {
 			discord: {
-				post: async (body) => (await createMessage(token, channelId, body)).id,
+				post: async (body, files) =>
+					(await createMessage(token, channelId, body, files)).id,
 				edit: (messageId, body) =>
 					editChannelMessage(token, channelId, messageId, body),
 				remove: (messageId) => deleteMessage(token, channelId, messageId),
@@ -363,9 +369,35 @@ export class AgentSession extends DurableObject<Env> {
 				return credential === null ? null : agentClient(credential);
 			},
 			markEnded: () => markAgentChannelEnded(this.env.DB, channelId),
+			fetchAttachment: async (url) => {
+				const response = await fetch(url);
+				if (!response.ok) {
+					throw new Error(`Attachment fetch failed: ${response.status}`);
+				}
+				return new Uint8Array(await response.arrayBuffer());
+			},
+			uploadLimit: () => this.uploadLimit(state.guildId),
+			sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 			now: () => Date.now(),
 		};
 		return new SessionRelay(state, deps);
+	}
+
+	/**
+	 * このサーバーで、エージェントが作ったファイルを1つ出せる大きさ。
+	 * Discordに上げられる大きさ(サーバーのブーストの段階で決まる)と、Workersで扱える大きさ(25MB)の、小さい方
+	 */
+	private async uploadLimit(guildId: string): Promise<number> {
+		if (this.uploadLimitBytes === null) {
+			const tier = await getGuild(this.env.DISCORD_BOT_TOKEN, guildId)
+				.then((guild) => guild.premium_tier)
+				.catch(() => 0);
+			this.uploadLimitBytes = Math.min(
+				discordUploadLimit(tier),
+				MAX_ATTACHMENT_BYTES,
+			);
+		}
+		return this.uploadLimitBytes;
 	}
 
 	private credential(state: SessionState): Promise<AnthropicCredential | null> {

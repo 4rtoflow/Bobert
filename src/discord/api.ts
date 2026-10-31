@@ -7,6 +7,7 @@ import type {
 	RESTGetAPIGatewayBotResult,
 	RESTGetAPIGuildChannelsResult,
 	RESTGetAPIGuildMessagesSearchResult,
+	RESTGetAPIGuildResult,
 	RESTGetAPIGuildRolesResult,
 	RESTGetAPIGuildThreadsResult,
 	RESTPatchAPIChannelMessageJSONBody,
@@ -40,10 +41,12 @@ export class DiscordApiError extends Error {
 	}
 }
 
-/** メッセージに添付する、テキストのファイル */
+/** メッセージに添付するファイル。中身が文字列ならテキストのファイル、バイト列ならそのまま送る */
 export interface MessageFile {
 	name: string;
-	content: string;
+	content: string | Uint8Array;
+	/** バイト列のときの種類(MIMEタイプ)。なければapplication/octet-stream */
+	contentType?: string;
 }
 
 interface RequestOptions {
@@ -261,18 +264,29 @@ export function getGuildMember(
 	);
 }
 
-/** チャンネルにメッセージを投稿する */
+/** チャンネルにメッセージを投稿する。filesを渡すと添付する(ファイルを添付する権限が必要) */
 export function createMessage(
 	botToken: string,
 	channelId: string,
 	body: RESTPostAPIChannelMessageJSONBody,
+	files: MessageFile[] = [],
 ): Promise<APIMessage> {
 	return discordRequest(
 		"POST channel message",
 		"POST",
 		`/channels/${channelId}/messages`,
-		{ botToken, body },
+		{ botToken, body, files },
 	);
+}
+
+/** サーバーの情報を取得する(ブーストの段階などを読むため) */
+export function getGuild(
+	botToken: string,
+	guildId: string,
+): Promise<RESTGetAPIGuildResult> {
+	return discordRequest("GET guild", "GET", `/guilds/${guildId}`, {
+		botToken,
+	});
 }
 
 /** チャンネルのメッセージを書き換える(Bot自身のメッセージだけ) */
@@ -418,7 +432,11 @@ function formDataOf(body: unknown, files: MessageFile[]): FormData {
 	files.forEach((file, index) => {
 		form.append(
 			`files[${index}]`,
-			new Blob([file.content], { type: "text/plain; charset=utf-8" }),
+			typeof file.content === "string"
+				? new Blob([file.content], { type: "text/plain; charset=utf-8" })
+				: new Blob([file.content], {
+						type: file.contentType ?? "application/octet-stream",
+					}),
 			file.name,
 		);
 	});

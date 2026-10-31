@@ -132,5 +132,11 @@ export function toIncomingMessage(message: GatewayMessage): IncomingMessage {
 			id: user.id,
 			name: user.member?.nick ?? user.global_name ?? user.username,
 		})),
+		attachments: (message.attachments ?? []).map((attachment) => ({
+			filename: attachment.filename,
+			size: attachment.size,
+			url: attachment.url,
+			contentType: attachment.content_type ?? null,
+		})),
 	};
 }
