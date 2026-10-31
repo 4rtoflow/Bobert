@@ -33,6 +33,14 @@ export type MessageLister = (
 	options: { before?: string; after?: string; limit: number },
 ) => Promise<APIMessage[]>;
 
+/**
+ * Discordから、チャンネルのピン留めされたメッセージを読む(新しくピン留めされた順に、1回50件まで)。
+ * hasMoreなら、ほかにもピン留めされたメッセージがある
+ */
+export type PinLister = (
+	channelId: string,
+) => Promise<{ messages: APIMessage[]; hasMore: boolean }>;
+
 /** 過去のメッセージの読み先(仕様: docs/spec/architecture.md「会話の文脈と過去の発言の保存」) */
 export interface HistoryDeps {
 	db: D1Database;

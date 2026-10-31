@@ -701,12 +701,13 @@ describe("メンションと返信への応答", () => {
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
 		);
-		// Bobertの道具(時系列で読む、意味で検索、チャンネルの一覧、メンバーを探す、ファイルを読む)の後に、Web検索を置く
+		// Bobertの道具(時系列で読む、意味で検索、チャンネルの一覧、ピン留めを読む、メンバーを探す、ファイルを読む)の後に、Web検索を置く
 		expect(request?.body).toMatchObject({
 			tools: [
 				{ type: "function", function: { name: "read_channel_history" } },
 				{ type: "function", function: { name: "search_channel_messages" } },
 				{ type: "function", function: { name: "list_channels" } },
+				{ type: "function", function: { name: "read_pinned_messages" } },
 				{ type: "function", function: { name: "find_members" } },
 				{ type: "function", function: { name: "read_file" } },
 				{ type: "openrouter:web_search" },
@@ -815,6 +816,10 @@ describe("メンションと返信への応答", () => {
 			}),
 			expect.objectContaining({
 				type: "function",
+				function: expect.objectContaining({ name: "read_pinned_messages" }),
+			}),
+			expect.objectContaining({
+				type: "function",
 				function: expect.objectContaining({ name: "find_members" }),
 			}),
 			expect.objectContaining({
@@ -858,6 +863,7 @@ describe("メンションと返信への応答", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_pinned_messages",
 			"find_members",
 			"read_file",
 		]);
