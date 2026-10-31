@@ -35,6 +35,7 @@ import {
 	saveBotRoles,
 	saveChannels,
 	sharedChannelsOf,
+	sharedThreadsOf,
 } from "../src/store/channels";
 import { addSkill } from "../src/store/skills";
 import { BOT, discordMessage } from "./fixtures";
@@ -635,6 +636,16 @@ describe("ほかの機能との関係", () => {
 					nsfw: false,
 					overwrites: [],
 				},
+				// エージェントのチャンネルの中のスレッド
+				{
+					channelId: "61903",
+					guildId,
+					parentId: "61901",
+					name: "agent-thread",
+					type: 11,
+					nsfw: false,
+					overwrites: [],
+				},
 			],
 			1,
 		);
@@ -671,5 +682,6 @@ describe("ほかの機能との関係", () => {
 		expect(
 			await findSharedChannelsByName(env.DB, guildId, "agent-alice-1"),
 		).toEqual([]);
+		expect(await sharedThreadsOf(env.DB, guildId)).toEqual([]);
 	});
 });

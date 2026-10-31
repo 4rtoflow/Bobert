@@ -306,7 +306,8 @@ export async function sharedThreadsOf(
 		.prepare(
 			`SELECT c.*, (SELECT MAX(m.created_at) FROM messages m WHERE m.channel_id = c.channel_id) AS last_message_at
 			FROM channels c
-			WHERE c.guild_id = ? AND c.shared = 1 AND c.parent_id IS NOT NULL`,
+			WHERE c.guild_id = ? AND c.shared = 1 AND c.parent_id IS NOT NULL
+				AND c.parent_id NOT IN (SELECT channel_id FROM agent_channels)`,
 		)
 		.bind(guildId)
 		.all<ChannelRow & { last_message_at: number | null }>();
