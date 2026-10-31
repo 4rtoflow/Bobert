@@ -12,6 +12,7 @@ import {
 	recordConversationSize,
 	withReplyModel,
 } from "./handler";
+import { allowedMentions, notifiedUsersByPart } from "./members";
 import { splitMessage } from "./split";
 
 /** 「Bobertに聞く」で、選んだ人の発言としてAIに渡す依頼(AIにだけ見せる) */
@@ -89,7 +90,7 @@ async function explain(job: ExplainJob, env: Env): Promise<void> {
 /**
  * 説明を投稿する。最初のメッセージは、保留にした応答(チャンネルに見える)を書き換える。
  * 長ければ分けて、2通目からは前のメッセージへの返信にする(返信のつながりから会話全体をたどれるように)。
- * 返答に含まれるメンションでは、誰にも通知しない
+ * AIが書いた人へのメンションでは、その人に通知する(上限の人数まで)。ほかのメンションでは通知しない
  */
 async function postExplanation(
 	env: Env,
@@ -97,6 +98,7 @@ async function postExplanation(
 	reply: ComposedReply,
 ): Promise<string[]> {
 	const parts = splitMessage(reply.text);
+	const notified = notifiedUsersByPart(parts);
 	const posted: string[] = [];
 	for (const [index, content] of parts.entries()) {
 		// 要約を勧める案内は最後のメッセージの末尾にあるので、ボタンもそこに付ける
@@ -104,13 +106,18 @@ async function postExplanation(
 			reply.offerCompaction && index === parts.length - 1
 				? { components: [compactButtonRow()] }
 				: {};
+		const users = notified[index] ?? [];
 		const previous = posted.at(-1);
 		const message =
 			previous === undefined
 				? await editOriginalInteractionResponse(
 						env.DISCORD_APPLICATION_ID,
 						job.interactionToken,
-						{ content, allowed_mentions: { parse: [] }, ...components },
+						{
+							content,
+							allowed_mentions: allowedMentions(users),
+							...components,
+						},
 					)
 				: await createMessage(env.DISCORD_BOT_TOKEN, job.channelId, {
 						content,
@@ -118,7 +125,7 @@ async function postExplanation(
 							message_id: previous,
 							fail_if_not_exists: false,
 						},
-						allowed_mentions: { parse: [], replied_user: false },
+						allowed_mentions: allowedMentions(users, false),
 						...components,
 					});
 		posted.push(message.id);

@@ -244,6 +244,7 @@ describe("説明の仕事", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"find_members",
 			"read_file",
 		]);
 		const edit = calls.find((call) => call.method === "PATCH");
@@ -289,6 +290,7 @@ describe("説明の仕事", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"find_members",
 			"read_file",
 			"read_reply_chain",
 		]);

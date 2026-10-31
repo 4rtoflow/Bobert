@@ -401,6 +401,21 @@ export async function loadMemberNames(
 	return names;
 }
 
+/**
+ * サーバーで記録した名前の全員分(人ごとに、最後に分かったもの)。
+ * 記録しているのは、発言したことのある人と、メンションされた人だけ
+ */
+export async function listRecordedMembers(
+	db: D1Database,
+	guildId: string,
+): Promise<UserName[]> {
+	const { results } = await db
+		.prepare("SELECT user_id, name FROM guild_members WHERE guild_id = ?")
+		.bind(guildId)
+		.all<{ user_id: string; name: string }>();
+	return results.map((row) => ({ id: row.user_id, name: row.name }));
+}
+
 /** ベクトルを入れるメッセージ */
 export interface MessageToEmbed {
 	messageId: string;
