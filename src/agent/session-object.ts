@@ -10,6 +10,7 @@ import {
 } from "../discord/api";
 import type { AnthropicCredential } from "../llm/anthropic";
 import { logEvent } from "../log";
+import { findSkillByName } from "../store/skills";
 import { loadCredential } from "../store/users";
 import { agentClient, deleteSession } from "./managed";
 import {
@@ -377,6 +378,18 @@ export class AgentSession extends DurableObject<Env> {
 				return new Uint8Array(await response.arrayBuffer());
 			},
 			uploadLimit: () => this.uploadLimit(state.guildId),
+			readSkill: async (name) => {
+				const skill = await findSkillByName(this.env.DB, state.guildId, name);
+				if (skill !== null) {
+					// スキルは誰でも編集できるので、何が読まれたかを後から分かるようにする
+					logEvent("agent", "skill_read", {
+						userId: state.ownerId,
+						guildId: state.guildId,
+						skill: skill.name,
+					});
+				}
+				return skill;
+			},
 			sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 			now: () => Date.now(),
 		};
