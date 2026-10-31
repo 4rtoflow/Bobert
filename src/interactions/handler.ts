@@ -1,10 +1,12 @@
 import type {
+	APIApplicationCommandAutocompleteInteraction,
 	APIChatInputApplicationCommandInteraction,
 	APIInteraction,
 	APIInteractionResponse,
 	APIMessageApplicationCommandInteraction,
 } from "discord-api-types/v10";
 import {
+	agentAutocomplete,
 	agentCommand,
 	agentComponent,
 	endagentCommand,
@@ -87,7 +89,7 @@ export async function handleInteraction(
 	if (interaction.type === InteractionType.Ping) {
 		return Response.json({ type: InteractionResponseType.Pong });
 	}
-	// OpenRouterのOAuthのコールバック先に、このWorkerのURLを使う
+	// OpenRouterとGitHubのOAuthのコールバック先に、このWorkerのURLを使う
 	const origin = new URL(request.url).origin;
 	return Response.json(await route(interaction, env, ctx, origin));
 }
@@ -198,12 +200,26 @@ async function route(
 				return helpCommand();
 			}
 			break;
+		case InteractionType.ApplicationCommandAutocomplete:
+			// 入力の候補を出すのは、/agent の repository の欄だけ
+			if (interaction.data.name === AGENT_COMMAND_NAME) {
+				return agentAutocomplete(
+					interaction as APIApplicationCommandAutocompleteInteraction,
+					env,
+					user.id,
+				);
+			}
+			return {
+				type: InteractionResponseType.ApplicationCommandAutocompleteResult,
+				data: { choices: [] },
+			};
 		case InteractionType.MessageComponent: {
 			const agentResponse = await agentComponent(
 				interaction,
 				env,
 				ctx,
 				user.id,
+				origin,
 			);
 			if (agentResponse) {
 				return agentResponse;

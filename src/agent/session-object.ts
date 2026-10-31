@@ -8,6 +8,12 @@ import {
 	getGuild,
 	triggerTyping,
 } from "../discord/api";
+import {
+	findAllowedRepository,
+	gitHubAccessToken,
+	hasBranch,
+	openPullRequest,
+} from "../github/account";
 import type { AnthropicCredential } from "../llm/anthropic";
 import { logEvent } from "../log";
 import { findSkillByName } from "../store/skills";
@@ -20,10 +26,12 @@ import {
 	type IncomingMessage,
 	initialState,
 	MAX_ATTACHMENT_BYTES,
+	REPOSITORY_TOKEN_WATCH_VALIDITY_MS,
 	type RelayDeps,
 	SessionRelay,
 	type SessionSetup,
 	type SessionState,
+	withDefaults,
 } from "./relay";
 import { deleteAgentChannel, markAgentChannelEnded } from "./store";
 
@@ -92,6 +100,29 @@ export class AgentSession extends DurableObject<Env> {
 				return "stale";
 			}
 			const { result, stream } = await this.relay(state).answer(eventId, allow);
+			await this.saveState(state);
+			if (stream) {
+				this.startStreaming();
+			}
+			await this.scheduleAlarm(state);
+			return result;
+		});
+	}
+
+	/** PRの確認のボタン(「作る」か「作らない」) */
+	async answerPullRequest(
+		toolUseId: string,
+		create: boolean,
+	): Promise<ApprovalResult> {
+		return this.serial(async () => {
+			const state = await this.loadState();
+			if (state === null) {
+				return "stale";
+			}
+			const { result, stream } = await this.relay(state).answerPullRequest(
+				toolUseId,
+				create,
+			);
 			await this.saveState(state);
 			if (stream) {
 				this.startStreaming();
@@ -190,6 +221,10 @@ export class AgentSession extends DurableObject<Env> {
 				).catch(() => {});
 			}
 			if (state.working && state.sessionId !== null) {
+				// 長い作業の途中で、つないだリポジトリのトークンが切れないようにする
+				await this.relay(state).ensureRepositoryTokens(
+					REPOSITORY_TOKEN_WATCH_VALIDITY_MS,
+				);
 				if (this.abort === null) {
 					this.startStreaming();
 				} else if (now - this.lastEventAt > QUIET_MS) {
@@ -390,6 +425,21 @@ export class AgentSession extends DurableObject<Env> {
 				}
 				return skill;
 			},
+			github: {
+				findRepository: (fullName, minValidityMs) =>
+					findAllowedRepository(
+						this.env,
+						state.ownerId,
+						fullName,
+						minValidityMs,
+					),
+				hasBranch: (token, fullName, branch) =>
+					hasBranch(token, fullName, branch),
+				createPullRequest: (request) =>
+					openPullRequest(this.env, state.ownerId, request),
+				accessToken: (minValidityMs) =>
+					gitHubAccessToken(this.env, state.ownerId, minValidityMs),
+			},
 			sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 			now: () => Date.now(),
 		};
@@ -457,7 +507,7 @@ export class AgentSession extends DurableObject<Env> {
 	private loadState(): Promise<SessionState | null> {
 		return this.ctx.storage
 			.get<SessionState>("state")
-			.then((state) => state ?? null);
+			.then((state) => (state === undefined ? null : withDefaults(state)));
 	}
 
 	private async saveState(state: SessionState): Promise<void> {

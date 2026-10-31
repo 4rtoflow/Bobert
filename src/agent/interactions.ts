@@ -1,11 +1,10 @@
 import type {
-	APIButtonComponentWithCustomId,
+	APIApplicationCommandAutocompleteInteraction,
+	APIButtonComponent,
 	APIChatInputApplicationCommandInteraction,
-	APIEmbed,
 	APIInteractionResponse,
 	APIMessageComponentInteraction,
 	APIUser,
-	RESTPostAPIChannelMessageJSONBody,
 } from "discord-api-types/v10";
 import {
 	createFollowupMessage,
@@ -16,6 +15,7 @@ import {
 	pinMessage,
 } from "../discord/api";
 import {
+	ApplicationCommandOptionType,
 	ButtonStyle,
 	ComponentType,
 	InteractionResponseType,
@@ -23,17 +23,25 @@ import {
 	OverwriteType,
 	PermissionFlags,
 } from "../discord/constants";
+import {
+	findAllowedRepository,
+	listAllowedRepositoryNames,
+	type RepositoryLookup,
+} from "../github/account";
 import { type MessageEdit, respondLater } from "../interactions/deferred";
 import { logEvent } from "../log";
+import { createGitHubAuthLink } from "../oauth/github";
 import { LLM_ERROR_TEXT } from "../respond/replies";
 import { listSkills } from "../store/skills";
 import { getUserSettings, loadCredential } from "../store/users";
+import { firstMessage } from "./first-message";
 import {
 	agentClient,
 	agentEffort,
 	agentModel,
 	deleteSession,
 	describeAgentError,
+	repositoryMountPath,
 	startSession,
 } from "./managed";
 import {
@@ -43,7 +51,13 @@ import {
 	AGENT_DENY_PREFIX,
 	AGENT_END_CONFIRM_ID,
 	AGENT_END_ID,
+	AGENT_GITHUB_ID,
+	AGENT_PR_CANCEL_PREFIX,
+	AGENT_PR_CREATE_PREFIX,
 	AGENT_STOP_ID,
+	githubLinkRow,
+	REPOSITORY_TOKEN_VALIDITY_MS,
+	repositoryName,
 } from "./relay";
 import type { EndResult } from "./session-object";
 import {
@@ -57,6 +71,7 @@ import {
 } from "./store";
 import { agentSessionStub, gatewayStub } from "./stubs";
 import {
+	AGENT_REPOSITORY_OPTION_NAME,
 	ALREADY_ENDED,
 	agentChannelName,
 	CHANNEL_LIMIT_REACHED,
@@ -64,25 +79,31 @@ import {
 	DELETE_CHANNEL_FAILED,
 	DELETE_CONFIRM,
 	DELETE_CONFIRM_BUTTON_LABEL,
-	END_BUTTON_LABEL,
 	END_CONFIRM,
 	END_CONFIRM_BUTTON_LABEL,
 	END_FAILED,
 	ENDED,
-	effortLine,
-	FIRST_MESSAGE_NOTES,
-	FIRST_MESSAGE_TITLE,
-	firstMessageContent,
+	GITHUB_LINK_PROMPT,
+	GITHUB_LOOKUP_FAILED,
+	GITHUB_NOT_LINKED_FOR_AGENT,
+	GITHUB_OPEN_BUTTON_LABEL,
 	KEY_MISSING,
-	modelLine,
 	NO_MANAGE_CHANNELS,
 	NOT_AGENT_CHANNEL,
 	OPERATION_FAILED,
 	OWNER_ONLY_BUTTON,
 	OWNER_ONLY_END,
+	repositoryNotUsable,
 	startFailed,
 	tooManySessions,
 } from "./texts";
+
+/** /agent の repository の欄の候補を返すまでの時間の上限。Discordは3秒以内の返事を求めるため */
+const AUTOCOMPLETE_TIMEOUT_MS = 2_500;
+
+/** 候補の数と、候補の名前の長さの上限(Discordの決まり) */
+const MAX_CHOICES = 25;
+const MAX_CHOICE_LENGTH = 100;
 
 /** 1人が1つのサーバーで持てる、終えていないセッションの数 */
 export const MAX_ACTIVE_SESSIONS = 3;
@@ -139,6 +160,16 @@ async function startAgent(
 	if (!hasPermission(permissions, PermissionFlags.ManageChannels)) {
 		return { content: NO_MANAGE_CHANNELS };
 	}
+	// GitHubのリポジトリを選んでいたら、連携と許可を確かめる。リポジトリは、セッションを作るときにしかつなげないため
+	const repositoryInput = repositoryOption(interaction);
+	let repository: ChosenRepository | null = null;
+	if (repositoryInput !== null) {
+		const chosen = await chooseRepository(env, user.id, repositoryInput);
+		if (chosen.status === "reply") {
+			return chosen.reply;
+		}
+		repository = chosen.repository;
+	}
 
 	const settings = await getUserSettings(db, user.id);
 	const model = agentModel(settings);
@@ -147,14 +178,25 @@ async function startAgent(
 	const name = agentChannelName(user.username, number);
 	const client = agentClient(credential);
 	let sessionId: string;
+	let repositoryResourceId: string | null;
 	try {
 		const skills = await listSkills(db, guildId);
-		sessionId = await startSession(db, user.id, client, {
+		const started = await startSession(db, user.id, client, {
 			skills,
 			model,
 			effort,
 			title: `#${name}`,
+			repository:
+				repository === null
+					? null
+					: {
+							fullName: repository.fullName,
+							mountPath: repository.mountPath,
+							token: repository.token,
+						},
 		});
+		sessionId = started.sessionId;
+		repositoryResourceId = started.repositoryResourceId;
 	} catch (error) {
 		log("session_start_failed", user.id, error);
 		return { content: startFailed(describeAgentError(error, model)) };
@@ -214,6 +256,18 @@ async function startAgent(
 			ownerId: user.id,
 			sessionId,
 			model,
+			...(repository === null || repositoryResourceId === null
+				? {}
+				: {
+						repositories: [
+							{
+								fullName: repository.fullName,
+								resourceId: repositoryResourceId,
+								mountPath: repository.mountPath,
+							},
+						],
+						repositoryTokenVersion: repository.tokenVersion,
+					}),
 		});
 		await gatewayStub(env)
 			.addAgentChannel(channelId, guildId, user.id)
@@ -226,8 +280,6 @@ async function startAgent(
 			channelId,
 			firstMessage(
 				user.id,
-				model.label,
-				effort,
 				hasPermission(permissions, PermissionFlags.EmbedLinks),
 			),
 		);
@@ -249,8 +301,125 @@ async function startAgent(
 		userId: user.id,
 		model: model.id,
 		effort,
+		withRepository: repository !== null,
 	});
 	return { content: createdMessage(channelId) };
+}
+
+/**
+ * /agent の repository の欄の候補: 本人がGitHubで許可したリポジトリのうち、入力した文字を含むもの
+ * (大文字と小文字は区別しない)。連携していないときや、時間内に読めなかったときは、候補を出さない
+ */
+export async function agentAutocomplete(
+	interaction: APIApplicationCommandAutocompleteInteraction,
+	env: Env,
+	userId: string,
+): Promise<APIInteractionResponse> {
+	const focused = interaction.data.options.find(
+		(option) => "focused" in option && option.focused === true,
+	);
+	const typed =
+		focused?.type === ApplicationCommandOptionType.String
+			? focused.value.trim().toLowerCase()
+			: "";
+	const names = await Promise.race([
+		listAllowedRepositoryNames(env, userId).catch((error: unknown) => {
+			log("repository_autocomplete_failed", userId, error);
+			return [];
+		}),
+		new Promise<string[]>((resolve) =>
+			setTimeout(() => resolve([]), AUTOCOMPLETE_TIMEOUT_MS),
+		),
+	]);
+	const choices = names
+		.filter(
+			(name) =>
+				name.length <= MAX_CHOICE_LENGTH && name.toLowerCase().includes(typed),
+		)
+		.slice(0, MAX_CHOICES)
+		.map((name) => ({ name, value: name }));
+	return {
+		type: InteractionResponseType.ApplicationCommandAutocompleteResult,
+		data: { choices },
+	};
+}
+
+/** /agent で選んだGitHubのリポジトリ。セッションにつなぐ名前と場所、本人のトークンと、その記録の番号 */
+interface ChosenRepository {
+	fullName: string;
+	mountPath: string;
+	token: string;
+	tokenVersion: number;
+}
+
+/** /agent の repository の欄の値。入れていなければnull */
+function repositoryOption(
+	interaction: APIChatInputApplicationCommandInteraction,
+): string | null {
+	const option = interaction.data.options?.find(
+		(entry) => entry.name === AGENT_REPOSITORY_OPTION_NAME,
+	);
+	if (option?.type !== ApplicationCommandOptionType.String) {
+		return null;
+	}
+	const value = option.value.trim();
+	return value === "" ? null : value;
+}
+
+/**
+ * /agent で入れたリポジトリを、本人が連携で許可したリポジトリの中から探す。
+ * 見つからなければ、本人に見せる返事を返す。トークンは、セッションの最初の作業の間に切れないよう、
+ * 残りの有効期間が足りなければ更新しておく(その後は、作業を始めるたびにBobertが入れ替える)
+ */
+async function chooseRepository(
+	env: Env,
+	userId: string,
+	input: string,
+): Promise<
+	| { status: "found"; repository: ChosenRepository }
+	| { status: "reply"; reply: MessageEdit }
+> {
+	const fullName = repositoryName(input);
+	if (fullName === null) {
+		return { status: "reply", reply: { content: repositoryNotUsable(input) } };
+	}
+	let lookup: RepositoryLookup;
+	try {
+		lookup = await findAllowedRepository(
+			env,
+			userId,
+			fullName,
+			REPOSITORY_TOKEN_VALIDITY_MS,
+		);
+	} catch (error) {
+		log("github_lookup_failed", userId, error);
+		return { status: "reply", reply: { content: GITHUB_LOOKUP_FAILED } };
+	}
+	switch (lookup.status) {
+		case "unlinked":
+			return {
+				status: "reply",
+				reply: {
+					content: GITHUB_NOT_LINKED_FOR_AGENT,
+					components: [githubLinkRow()],
+				},
+			};
+		case "not_allowed":
+			return {
+				status: "reply",
+				reply: { content: repositoryNotUsable(fullName) },
+			};
+		case "found":
+			return {
+				status: "found",
+				repository: {
+					fullName: lookup.repository.fullName,
+					mountPath: repositoryMountPath(lookup.repository.fullName),
+					token: lookup.token.value,
+					tokenVersion: lookup.token.version,
+				},
+			};
+	}
 }
 
 /** 管理者か、その権限を持っているか */
@@ -259,45 +428,6 @@ function hasPermission(permissions: bigint, flag: bigint): boolean {
 		(permissions & PermissionFlags.Administrator) !== 0n ||
 		(permissions & flag) !== 0n
 	);
-}
-
-/** チャンネルの最初のメッセージ。埋め込みリンクの権限がなければ、同じ内容を普通の文で書く */
-export function firstMessage(
-	ownerId: string,
-	modelLabel: string,
-	effort: string,
-	embed: boolean,
-): RESTPostAPIChannelMessageJSONBody {
-	const details = [
-		modelLine(modelLabel),
-		effortLine(effort),
-		"",
-		...FIRST_MESSAGE_NOTES.map((note) => `- ${note}`),
-	].join("\n");
-	const content = firstMessageContent(ownerId);
-	const embeds: APIEmbed[] = [
-		{ title: FIRST_MESSAGE_TITLE, description: details },
-	];
-	return {
-		content: embed
-			? content
-			: `${content}\n\n**${FIRST_MESSAGE_TITLE}**\n${details}`,
-		...(embed ? { embeds } : {}),
-		components: [
-			{
-				type: ComponentType.ActionRow,
-				components: [
-					{
-						type: ComponentType.Button,
-						style: ButtonStyle.Secondary,
-						label: END_BUTTON_LABEL,
-						custom_id: AGENT_END_ID,
-					},
-				],
-			},
-		],
-		allowed_mentions: { users: [ownerId] },
-	};
 }
 
 /** /endagent: エージェントのチャンネルの中で、セッションを終える確認を出す */
@@ -317,16 +447,38 @@ export async function endagentCommand(
 	return endConfirmation(channel);
 }
 
-/** エージェントのボタン。エージェントのボタンでなければnull */
+/**
+ * エージェントのボタン。エージェントのボタンでなければnull。
+ * originは、このWorkerのURL(GitHubとの連携のコールバック先に使う)
+ */
 export async function agentComponent(
 	interaction: APIMessageComponentInteraction,
 	env: Env,
 	ctx: ExecutionContext,
 	userId: string,
+	origin: string,
 ): Promise<APIInteractionResponse | null> {
 	const customId = interaction.data.custom_id;
 	if (!customId.startsWith("agent:")) {
 		return null;
+	}
+	// 「GitHubと連携」は、押した人が自分のGitHubと連携するボタン。/agent の返事(エージェントのチャンネルの外)にも付けるので、
+	// チャンネルを確かめる前に扱う。連携のリンクは10分で使えなくなるので、押したときに作る
+	if (customId === AGENT_GITHUB_ID) {
+		const link = await createGitHubAuthLink(
+			env,
+			origin,
+			userId,
+			interaction.token,
+		);
+		return ephemeral(GITHUB_LINK_PROMPT, [
+			{
+				type: ComponentType.Button,
+				style: ButtonStyle.Link,
+				label: GITHUB_OPEN_BUTTON_LABEL,
+				url: link,
+			},
+		]);
 	}
 	const channelId = interaction.channel?.id ?? interaction.channel_id;
 	const channel =
@@ -387,6 +539,21 @@ export async function agentComponent(
 	if (customId === AGENT_STOP_ID) {
 		ctx.waitUntil(
 			reportFailure(interaction, () => stub.stop(), channel.ownerId),
+		);
+		return { type: InteractionResponseType.DeferredMessageUpdate };
+	}
+	const createPullRequest = customId.startsWith(AGENT_PR_CREATE_PREFIX);
+	if (createPullRequest || customId.startsWith(AGENT_PR_CANCEL_PREFIX)) {
+		const toolUseId = customId.slice(
+			(createPullRequest ? AGENT_PR_CREATE_PREFIX : AGENT_PR_CANCEL_PREFIX)
+				.length,
+		);
+		ctx.waitUntil(
+			reportFailure(
+				interaction,
+				() => stub.answerPullRequest(toolUseId, createPullRequest),
+				channel.ownerId,
+			),
 		);
 		return { type: InteractionResponseType.DeferredMessageUpdate };
 	}
@@ -455,7 +622,7 @@ function endResultText(result: EndResult): string {
 
 function ephemeral(
 	content: string,
-	buttons: APIButtonComponentWithCustomId[] = [],
+	buttons: APIButtonComponent[] = [],
 ): APIInteractionResponse {
 	return {
 		type: InteractionResponseType.ChannelMessageWithSource,

@@ -55,6 +55,8 @@ export const InteractionType = {
 	Ping: 1 as DiscordInteractionType.Ping,
 	ApplicationCommand: 2 as DiscordInteractionType.ApplicationCommand,
 	MessageComponent: 3 as DiscordInteractionType.MessageComponent,
+	ApplicationCommandAutocomplete:
+		4 as DiscordInteractionType.ApplicationCommandAutocomplete,
 	ModalSubmit: 5 as DiscordInteractionType.ModalSubmit,
 } as const;
 
@@ -67,6 +69,8 @@ export const InteractionResponseType = {
 	DeferredMessageUpdate:
 		6 as DiscordInteractionResponseType.DeferredMessageUpdate,
 	UpdateMessage: 7 as DiscordInteractionResponseType.UpdateMessage,
+	ApplicationCommandAutocompleteResult:
+		8 as DiscordInteractionResponseType.ApplicationCommandAutocompleteResult,
 	Modal: 9 as DiscordInteractionResponseType.Modal,
 } as const;
 
@@ -109,6 +113,7 @@ export const ApplicationCommandType = {
 } as const;
 
 export const ApplicationCommandOptionType = {
+	String: 3 as DiscordApplicationCommandOptionType.String,
 	Attachment: 11 as DiscordApplicationCommandOptionType.Attachment,
 } as const;
 

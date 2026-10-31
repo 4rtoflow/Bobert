@@ -12,6 +12,9 @@ const TEST_SECRETS = {
 	ADMIN_TOKEN: "test-admin-token",
 	ALERT_WEBHOOK_URL: "https://example.com/webhook",
 	CREDENTIAL_ENCRYPTION_KEYS: "1:f/c7FM3v50Onh6WplBC9yO3q8t0dNXYWShjedzOvU5g=",
+	GITHUB_APP_CLIENT_ID: "Iv23test",
+	GITHUB_APP_CLIENT_SECRET: "test-github-client-secret",
+	GITHUB_APP_SLUG: "bobert-test",
 };
 Object.assign(process.env, TEST_SECRETS);
 
