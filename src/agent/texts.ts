@@ -61,33 +61,28 @@ export function startFailed(reason: string): string {
 	return `エージェントのセッションを始められませんでした。${reason}`;
 }
 
-/** チャンネルの最初のメッセージの本文(本人をメンションする) */
+/** チャンネルの最初のメッセージの本文(本人をメンションする。2026-11-01に変更) */
 export function firstMessageContent(ownerId: string): string {
-	return `<@${ownerId}> さん専用の、エージェントのチャンネルです。ここに書いたことは、すべてエージェントに送ります(Bobertへのメンションは要りません)。`;
+	return `<@${ownerId}> Bobert Agentへようこそ`;
 }
 
-/** 最初のメッセージの埋め込みの見出し */
-export const FIRST_MESSAGE_TITLE = "エージェントのセッション";
+/** 最初のメッセージの埋め込みの見出しと説明 */
+export const FIRST_MESSAGE_TITLE = "Bobert Agent";
+export const FIRST_MESSAGE_DESCRIPTION =
+	"このセッションはClaude Managed Agentsを使用しています。";
 
-export function modelLine(label: string): string {
-	return `モデル: ${label}`;
-}
-
-export function effortLine(effort: string): string {
-	return `思考の深さ: ${effort}`;
-}
-
-/** 最初のメッセージの埋め込みに書く、つないだリポジトリの行(つないだときだけ) */
-export function repositoryLine(fullName: string): string {
-	return `リポジトリ: ${fullName}`;
-}
-
-/** 最初のメッセージの埋め込みに書く注意 */
-export const FIRST_MESSAGE_NOTES = [
-	"費用は、あなたのAnthropicのキーにかかります(トークン代と、動いている間の1時間あたり$0.08)。",
-	"会話と作業の記録は、セッションを終えるまで、あなたのAnthropicのアカウントに残ります(Claude Consoleで読めます)。",
-	"ファイルを添付すると、エージェントに渡します(1つ25MBまで)。",
-	"このチャンネルのメッセージは、Bobertには保存しません。あなた以外の人の書き込みは消します。",
+/** 最初のメッセージの埋め込みの項目(名前と値) */
+export const FIRST_MESSAGE_FIELDS = [
+	{ name: "セッションのコスト", value: "$0.08/h" },
+	{
+		name: "ファイル",
+		value: "ファイルを添付して送信することでAgentへ送信されます。",
+	},
+	{
+		name: "使い方",
+		value:
+			"このチャンネルではBobertへのメンションをせず、直接Agentと会話することができます。",
+	},
 ] as const;
 
 /** 添付ファイルが大きすぎて、エージェントに渡さなかった(その発言への返信) */

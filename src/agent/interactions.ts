@@ -280,10 +280,7 @@ async function startAgent(
 			channelId,
 			firstMessage(
 				user.id,
-				model.label,
-				effort,
 				hasPermission(permissions, PermissionFlags.EmbedLinks),
-				repository?.fullName ?? null,
 			),
 		);
 		await setFirstMessage(db, channelId, first.id);

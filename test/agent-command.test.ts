@@ -361,13 +361,28 @@ describe("/agent", () => {
 				call.url.pathname === `/api/v10/channels/${channelId}/messages`,
 		)?.body as {
 			content: string;
-			embeds: { title: string; description: string }[];
+			embeds: unknown[];
 			components: { components: { custom_id: string }[] }[];
 		};
-		expect(first.content).toContain(`<@${user.id}> さん専用の`);
-		expect(first.embeds[0]?.description).toContain(
-			"モデル: Claude Haiku 5.5\n思考の深さ: low\n\n- 費用は",
-		);
+		expect(first.content).toBe(`<@${user.id}> Bobert Agentへようこそ`);
+		expect(first.embeds).toEqual([
+			{
+				title: "Bobert Agent",
+				description: "このセッションはClaude Managed Agentsを使用しています。",
+				fields: [
+					{ name: "セッションのコスト", value: "$0.08/h" },
+					{
+						name: "ファイル",
+						value: "ファイルを添付して送信することでAgentへ送信されます。",
+					},
+					{
+						name: "使い方",
+						value:
+							"このチャンネルではBobertへのメンションをせず、直接Agentと会話することができます。",
+					},
+				],
+			},
+		]);
 		expect(
 			first.components[0]?.components.map((button) => button.custom_id),
 		).toEqual(["agent:end"]);
@@ -444,12 +459,20 @@ describe("/agent", () => {
 				/\/channels\/\d+\/messages$/.test(call.url.pathname),
 		)?.body as { content: string; embeds?: unknown };
 		expect(first.embeds).toBeUndefined();
-		expect(first.content).toContain(
-			"**エージェントのセッション**\nモデル: Claude Haiku 5.5",
+		expect(first.content).toBe(
+			[
+				`<@${user.id}> Bobert Agentへようこそ`,
+				"",
+				"**Bobert Agent**",
+				"このセッションはClaude Managed Agentsを使用しています。",
+				"**セッションのコスト**: $0.08/h",
+				"**ファイル**: ファイルを添付して送信することでAgentへ送信されます。",
+				"**使い方**: このチャンネルではBobertへのメンションをせず、直接Agentと会話することができます。",
+			].join("\n"),
 		);
 	});
 
-	it("repository の欄でリポジトリを選ぶと、セッションを作るときにつなぎ、PRを作る道具を渡し、最初のメッセージにリポジトリの行を書く", async () => {
+	it("repository の欄でリポジトリを選ぶと、セッションを作るときにつなぎ、PRを作る道具を渡す", async () => {
 		const user = await newUser("anthropic");
 		await linkGitHub(user.id);
 		const calls = mockAgentApis((call) => {
@@ -499,20 +522,6 @@ describe("/agent", () => {
 		expect(agent.system).toContain(
 			"- このセッションでは、GitHubのリポジトリ octocat/hello を /workspace/hello に取り込んであります。",
 		);
-		const first = calls.find(
-			(call) =>
-				call.method === "POST" &&
-				/\/channels\/\d+\/messages$/.test(call.url.pathname),
-		)?.body as {
-			embeds: { description: string }[];
-			components: { components: { custom_id: string }[] }[];
-		};
-		expect(first.embeds[0]?.description).toContain(
-			"モデル: Claude Haiku 5.5\n思考の深さ: low\nリポジトリ: octocat/hello\n\n- 費用は",
-		);
-		expect(
-			first.components[0]?.components.map((button) => button.custom_id),
-		).toEqual(["agent:end"]);
 	});
 
 	it("GitHubと連携していない人がリポジトリを入れたら、連携のボタンを付けて案内し、セッションもチャンネルも作らない", async () => {
