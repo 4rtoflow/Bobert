@@ -1,3 +1,4 @@
+import { agentChannelIdsOfGuild } from "../agent/store";
 import {
 	type ChannelInfo,
 	type GuildRoles,
@@ -200,6 +201,7 @@ export async function saveChannels(
 
 /**
  * サーバーのチャンネルとスレッドが共有チャンネルかどうかを、ロールの権限から決め直す。共有しないもののIDを返す。
+ * エージェントのチャンネルと、その中のスレッドは、権限に関係なく共有しない。
  * Botのロールなどがまだ分からなければ、何もせずにnullを返す(分かるまで、新しく記録したものは共有しないまま)
  */
 export async function recomputeVisibility(
@@ -212,13 +214,17 @@ export async function recomputeVisibility(
 		return null;
 	}
 	const records = await guildChannels(db, guildId);
+	const agentChannelIds = await agentChannelIdsOfGuild(db, guildId);
 	const byId = new Map(records.map((record) => [record.channelId, record]));
 	const restricted: string[] = [];
 	const updates: D1PreparedStatement[] = [];
 	for (const record of records) {
 		const parent =
 			record.parentId === null ? undefined : byId.get(record.parentId);
-		const shared = isSharedChannel(record, parent, guild, botUserId);
+		const shared =
+			!agentChannelIds.has(record.channelId) &&
+			(record.parentId === null || !agentChannelIds.has(record.parentId)) &&
+			isSharedChannel(record, parent, guild, botUserId);
 		if (!shared) {
 			restricted.push(record.channelId);
 		}
@@ -276,6 +282,7 @@ export async function sharedChannelsOf(
 	const { results } = await db
 		.prepare(
 			`SELECT * FROM channels WHERE guild_id = ? AND shared = 1 AND parent_id IS NULL
+				AND channel_id NOT IN (SELECT channel_id FROM agent_channels)
 			ORDER BY name, channel_id`,
 		)
 		.bind(guildId)
@@ -296,6 +303,8 @@ export async function findSharedChannelsByName(
 		.prepare(
 			`SELECT * FROM channels
 			WHERE guild_id = ? AND shared = 1 AND name = ? COLLATE NOCASE
+				AND channel_id NOT IN (SELECT channel_id FROM agent_channels)
+				AND (parent_id IS NULL OR parent_id NOT IN (SELECT channel_id FROM agent_channels))
 			ORDER BY parent_id IS NOT NULL, length(channel_id), channel_id`,
 		)
 		.bind(guildId, name)
