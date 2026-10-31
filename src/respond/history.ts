@@ -1,6 +1,7 @@
 import type { APIMessage } from "discord-api-types/v10";
 import { shouldStore, toStoredMessage } from "../gateway/messages";
 import type { StoredMessageInput, UserName } from "../queue/messages";
+import { loadChannels } from "../store/channels";
 import { findExplainTarget } from "../store/explain";
 import { getChannelImport } from "../store/imports";
 import {
@@ -334,4 +335,31 @@ export async function readChannelTimeline(
 function snowflakeAt(ms: number): string {
 	const time = BigInt(Math.max(0, Math.floor(ms))) - DISCORD_EPOCH;
 	return (time > 0n ? time << 22n : 0n).toString();
+}
+
+/** メッセージやチャンネルのIDから、作られた時刻(UNIX時間のミリ秒)。IDの上位のビットは、作られた時刻 */
+export function snowflakeTime(id: string): number {
+	return Number((BigInt(id) >> 22n) + DISCORD_EPOCH);
+}
+
+/**
+ * スレッドが作られたメッセージと、そのスレッドの名前(メッセージIDごと)。
+ * メッセージから作ったスレッドは、IDがメッセージと同じで、親がメッセージのチャンネル
+ */
+export async function threadNamesFor(
+	messages: readonly StoredMessageInput[],
+	deps: HistoryDeps,
+): Promise<Map<string, string>> {
+	const threads = await loadChannels(
+		deps.db,
+		messages.map((message) => message.messageId),
+	);
+	const names = new Map<string, string>();
+	for (const message of messages) {
+		const thread = threads.get(message.messageId);
+		if (thread !== undefined && thread.parentId === message.channelId) {
+			names.set(message.messageId, thread.name);
+		}
+	}
+	return names;
 }

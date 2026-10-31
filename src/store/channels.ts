@@ -283,6 +283,32 @@ export async function sharedChannelsOf(
 	return results.map(fromRow);
 }
 
+/** 共有チャンネルのスレッドと、その中の、保存したメッセージのうち最後の発言の時刻 */
+export interface ThreadActivity {
+	thread: ChannelRecord;
+	/** 最後の発言の時刻(UNIX時間のミリ秒)。保存したメッセージがなければnull */
+	lastMessageAt: number | null;
+}
+
+/** サーバーの共有チャンネルの、スレッド(フォーラムの投稿を含む)と、最後の発言の時刻 */
+export async function sharedThreadsOf(
+	db: D1Database,
+	guildId: string,
+): Promise<ThreadActivity[]> {
+	const { results } = await db
+		.prepare(
+			`SELECT c.*, (SELECT MAX(m.created_at) FROM messages m WHERE m.channel_id = c.channel_id) AS last_message_at
+			FROM channels c
+			WHERE c.guild_id = ? AND c.shared = 1 AND c.parent_id IS NOT NULL`,
+		)
+		.bind(guildId)
+		.all<ChannelRow & { last_message_at: number | null }>();
+	return results.map((row) => ({
+		thread: fromRow(row),
+		lastMessageAt: row.last_message_at,
+	}));
+}
+
 /**
  * 名前から、サーバーの共有チャンネル(スレッドを含む)を探す。大文字と小文字は区別しない。
  * スレッドでないチャンネルを先に、古い(IDが小さい)ものから並べる
