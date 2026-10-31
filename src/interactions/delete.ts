@@ -8,16 +8,18 @@ import {
 	getAgentResources,
 } from "../agent/store";
 import { agentSessionStub, gatewayStub } from "../agent/stubs";
-import { DELETE_AGENTS_NOTE } from "../agent/texts";
+import { DELETE_AGENTS_NOTE, DELETE_GITHUB_NOTE } from "../agent/texts";
 import {
 	ButtonStyle,
 	ComponentType,
 	InteractionResponseType,
 	MessageFlags,
 } from "../discord/constants";
+import { revokeGitHubAuthorization } from "../github/account";
 import type { AnthropicCredential } from "../llm/anthropic";
 import { logEvent } from "../log";
 import { isDonating } from "../store/donations";
+import { hasGitHubLink, loadGitHubLink } from "../store/github";
 import { deleteUserData, loadCredential } from "../store/users";
 
 /** /delete の確認のボタンのID */
@@ -25,7 +27,8 @@ export const DELETE_CONFIRM_ID = "delete:confirm";
 
 /**
  * /delete: 消してよいか、本人にだけ確かめる。寄付している人には、寄付も使われなくなることを書く。
- * エージェントのチャンネルがある人には、チャンネルとセッションも消すことを書く
+ * エージェントのチャンネルがある人には、チャンネルとセッションも消すことを、
+ * GitHubと連携している人には、連携も外すことを書く
  */
 export async function deleteCommand(
 	env: Env,
@@ -38,11 +41,14 @@ export async function deleteCommand(
 		(await agentChannelsOf(env.DB, userId)).length > 0
 			? DELETE_AGENTS_NOTE
 			: "";
+	const github = (await hasGitHubLink(env.DB, userId))
+		? DELETE_GITHUB_NOTE
+		: "";
 	return {
 		type: InteractionResponseType.ChannelMessageWithSource,
 		data: {
 			flags: MessageFlags.Ephemeral,
-			content: `登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${donation}${agents}よろしいですか?`,
+			content: `登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${donation}${agents}${github}よろしいですか?`,
 			components: [
 				{
 					type: ComponentType.ActionRow,
@@ -62,7 +68,8 @@ export async function deleteCommand(
 
 /**
  * 確認のボタン: キーと設定を消す(仕様: docs/spec/llm-cost.md「資格情報の登録・保存・削除」)。
- * エージェントのセッションは、本人のキーでないと消せないので、キーを読んでおき、記録を消してから、裏でセッションとチャンネルを消す
+ * エージェントのセッションは、本人のキーでないと消せないので、キーを読んでおき、記録を消してから、裏でセッションとチャンネルを消す。
+ * GitHubとの連携も同じく、トークンを読んでおき、記録を消してから、裏でGitHubの側の承認を取り消す
  */
 export async function confirmDelete(
 	env: Env,
@@ -75,11 +82,15 @@ export async function confirmDelete(
 	const credential = hasAgents
 		? await loadCredential(env, userId, "anthropic")
 		: null;
+	const github = await loadGitHubLink(env, userId);
 	await deleteAgentRecordsOf(env.DB, userId);
 	await deleteUserData(env.DB, userId);
 	logEvent("interactions", "user_data_deleted", { userId });
 	if (hasAgents) {
 		ctx.waitUntil(removeAgents(env, userId, channels, resources, credential));
+	}
+	if (github !== null) {
+		ctx.waitUntil(revokeGitHubAuthorization(env, userId, github));
 	}
 	return {
 		type: InteractionResponseType.UpdateMessage,

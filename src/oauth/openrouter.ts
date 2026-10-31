@@ -6,6 +6,7 @@ import { exchangeOpenRouterCode } from "../llm/openrouter";
 import { logEvent } from "../log";
 import { saveOAuthState, takeOAuthState } from "../store/oauth";
 import { saveCredential } from "../store/users";
+import { resultPage as page } from "./page";
 
 /** OpenRouterとの連携(OAuth PKCE)のコールバックのパス */
 export const OPENROUTER_CALLBACK_PATH = "/oauth/openrouter/callback";
@@ -122,31 +123,4 @@ async function notifyLinked(
 			error: error instanceof Error ? error.message : "unknown",
 		});
 	}
-}
-
-/** 結果を知らせる簡単なページ。文言は固定の文字列だけを入れる */
-function page(status: number, title: string, message: string): Response {
-	const html = `<!doctype html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title} - Bobert</title>
-<style>body{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.7}</style>
-</head>
-<body>
-<h1>${title}</h1>
-<p>${message}</p>
-</body>
-</html>
-`;
-	return new Response(html, {
-		status,
-		headers: {
-			"Content-Type": "text/html; charset=utf-8",
-			"Cache-Control": "no-store",
-			// URLにcodeが含まれるので、ほかのサイトに渡さない
-			"Referrer-Policy": "no-referrer",
-		},
-	});
 }

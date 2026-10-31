@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { insertAgentChannel } from "../src/agent/store";
 import { agentSessionStub } from "../src/agent/stubs";
 import { othersNotice } from "../src/agent/texts";
+import { saveGitHubLink } from "../src/store/github";
 import { BOT, discordMessage } from "./fixtures";
 import { type FetchCall, mockFetch, userFactory } from "./helpers";
 
@@ -62,7 +63,12 @@ function mockApis(stream: Record<string, unknown>[]) {
 	});
 }
 
-async function startedChannel(channelId: string, ownerId: string) {
+/** エージェントのチャンネルを記録し、Durable Objectを始める。withRepositoryなら、/agent で octocat/hello を選んで始めたことにする */
+async function startedChannel(
+	channelId: string,
+	ownerId: string,
+	withRepository = false,
+) {
 	await insertAgentChannel(env.DB, {
 		channelId,
 		guildId: GUILD_ID,
@@ -78,6 +84,18 @@ async function startedChannel(channelId: string, ownerId: string) {
 		ownerId,
 		sessionId: "sesn_1",
 		model: MODEL,
+		...(withRepository
+			? {
+					repositories: [
+						{
+							fullName: "octocat/hello",
+							resourceId: "sesrsc_1",
+							mountPath: "/workspace/hello",
+						},
+					],
+					repositoryTokenVersion: 1,
+				}
+			: {}),
 	});
 	return stub;
 }
@@ -240,6 +258,159 @@ describe("エージェントのチャンネルのDurable Object", () => {
 					],
 				},
 			],
+		});
+	});
+
+	it("PRの確認で「作る」を押すと、本人のトークンでPRを作り、結果をエージェントに返して、作業を続ける", async () => {
+		const owner = await newUser("anthropic");
+		const channelId = "62104";
+		const stub = await startedChannel(channelId, owner.id, true);
+		await saveGitHubLink(env, owner.id, {
+			accessToken: "ghu_owner",
+			refreshToken: null,
+			expiresAt: null,
+			refreshExpiresAt: null,
+		});
+		// 1回目の流れでPRの確認を求めて止まり、答えた後の流れで作業を終える(イベントは、処理の時刻の順に作る)
+		const running = event({ type: "session.status_running" });
+		const toolUse = event({
+			type: "agent.custom_tool_use",
+			name: "create_pull_request",
+			input: { repository: "octocat/hello", head: "fix", title: "直す" },
+		});
+		const streams = [
+			[
+				running,
+				toolUse,
+				event({
+					type: "session.status_idle",
+					stop_reason: { type: "requires_action", event_ids: [toolUse.id] },
+					stop_details: null,
+				}),
+			],
+			[
+				event({ type: "session.status_running" }),
+				event({
+					type: "agent.message",
+					content: [{ type: "text", text: "PRを作りました。" }],
+				}),
+				event({
+					type: "session.status_idle",
+					stop_reason: { type: "end_turn" },
+					stop_details: null,
+				}),
+			],
+		];
+		let messageId = 0;
+		const calls = mockFetch((call: FetchCall) => {
+			const path = call.url.pathname;
+			if (call.url.hostname === "api.github.com") {
+				if (path === "/user/installations") {
+					return Response.json({
+						installations: [{ id: 5, account: { login: "octocat" } }],
+					});
+				}
+				if (path === "/user/installations/5/repositories") {
+					return Response.json({
+						repositories: [
+							{ full_name: "octocat/hello", default_branch: "main" },
+						],
+					});
+				}
+				if (path === "/repos/octocat/hello/git/ref/heads/fix") {
+					return Response.json({ ref: "refs/heads/fix" });
+				}
+				if (path === "/repos/octocat/hello/pulls") {
+					return Response.json(
+						{ html_url: "https://github.com/octocat/hello/pull/9" },
+						{ status: 201 },
+					);
+				}
+			}
+			if (call.url.hostname === "api.anthropic.com") {
+				if (path === "/v1/sessions/sesn_1/events/stream") {
+					return sse(streams.shift() ?? []);
+				}
+				if (path === "/v1/sessions/sesn_1/events" && call.method === "GET") {
+					return Response.json({ data: [], next_page: null });
+				}
+				if (path === "/v1/sessions/sesn_1/events" && call.method === "POST") {
+					return Response.json({ data: [] });
+				}
+				return Response.json({ id: "sesn_1", type: "session", status: "idle" });
+			}
+			if (call.method === "POST" && path.endsWith("/messages")) {
+				messageId++;
+				return Response.json(discordMessage(`m${messageId}`, BOT, ""));
+			}
+			if (call.method === "PATCH") {
+				return Response.json(discordMessage("m", BOT, ""));
+			}
+			return new Response(null, { status: 204 });
+		});
+
+		await stub.receive({
+			id: "1",
+			authorId: owner.id,
+			fromBot: false,
+			content: "PRを作って",
+			mentions: [],
+			attachments: [],
+		});
+		await vi.waitFor(() => {
+			expect(posted(calls, channelId).map((body) => body.content)).toContain(
+				"エージェントが、PRを作ろうとしています。\nリポジトリ: octocat/hello\nブランチ: fix → main\nタイトル: 直す",
+			);
+		});
+
+		expect(await stub.answerPullRequest(String(toolUse.id), true)).toBe("ok");
+
+		const pull = calls.find(
+			(call) => call.url.pathname === "/repos/octocat/hello/pulls",
+		);
+		expect(pull?.headers.get("Authorization")).toBe("Bearer ghu_owner");
+		expect(pull?.body).toEqual({
+			title: "直す",
+			head: "fix",
+			base: "main",
+			body: "",
+		});
+		expect(
+			calls
+				.filter(
+					(call) =>
+						call.method === "POST" &&
+						call.url.pathname === "/v1/sessions/sesn_1/events",
+				)
+				.map((call) => call.body),
+		).toContainEqual({
+			events: [
+				{
+					type: "user.custom_tool_result",
+					custom_tool_use_id: toolUse.id,
+					content: [
+						{
+							type: "text",
+							text: "PRを作りました: https://github.com/octocat/hello/pull/9",
+						},
+					],
+					is_error: false,
+				},
+			],
+		});
+		expect(
+			calls.some(
+				(call) =>
+					call.method === "PATCH" &&
+					(call.body as { content?: string }).content ===
+						"PRを作りました: <https://github.com/octocat/hello/pull/9>",
+			),
+		).toBe(true);
+		// 答えた後は、また流れを受けて、エージェントの返事を書き込む
+		await vi.waitFor(() => {
+			expect(posted(calls, channelId).map((body) => body.content)).toContain(
+				"PRを作りました。",
+			);
 		});
 	});
 

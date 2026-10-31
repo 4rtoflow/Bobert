@@ -44,6 +44,24 @@
 - **リポジトリ:** [4rtoflow/Bobert](https://github.com/4rtoflow/Bobert)。作成済みで、まだ空。
 - **Actionsのシークレット:** CloudflareのAPIトークンと、アカウントID。
 
+### GitHub App(エージェントのGitHubとの連携)
+
+エージェント(`/agent`)が、利用者のGitHubのリポジトリを使うための、Bobert用のGitHub App。運営者が1つ登録する(2026-11-01に`bobert-agent-app`を登録し、4rtoflowの組織に移した)。仕組みは[アーキテクチャ](spec/architecture.md)「エージェント(Bobert Agent)」の「GitHub」を参照。
+1. 組織の設定の「Developer settings」→「GitHub Apps」→「New GitHub App」で、登録の画面を開く(個人のアカウントでもよい)。
+2. 次のとおりに埋める。
+   - **GitHub App name:** GitHub全体で重ならない名前。利用者が連携するときの画面に出る
+   - **Homepage URL:** `https://github.com/4rtoflow/Bobert`
+   - **Redirect URI:** `https://bobert.4rna-y.workers.dev/oauth/github/callback`。ワイルドカード(wildcard matching)はOFF。2026-08-03から、この欄の名前は「Callback URL」ではなくなっている。開発用の環境でも使うなら、開発用のWorkerのURLの同じパスも足す(10個まで登録できる)
+   - **Expire user authorization tokens:** ON(トークンが8時間で切れ、Bobertが更新する)
+   - **Request user authorization (OAuth) during installation:** ON(リポジトリを選んだ後、そのまま連携まで進む)。「Setup URL」は空のまま
+   - **Enable Device Flow:** OFF
+   - **Redirect on update:** OFF(Setup URLが空なので効かない)
+   - **Webhook**の**Active:** OFF
+   - **Repository permissions:** Contents(Read and write)と、Pull requests(Read and write)。Metadata(Read-only)は自動で付く。将来、エージェントからIssueやActionsなども扱うために([issue #76](https://github.com/4rtoflow/Bobert/issues/76))、Actions、Issues、Pages、Repository projects、Workflowsも先に読み書きにしてある。後から権限を足すと、アプリを入れた人がそれぞれ承認し直す必要があるため。Workflowsがあると、エージェントは`.github/workflows`の中のファイルを変えたコミットもpushできる
+   - **Where can this GitHub App be installed?:** Any account(利用者がそれぞれ、自分のGitHubで連携するため)
+3. 作った後の画面で「Client ID」を控え、「Generate a new client secret」でシークレットを作って控える(その画面でしか見られない)。アプリの公開ページのURL(`https://github.com/apps/〇〇`)の「〇〇」が、アプリのURL上の名前。App IDと秘密鍵(Private key)は使わない。
+4. 3つの値を、本番のシークレット(`.env.production`)に書く: `GITHUB_APP_CLIENT_ID`、`GITHUB_APP_CLIENT_SECRET`、`GITHUB_APP_SLUG`。デプロイのときに、`--secrets-file .env.production`で入れる(README「Cloudflareのリソースを作る」)。
+
 ### LLM(テスト用)
 
 - **Anthropic:** 開発者自身のClaude ConsoleのAPIキー。テストに使う分の費用は開発者が払う。利用者は各自のキーを使う。

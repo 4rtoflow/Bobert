@@ -10,21 +10,28 @@ import {
 	type IncomingMessage,
 	initialState,
 	ownerText,
+	pullRequestConfirmation,
 	type RelayDeps,
+	type RelayGitHub,
+	repositoryName,
 	SessionRelay,
 	type SessionState,
 	safeFileName,
 	toolOperation,
+	withDefaults,
 } from "../src/agent/relay";
 import {
 	APPROVAL_INTRO,
 	attachmentTooLarge,
+	GITHUB_NOT_LINKED,
 	HELD_NOTICE,
 	KEY_CANNOT_OPERATE,
 	NO_ATTACH_FILES,
 	OUTPUT_FILES_LINE,
 	othersNotice,
 	outputTooLarge,
+	PR_CREATE_FAILED,
+	PR_NOT_CREATED,
 	STOPPED_LINE,
 } from "../src/agent/texts";
 import { DiscordApiError, type MessageFile } from "../src/discord/api";
@@ -82,6 +89,17 @@ function fakeClient(send = vi.fn(async () => ({}))) {
 	};
 }
 
+/** 本人のGitHubの偽物。既定は、連携していない */
+function fakeGitHub(overrides: Partial<RelayGitHub> = {}): RelayGitHub {
+	return {
+		findRepository: async () => ({ status: "unlinked" }),
+		hasBranch: async () => true,
+		createPullRequest: async () => ({ status: "unlinked" }),
+		accessToken: async () => null,
+		...overrides,
+	};
+}
+
 function relayOf(
 	state: SessionState,
 	discord: ReturnType<typeof fakeDiscord>["discord"],
@@ -96,6 +114,7 @@ function relayOf(
 		fetchAttachment: async () => new Uint8Array([1, 2, 3]),
 		uploadLimit: async () => 10 * 1024 * 1024,
 		readSkill: async () => null,
+		github: fakeGitHub(),
 		sleep: async () => {},
 		now: () => 1_000,
 		...overrides,
@@ -851,6 +870,531 @@ describe("スキル", () => {
 					is_error: true,
 				}),
 			],
+		});
+	});
+});
+
+/** GitHubのリポジトリを扱う、Anthropicのクライアントの偽物 */
+function fakeRepositoryClient() {
+	const send = vi.fn(async () => ({}));
+	const add = vi.fn(async () => ({
+		id: "sesrsc_1",
+		type: "github_repository",
+		mount_path: "/workspace/hello",
+	}));
+	const update = vi.fn(async () => ({}));
+	const client = {
+		beta: { sessions: { events: { send }, resources: { add, update } } },
+	} as unknown as Anthropic;
+	return { client, send, add, update };
+}
+
+/** 本人が許可したリポジトリ */
+const HELLO = { fullName: "octocat/hello", defaultBranch: "main" };
+const TOKEN = { value: "ghu_token", expiresAt: null, version: 1 };
+
+function githubTool(name: string, input: Record<string, unknown>): AgentEvent {
+	return event({ type: "agent.custom_tool_use", name, input });
+}
+
+/** セッションに返した、Bobertが受け持つ道具の結果 */
+function toolResults(send: ReturnType<typeof vi.fn>) {
+	return send.mock.calls.flatMap((call) =>
+		(
+			call[1] as {
+				events: {
+					type: string;
+					content?: { text: string }[];
+					is_error?: boolean;
+				}[];
+			}
+		).events.filter((sent) => sent.type === "user.custom_tool_result"),
+	);
+}
+
+/** 本人が許可したリポジトリを、いつも見つけるGitHubの偽物 */
+function foundGitHub(overrides: Partial<RelayGitHub> = {}): RelayGitHub {
+	return fakeGitHub({
+		findRepository: async () => ({
+			status: "found",
+			repository: HELLO,
+			token: TOKEN,
+		}),
+		...overrides,
+	});
+}
+
+/** /agent で octocat/hello を選んで始めたセッションの状態 */
+function connectedState(): SessionState {
+	return initialState({
+		channelId: "7001",
+		guildId: "900",
+		ownerId: "61001",
+		sessionId: "sesn_1",
+		model: MODEL,
+		repositories: [
+			{
+				fullName: "octocat/hello",
+				resourceId: "sesrsc_1",
+				mountPath: "/workspace/hello",
+			},
+		],
+		repositoryTokenVersion: 1,
+	});
+}
+
+describe("GitHub", () => {
+	it("/agent で選んだリポジトリを、つないだものとして状態に入れて始める", () => {
+		const state = connectedState();
+
+		expect(state.repositories).toEqual([
+			{
+				fullName: "octocat/hello",
+				resourceId: "sesrsc_1",
+				mountPath: "/workspace/hello",
+			},
+		]);
+		expect(state.repositoryTokenVersion).toBe(1);
+		// リポジトリを選ばなければ、何もつないでいない
+		expect(newState().repositories).toEqual([]);
+		expect(newState().repositoryTokenVersion).toBeNull();
+	});
+
+	it("create_pull_requestで、このセッションに取り込んでいないリポジトリには、PRを作らない", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const findRepository = vi.fn(async () => ({
+			status: "found" as const,
+			repository: HELLO,
+			token: TOKEN,
+		}));
+		const { relay } = relayOf(state, discord, client, {
+			github: fakeGitHub({ findRepository }),
+		});
+
+		await relay.handle(
+			githubTool("create_pull_request", {
+				repository: "octocat/other",
+				head: "fix",
+				title: "直す",
+			}),
+		);
+
+		expect(findRepository).not.toHaveBeenCalled();
+		expect(posts).toEqual([]);
+		expect(toolResults(send)).toEqual([
+			expect.objectContaining({
+				content: [
+					{
+						type: "text",
+						text: "このセッションでPRを作れるのは、取り込んだリポジトリ(octocat/hello)だけです。",
+					},
+				],
+				is_error: true,
+			}),
+		]);
+	});
+
+	it("連携していなければ(GitHubで外されていたら)、連携のボタンを付けて知らせ、PRを作らない", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client);
+
+		await relay.handle(
+			githubTool("create_pull_request", {
+				repository: "octocat/hello",
+				head: "fix",
+				title: "直す",
+			}),
+		);
+
+		expect(posts.at(-1)).toEqual({
+			content: GITHUB_NOT_LINKED,
+			components: [
+				{
+					type: 1,
+					components: [
+						{
+							type: 2,
+							style: 1,
+							label: "GitHubと連携",
+							custom_id: "agent:github",
+						},
+					],
+				},
+			],
+			allowed_mentions: { parse: [] },
+		});
+		expect(toolResults(send)[0]?.is_error).toBe(true);
+	});
+
+	it("create_pull_requestで、PRの中身を見せて本人に確認を求め、答えるまでセッションには返さない", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub(),
+		});
+		const call = githubTool("create_pull_request", {
+			repository: "octocat/hello",
+			head: "fix/login-error",
+			title: "ログインのエラーを直す",
+			body: "原因は、トークンの期限切れでした。\n期限が近ければ更新します。",
+		});
+		const id = (call as { id: string }).id;
+
+		await relay.handle(call);
+		const decision = await relay.handle(idle("requires_action", [id]));
+
+		expect(posts[0]).toEqual({
+			content: [
+				"エージェントが、PRを作ろうとしています。",
+				"リポジトリ: octocat/hello",
+				"ブランチ: fix/login-error → main",
+				"タイトル: ログインのエラーを直す",
+				"> 原因は、トークンの期限切れでした。",
+				"> 期限が近ければ更新します。",
+			].join("\n"),
+			components: [
+				{
+					type: 1,
+					components: [
+						expect.objectContaining({
+							label: "作る",
+							custom_id: `agent:pr_create:${id}`,
+						}),
+						expect.objectContaining({
+							label: "作らない",
+							custom_id: `agent:pr_cancel:${id}`,
+						}),
+					],
+				},
+			],
+			allowed_mentions: { parse: [] },
+		});
+		expect(toolResults(send)).toEqual([]);
+		// 確認を待っている間は止まっているので、流れを閉じる
+		expect(decision).toBe("close");
+
+		// 確認を待つ間の本人の発言は、預かる
+		expect(await relay.receiveOwner(ownerMessage("ついでにREADMEも"))).toBe(
+			false,
+		);
+		expect(posts.at(-1)?.content).toBe(HELD_NOTICE);
+	});
+
+	it("「作る」で、本人のトークンでPRを作り、結果をエージェントに返して、確認を書き換え、預かった発言を送る", async () => {
+		const state = connectedState();
+		const { discord, edits, removed } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const createPullRequest = vi.fn(async () => ({
+			status: "created" as const,
+			url: "https://github.com/octocat/hello/pull/7",
+		}));
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ createPullRequest }),
+		});
+		const call = githubTool("create_pull_request", {
+			repository: "octocat/hello",
+			head: "fix",
+			base: "develop",
+			title: "直す",
+		});
+		await relay.handle(call);
+		state.held.push({ noticeId: "m9", message: ownerMessage("次はテスト") });
+		const id = (call as { id: string }).id;
+
+		const answered = await relay.answerPullRequest(id, true);
+
+		expect(answered).toEqual({ result: "ok", stream: true });
+		expect(createPullRequest).toHaveBeenCalledWith({
+			repository: "octocat/hello",
+			head: "fix",
+			base: "develop",
+			title: "直す",
+			body: "",
+		});
+		expect(toolResults(send)).toEqual([
+			{
+				type: "user.custom_tool_result",
+				custom_tool_use_id: id,
+				content: [
+					{
+						type: "text",
+						text: "PRを作りました: https://github.com/octocat/hello/pull/7",
+					},
+				],
+				is_error: false,
+			},
+		]);
+		expect(edits.at(-1)).toEqual({
+			id: "m1",
+			body: {
+				content: "PRを作りました: <https://github.com/octocat/hello/pull/7>",
+				components: [],
+				allowed_mentions: { parse: [] },
+			},
+		});
+		expect(send).toHaveBeenLastCalledWith("sesn_1", {
+			events: [
+				{
+					type: "user.message",
+					content: [{ type: "text", text: "次はテスト" }],
+				},
+			],
+		});
+		expect(removed).toEqual(["m9"]);
+		expect(state.pullRequests).toEqual([]);
+		expect(state.awaitingRun).toBe(true);
+	});
+
+	it("「作らない」で、PRを作らず、作らなかったことをエージェントに返す", async () => {
+		const state = connectedState();
+		const { discord, edits } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const createPullRequest = vi.fn();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ createPullRequest }),
+		});
+		const call = githubTool("create_pull_request", {
+			repository: "octocat/hello",
+			head: "fix",
+			title: "直す",
+		});
+		await relay.handle(call);
+
+		const answered = await relay.answerPullRequest(
+			(call as { id: string }).id,
+			false,
+		);
+
+		expect(answered).toEqual({ result: "ok", stream: true });
+		expect(createPullRequest).not.toHaveBeenCalled();
+		expect(toolResults(send)).toEqual([
+			expect.objectContaining({
+				content: [
+					{ type: "text", text: "利用者が、PRを作らないことを選びました。" },
+				],
+				is_error: true,
+			}),
+		]);
+		expect(edits.at(-1)?.body.content).toBe(PR_NOT_CREATED);
+	});
+
+	it("GitHubに断られたら、理由をエージェントに返し、確認を書き換える", async () => {
+		const state = connectedState();
+		const { discord, edits } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({
+				createPullRequest: async () => ({
+					status: "failed",
+					reason:
+						"Validation Failed: A pull request already exists for octocat:fix.",
+				}),
+			}),
+		});
+		const call = githubTool("create_pull_request", {
+			repository: "octocat/hello",
+			head: "fix",
+			title: "直す",
+		});
+		await relay.handle(call);
+
+		await relay.answerPullRequest((call as { id: string }).id, true);
+
+		expect(toolResults(send)[0]).toMatchObject({
+			content: [
+				{
+					type: "text",
+					text: "GitHubに断られて、PRを作れませんでした: Validation Failed: A pull request already exists for octocat:fix.",
+				},
+			],
+			is_error: true,
+		});
+		expect(edits.at(-1)?.body.content).toBe(PR_CREATE_FAILED);
+	});
+
+	it("結果をエージェントに伝えられなかったら、押し直しても、PRを作り直さない", async () => {
+		const state = connectedState();
+		const { discord } = fakeDiscord();
+		const send = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("network"))
+			.mockResolvedValue({});
+		const client = {
+			beta: { sessions: { events: { send } } },
+		} as unknown as Anthropic;
+		const createPullRequest = vi.fn(async () => ({
+			status: "created" as const,
+			url: "https://github.com/octocat/hello/pull/8",
+		}));
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ createPullRequest }),
+		});
+		const call = githubTool("create_pull_request", {
+			repository: "octocat/hello",
+			head: "fix",
+			title: "直す",
+		});
+		await relay.handle(call);
+		const id = (call as { id: string }).id;
+
+		expect(await relay.answerPullRequest(id, true)).toEqual({
+			result: "failed",
+			stream: false,
+		});
+		// 押し直し(「作らない」を押しても、作ったことを伝える)
+		expect(await relay.answerPullRequest(id, false)).toEqual({
+			result: "ok",
+			stream: true,
+		});
+		expect(createPullRequest).toHaveBeenCalledTimes(1);
+		expect(toolResults(send).at(-1)?.content).toEqual([
+			{
+				type: "text",
+				text: "PRを作りました: https://github.com/octocat/hello/pull/8",
+			},
+		]);
+	});
+
+	it("pushしていないブランチでは、確認を求めずに、先にpushするようエージェントに返す", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ hasBranch: async () => false }),
+		});
+
+		await relay.handle(
+			githubTool("create_pull_request", {
+				repository: "octocat/hello",
+				head: "not-pushed",
+				title: "直す",
+			}),
+		);
+
+		expect(posts).toEqual([]);
+		expect(toolResults(send)[0]).toMatchObject({
+			content: [
+				{
+					type: "text",
+					text: "octocat/hello に、ブランチ「not-pushed」がありません。先にpushしてから、もう一度呼んでください。",
+				},
+			],
+			is_error: true,
+		});
+		expect(state.pullRequests).toEqual([]);
+	});
+
+	it("セッションを終えたら、PRの確認のボタンも外す", async () => {
+		const state = connectedState();
+		const { discord, edits } = fakeDiscord();
+		const { client } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub(),
+		});
+		await relay.handle(
+			githubTool("create_pull_request", {
+				repository: "octocat/hello",
+				head: "fix",
+				title: "直す",
+			}),
+		);
+
+		await relay.closeAfterEnd();
+
+		expect(edits).toContainEqual({ id: "m1", body: { components: [] } });
+		expect(state.pullRequests).toEqual([]);
+	});
+
+	it("保存したトークンが入れ替わっていたら、発言を送る前に、つないだリポジトリのトークンも入れ替える", async () => {
+		const state = newState();
+		state.repositories.push({
+			fullName: "octocat/hello",
+			resourceId: "sesrsc_1",
+			mountPath: "/workspace/hello",
+		});
+		state.repositoryTokenVersion = 1;
+		const { discord } = fakeDiscord();
+		const { client, send, update } = fakeRepositoryClient();
+		const accessToken = vi.fn(async () => ({
+			value: "ghu_new",
+			expiresAt: null,
+			version: 2,
+		}));
+		const { relay } = relayOf(state, discord, client, {
+			github: fakeGitHub({ accessToken }),
+		});
+
+		await relay.receiveOwner(ownerMessage("pushして"));
+
+		expect(accessToken).toHaveBeenCalledWith(3_600_000);
+		expect(update).toHaveBeenCalledWith("sesrsc_1", {
+			session_id: "sesn_1",
+			authorization_token: "ghu_new",
+		});
+		expect(state.repositoryTokenVersion).toBe(2);
+		expect(send).toHaveBeenCalledTimes(1);
+	});
+
+	it("トークンが同じなら、入れ替えない", async () => {
+		const state = newState();
+		state.repositories.push({
+			fullName: "octocat/hello",
+			resourceId: "sesrsc_1",
+			mountPath: "/workspace/hello",
+		});
+		state.repositoryTokenVersion = 1;
+		const { discord } = fakeDiscord();
+		const { client, update } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: fakeGitHub({ accessToken: async () => TOKEN }),
+		});
+
+		await relay.receiveOwner(ownerMessage("続けて"));
+
+		expect(update).not.toHaveBeenCalled();
+	});
+
+	it("リポジトリの名前は、owner/repo と、GitHubのURLの形を受け付ける", () => {
+		expect(repositoryName("octocat/hello")).toBe("octocat/hello");
+		expect(repositoryName(" https://github.com/octocat/hello.git ")).toBe(
+			"octocat/hello",
+		);
+		expect(repositoryName("git@github.com:octocat/hello.git")).toBe(
+			"octocat/hello",
+		);
+		expect(repositoryName("octocat/../etc")).toBeNull();
+		expect(repositoryName("octocat/..")).toBeNull();
+		expect(repositoryName("hello")).toBeNull();
+		expect(repositoryName(42)).toBeNull();
+	});
+
+	it("PRの確認には、説明の先頭500文字までを引用する", () => {
+		const text = pullRequestConfirmation({
+			repository: "octocat/hello",
+			head: "fix",
+			base: "main",
+			title: "直す",
+			body: "あ".repeat(600),
+		});
+		expect(text.split("\n").at(-1)).toBe(`> ${"あ".repeat(500)}…`);
+	});
+
+	it("前の版で保存した状態にも、GitHubの項目を補う", () => {
+		const {
+			repositories: _repositories,
+			repositoryTokenVersion: _version,
+			pullRequests: _pullRequests,
+			...old
+		} = newState();
+		expect(withDefaults(old)).toMatchObject({
+			repositories: [],
+			repositoryTokenVersion: null,
+			pullRequests: [],
 		});
 	});
 });

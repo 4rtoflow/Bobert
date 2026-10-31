@@ -19,7 +19,11 @@
 			"DISCORD_BOT_TOKEN",
 			"ADMIN_TOKEN",
 			"ALERT_WEBHOOK_URL",
-			"CREDENTIAL_ENCRYPTION_KEYS"
+			"CREDENTIAL_ENCRYPTION_KEYS",
+			// エージェントのGitHubとの連携に使う、Bobert用のGitHub App(docs/setup.md「GitHub App」)
+			"GITHUB_APP_CLIENT_ID",
+			"GITHUB_APP_CLIENT_SECRET",
+			"GITHUB_APP_SLUG"
 		]
 	},
 	// Discord Gatewayへの常時接続を持つDurable Objectと、/importの進み具合を見張るDurable Object、
@@ -87,7 +91,10 @@
 					"DISCORD_BOT_TOKEN",
 					"ADMIN_TOKEN",
 					"ALERT_WEBHOOK_URL",
-					"CREDENTIAL_ENCRYPTION_KEYS"
+					"CREDENTIAL_ENCRYPTION_KEYS",
+					"GITHUB_APP_CLIENT_ID",
+					"GITHUB_APP_CLIENT_SECRET",
+					"GITHUB_APP_SLUG"
 				]
 			},
 			"durable_objects": {

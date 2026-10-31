@@ -11,6 +11,11 @@ export const ENDAGENT_COMMAND_NAME = "endagent";
 export const AGENT_COMMAND_DESCRIPTION =
 	"Claudeのエージェントに作業を頼む、自分専用のチャンネルの作成(Anthropicのキーが必要)";
 
+/** /agent の、セッションにつなぐGitHubのリポジトリの欄(省ける。入力すると、本人が許可したリポジトリを候補に出す) */
+export const AGENT_REPOSITORY_OPTION_NAME = "repository";
+export const AGENT_REPOSITORY_OPTION_DESCRIPTION =
+	"このセッションで使うGitHubのリポジトリ。GitHubと連携すると、許可したリポジトリが候補に出る";
+
 /** /endagent の説明 */
 export const ENDAGENT_COMMAND_DESCRIPTION =
 	"エージェントのセッションの終了(エージェントのチャンネルの中で使う)";
@@ -70,6 +75,11 @@ export function modelLine(label: string): string {
 
 export function effortLine(effort: string): string {
 	return `思考の深さ: ${effort}`;
+}
+
+/** 最初のメッセージの埋め込みに書く、つないだリポジトリの行(つないだときだけ) */
+export function repositoryLine(fullName: string): string {
+	return `リポジトリ: ${fullName}`;
 }
 
 /** 最初のメッセージの埋め込みに書く注意 */
@@ -186,6 +196,81 @@ export const COMPACT_UNAVAILABLE =
 /** /delete の確認に足す文(エージェントのチャンネルがある人だけ) */
 export const DELETE_AGENTS_NOTE =
 	"エージェントのチャンネルとセッションも削除します。";
+
+/** /delete の確認に足す文(GitHubと連携している人だけ) */
+export const DELETE_GITHUB_NOTE = "GitHubとの連携も外します。";
+
+/** GitHubと連携するボタン(連携していないのに使おうとしたときの知らせに付ける) */
+export const GITHUB_LINK_BUTTON_LABEL = "GitHubと連携";
+
+/** 「GitHubと連携」を押したとき(本人にだけ見える)。リンクのボタン「GitHubを開く」を付ける */
+export const GITHUB_LINK_PROMPT =
+	"GitHubで、触らせるリポジトリを選んでください(10分間使えます)。";
+export const GITHUB_OPEN_BUTTON_LABEL = "GitHubを開く";
+
+/** 連携できたとき(本人にだけ見える。「GitHubと連携」への返事を書き換える) */
+export const GITHUB_LINKED = "GitHubと連携しました。";
+
+/** 連携していないのに、エージェントがGitHubを使おうとしたとき。ボタン「GitHubと連携」を付ける */
+export const GITHUB_NOT_LINKED = "GitHubと連携していません。";
+
+/** 連携していない人が、/agent でリポジトリを入れたとき(本人にだけ見える)。ボタン「GitHubと連携」を付ける */
+export const GITHUB_NOT_LINKED_FOR_AGENT =
+	"GitHubと連携していません。連携してから、もう一度 `/agent` でリポジトリを選んでください。";
+
+/** /agent で、使えないリポジトリを入れたとき(本人にだけ見える。許可していない、名前の打ち間違いなど) */
+export function repositoryNotUsable(fullName: string): string {
+	return `「${fullName}」は使えません。GitHubで、Bobertに触らせるリポジトリに選んでから、もう一度試してください。`;
+}
+
+/** /agent で、リポジトリを確かめるときに、GitHubとのやり取りでエラーが起きたとき(本人にだけ見える) */
+export const GITHUB_LOOKUP_FAILED =
+	"GitHubとのやり取りでエラーが起きました。少し待ってから、もう一度試してください。";
+
+/** 連携のブラウザのページの見出しと本文 */
+export const GITHUB_PAGE_LINKED_TITLE = "GitHubと連携しました";
+export const GITHUB_PAGE_LINKED =
+	"Discordに戻って、`/agent` でリポジトリを選び、エージェントに作業を頼んでみてください。このページは閉じてかまいません。";
+export const GITHUB_PAGE_FAILED_TITLE = "連携できませんでした";
+export const GITHUB_PAGE_CANCELLED =
+	"連携がキャンセルされたか、リンクが正しくありません。Discordで、もう一度「GitHubと連携」を押してください。";
+export const GITHUB_PAGE_EXPIRED =
+	"リンクの有効期限(10分)が切れたか、すでに使われています。Discordで、もう一度「GitHubと連携」を押してください。";
+export const GITHUB_PAGE_ERROR =
+	"GitHubとのやり取りでエラーが起きました。少し待ってから、Discordで、もう一度「GitHubと連携」を押してください。";
+
+/** PRの確認の1行目 */
+export const PR_CONFIRM_INTRO = "エージェントが、PRを作ろうとしています。";
+
+export function prRepositoryLine(repository: string): string {
+	return `リポジトリ: ${repository}`;
+}
+
+export function prBranchLine(head: string, base: string): string {
+	return `ブランチ: ${head} → ${base}`;
+}
+
+export function prTitleLine(title: string): string {
+	return `タイトル: ${title}`;
+}
+
+export const PR_CREATE_BUTTON_LABEL = "作る";
+export const PR_CANCEL_BUTTON_LABEL = "作らない";
+
+/** PRを作ったとき(確認のボタンを外して書き換える)。URLは<>で囲み、リンクのプレビューを出さない */
+export function prCreated(url: string): string {
+	return `PRを作りました: <${url}>`;
+}
+
+/** 「作らない」を押したとき(確認のボタンを外して書き換える) */
+export const PR_NOT_CREATED = "PRを作りませんでした。";
+
+/**
+ * 「作る」を押したが、GitHubに断られたか、連携が外されていて、PRを作れなかったとき
+ * (確認のボタンを外して書き換える)。理由は、道具の結果としてエージェントに伝える
+ */
+export const PR_CREATE_FAILED =
+	"PRを作れませんでした。理由は、エージェントに伝えました。";
 
 /** セッションを終えられなかった(本人にだけ見える) */
 export const END_FAILED =
