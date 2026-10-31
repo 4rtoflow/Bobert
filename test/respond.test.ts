@@ -324,6 +324,32 @@ describe("メンションと返信への応答", () => {
 		});
 	});
 
+	it("AIが返答に書いた人へのメンションでは、その人に通知する", async () => {
+		const user = { ...ALICE, id: "129" };
+		await saveCredential(env, user.id, "anthropic", {
+			apiKey: "sk-ant-test",
+			workspaceId: null,
+		});
+		const trigger = discordMessage(
+			"5025",
+			user,
+			`<@${BOT.id}> Bobに10時集合って伝えて`,
+			{ mentions: [BOT] },
+		);
+		const calls = mockApis([trigger], () =>
+			anthropicStream("<@222> 明日は10時集合だって! <@&333>"),
+		);
+
+		await handleRespondJob(respondJob(trigger), testEnv);
+
+		// ロール(<@&333>)には通知しない
+		expect(posted(calls)[0]?.allowed_mentions).toEqual({
+			parse: [],
+			users: ["222"],
+			replied_user: true,
+		});
+	});
+
 	it("長い返答は分けて投稿し、2通目からは前の返信につなげる", async () => {
 		const user = { ...ALICE, id: "111" };
 		await saveCredential(env, user.id, "anthropic", {
@@ -675,12 +701,13 @@ describe("メンションと返信への応答", () => {
 		const request = calls.find(
 			(call) => call.url.pathname === "/api/v1/chat/completions",
 		);
-		// Bobertの道具(時系列で読む、意味で検索、チャンネルの一覧、ファイルを読む)の後に、Web検索を置く
+		// Bobertの道具(時系列で読む、意味で検索、チャンネルの一覧、メンバーを探す、ファイルを読む)の後に、Web検索を置く
 		expect(request?.body).toMatchObject({
 			tools: [
 				{ type: "function", function: { name: "read_channel_history" } },
 				{ type: "function", function: { name: "search_channel_messages" } },
 				{ type: "function", function: { name: "list_channels" } },
+				{ type: "function", function: { name: "find_members" } },
 				{ type: "function", function: { name: "read_file" } },
 				{ type: "openrouter:web_search" },
 			],
@@ -788,6 +815,10 @@ describe("メンションと返信への応答", () => {
 			}),
 			expect.objectContaining({
 				type: "function",
+				function: expect.objectContaining({ name: "find_members" }),
+			}),
+			expect.objectContaining({
+				type: "function",
 				function: expect.objectContaining({ name: "read_file" }),
 			}),
 			expect.objectContaining({
@@ -827,6 +858,7 @@ describe("メンションと返信への応答", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"find_members",
 			"read_file",
 		]);
 	});

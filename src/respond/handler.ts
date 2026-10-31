@@ -50,6 +50,12 @@ import {
 	refreshImageUrls,
 } from "./history";
 import {
+	allowedMentions,
+	findMembersTool,
+	memberDirectoryLoader,
+	notifiedUsersByPart,
+} from "./members";
+import {
 	type ResolvedModel,
 	selectedCandidate,
 	usesCustomModel,
@@ -428,6 +434,7 @@ export async function answer(
 		? await webSearchAvailable(env, userId, settings, model)
 		: false;
 	// AIが必要なときに、このチャンネルと、サーバーの共有チャンネルの履歴を読んだり探したりできるようにする。
+	// メンションを書けるよう、メンバーを名前で探せるようにする(仕様: docs/spec/architecture.md「メンバーとメンション」)。
 	// このサーバーにスキルがあれば、その一覧を指示に入れ、本文を読めるようにする(仕様: docs/spec/behavior.md「スキル」)。
 	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
 	// 道具の定義は、毎回同じ並びにする(キャッシュのため)
@@ -442,6 +449,13 @@ export async function answer(
 				channelHistoryTool(history, botUserId, files),
 				searchMessagesTool(history, botUserId, files),
 				channelListTool(history),
+				...(guildId !== null
+					? [
+							findMembersTool(
+								memberDirectoryLoader(env.DISCORD_BOT_TOKEN, env.DB, guildId),
+							),
+						]
+					: []),
 				readFileTool(files, history, fileReads),
 				...(guildId !== null && skills.length > 0
 					? [readSkillTool(env.DB, guildId, skills, skillReads)]
@@ -549,13 +563,14 @@ async function postReply(
 	const posted: string[] = [];
 	let replyTo = trigger.id;
 	const parts = splitMessage(text);
+	const notified = notifiedUsersByPart(parts);
 	for (const [index, content] of parts.entries()) {
 		const last = index === parts.length - 1;
 		const message = await createMessage(token, trigger.channel_id, {
 			content,
 			message_reference: { message_id: replyTo, fail_if_not_exists: false },
-			// 返答に含まれるメンションでは通知しない。話しかけた人にだけ、最初の返信で通知する
-			allowed_mentions: { parse: [], replied_user: index === 0 },
+			// 話しかけた人には、最初の返信で通知する。AIが書いた人へのメンションでも、その人に通知する(上限の人数まで)
+			allowed_mentions: allowedMentions(notified[index] ?? [], index === 0),
 			// 要約を勧める案内は最後のメッセージの末尾にあるので、ボタンもそこに付ける
 			...(offerCompaction && last ? { components: [compactButtonRow()] } : {}),
 		});

@@ -1,6 +1,6 @@
 # 開発環境とアカウントの準備
 
-最終更新: 2026-10-23
+最終更新: 2026-10-31
 
 仕様は[docs/spec/](spec/)を参照。ここでは、開発を始めるために用意するアカウント、サービス、手元の環境をまとめる。
 
@@ -12,7 +12,7 @@
 - **各アプリの設定:**
   - **Bot:** トークンを発行する。Workerのシークレットに入れる。
   - **Public Bot:** OFFにする。開発者だけがサーバーに追加できるようにするため。
-  - **Privileged Gateway Intents:** Message Content IntentをONにする(必須)。
+  - **Privileged Gateway Intents:** Message Content IntentをONにする(必須)。Server Members IntentもONにする。AIがメンバーを名前で探すときに、サーバーの全員の一覧を読むため。OFFでも動くが、そのときは、発言したことのある人とメンションされた人しか探せない。
   - **General Information:** Application IDとPublic Keyを控える。Public KeyはInteractionsの署名の確認に使う。
   - **Interactions Endpoint URL:** WorkerのURLを、デプロイした後に設定する。保存するとDiscordが確認の要求(PING)を送るので、その時点でWorker側が応答できている必要がある。
   - **OAuth2 → URL Generator:** スコープは`bot`と`applications.commands`。権限は「チャンネルを見る」「メッセージを送信」「スレッドでメッセージを送信」「メッセージ履歴を読む」と、エージェント(`/agent`)のための「チャンネルの管理」「メッセージの管理」「埋め込みリンク」「ファイルを添付」。生成した招待URLで、Botをサーバーに追加する。

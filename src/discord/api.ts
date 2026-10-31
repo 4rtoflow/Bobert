@@ -264,6 +264,27 @@ export function getGuildMember(
 	);
 }
 
+/**
+ * サーバーのメンバーを、ユーザーIDの小さい順に、最大limit人(1000人まで)取得する。afterを指定すると、そのIDより後の人。
+ * 読むには、特権インテントのServer Members Intentを、Developer Portalで有効にしておく必要がある
+ */
+export function listGuildMembers(
+	botToken: string,
+	guildId: string,
+	options: { after?: string | null; limit: number },
+): Promise<APIGuildMember[]> {
+	const query = new URLSearchParams({ limit: String(options.limit) });
+	if (options.after) {
+		query.set("after", options.after);
+	}
+	return discordRequest(
+		"GET guild members",
+		"GET",
+		`/guilds/${guildId}/members?${query}`,
+		{ botToken },
+	);
+}
+
 /** チャンネルにメッセージを投稿する。filesを渡すと添付する(ファイルを添付する権限が必要) */
 export function createMessage(
 	botToken: string,
