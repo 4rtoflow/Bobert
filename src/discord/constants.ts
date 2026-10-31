@@ -37,6 +37,7 @@ export const GatewayOpcodes = {
 export const GatewayIntentBits = {
 	Guilds: 1 as DiscordGatewayIntentBits.Guilds,
 	GuildMessages: 512 as DiscordGatewayIntentBits.GuildMessages,
+	GuildMessageReactions: 1024 as DiscordGatewayIntentBits.GuildMessageReactions,
 	DirectMessages: 4096 as DiscordGatewayIntentBits.DirectMessages,
 	MessageContent: 32768 as DiscordGatewayIntentBits.MessageContent,
 } as const;

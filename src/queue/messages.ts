@@ -13,7 +13,8 @@ export type QueueMessage =
 	| DeleteJob
 	| ImportJob
 	| ChannelSyncJob
-	| ReindexJob;
+	| ReindexJob
+	| ReactionJob;
 
 /** 応答の生成。会話の履歴を組み立ててLLMを呼び、Discordに返信する。 */
 export interface RespondJob {
@@ -139,6 +140,28 @@ export interface ChannelSyncJob {
 	 * 記録にあってここにないチャンネルは、Botが止まっていた間に削除されたとみなす
 	 */
 	allChannelIds?: string[];
+}
+
+/**
+ * リアクションの付け外しを、記録に反映する(仕様: docs/spec/architecture.md「リアクション」)。
+ * addとremoveは1人の1つの絵文字、remove_emojiはその絵文字の全員、remove_allはメッセージのすべてのリアクション
+ */
+export interface ReactionJob {
+	kind: "reaction";
+	action: "add" | "remove" | "remove_emoji" | "remove_all";
+	guildId: string;
+	channelId: string;
+	messageId: string;
+	/** 付けた・外した人(addとremove) */
+	userId?: string;
+	/** 絵文字(remove_all以外)。Unicodeの絵文字はその文字、カスタム絵文字は「名前:ID」 */
+	emoji?: string;
+	/** スーパーリアクションか(addとremove)。ふつうのリアクションとは別に数える */
+	burst?: boolean;
+	/** 付けた人の、サーバーで見えている名前(addで分かったとき) */
+	member?: UserName;
+	/** 通知を受け取った時刻(UNIX時間のミリ秒)。順番が入れ替わっても、古い通知で上書きしないため */
+	at: number;
 }
 
 /** 保存したメッセージのベクトルを、afterより後のものから1回分入れ直す(メタデータを足したときなど) */

@@ -17,6 +17,7 @@ import {
 } from "../store/channels";
 import { deleteChannelImports } from "../store/imports";
 import { deleteChannelMessages } from "../store/messages";
+import { deleteChannelReactions } from "../store/reactions";
 import type { ChannelSyncJob } from "./messages";
 
 /** Vectorizeから1回に消すベクトルの数 */
@@ -224,12 +225,13 @@ async function removeChannels(
 	await deleteChannelRecords(deps.db, ids);
 }
 
-/** チャンネルの保存したメッセージ(D1とVectorize)と、取り込みの記録を消す */
+/** チャンネルの保存したメッセージ(D1とVectorize)と、リアクションと、取り込みの記録を消す */
 async function forgetChannels(
 	channelIds: readonly string[],
 	deps: ChannelDeps,
 ): Promise<void> {
 	const messageIds = await deleteChannelMessages(deps.db, channelIds);
+	await deleteChannelReactions(deps.db, channelIds);
 	for (let i = 0; i < messageIds.length; i += DELETE_BATCH_SIZE) {
 		await deps.vectors.deleteByIds(messageIds.slice(i, i + DELETE_BATCH_SIZE));
 	}

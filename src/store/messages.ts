@@ -116,7 +116,7 @@ export async function saveMessages(
 			...(guildId === null
 				? []
 				: message.members.map((member) =>
-						saveMemberName(db, guildId, member, message),
+						saveMemberName(db, guildId, member, messageVersion(message)),
 					)),
 		];
 	});
@@ -125,12 +125,29 @@ export async function saveMessages(
 	}
 }
 
-/** サーバーで見えている名前を記録する。名前が変わっていて、より新しいメッセージで分かったときだけ書き換える */
+/**
+ * サーバーで見えている名前を記録する(リアクションを付けた人など、メッセージのほかで分かったもの)。
+ * atは、その名前が分かった時刻
+ */
+export async function saveMemberNames(
+	db: D1Database,
+	names: readonly { guildId: string; member: UserName; at: number }[],
+): Promise<void> {
+	if (names.length > 0) {
+		await db.batch(
+			names.map(({ guildId, member, at }) =>
+				saveMemberName(db, guildId, member, at),
+			),
+		);
+	}
+}
+
+/** サーバーで見えている名前を記録する。名前が変わっていて、より新しく分かったときだけ書き換える */
 function saveMemberName(
 	db: D1Database,
 	guildId: string,
 	member: UserName,
-	message: StoredMessageInput,
+	at: number,
 ): D1PreparedStatement {
 	return db
 		.prepare(
@@ -141,7 +158,7 @@ function saveMemberName(
 			WHERE excluded.updated_at > guild_members.updated_at
 				AND excluded.name != guild_members.name`,
 		)
-		.bind(guildId, member.id, member.name, messageVersion(message));
+		.bind(guildId, member.id, member.name, at);
 }
 
 /** 保存したメッセージの行 */

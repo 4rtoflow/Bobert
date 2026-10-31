@@ -10,6 +10,7 @@ import {
 	loadStoredChain,
 	type TimelineRange,
 } from "../store/messages";
+import { loadReactions, type MessageReaction } from "../store/reactions";
 import type { SearchOptions } from "../store/search";
 import {
 	type ConversationSummary,
@@ -210,17 +211,20 @@ async function walkReplyChain(
 /**
  * メッセージの発言者と、メンションされた人の、サーバーで見えている名前。
  * 保存した名前に、話しかけたメッセージで分かった名前を重ねる。
+ * otherUserIdsを渡すと、その人たち(リアクションを付けた人など)の名前も読む
  */
 export async function namesFor(
 	messages: readonly StoredMessageInput[],
 	deps: HistoryDeps,
+	otherUserIds: readonly string[] = [],
 ): Promise<Map<string, string>> {
-	const userIds = new Set(
-		messages.flatMap((message) => [
+	const userIds = new Set([
+		...messages.flatMap((message) => [
 			message.authorId,
 			...message.mentions.map((user) => user.id),
 		]),
-	);
+		...otherUserIds,
+	]);
 	const names =
 		deps.guildId === null
 			? new Map<string, string>()
@@ -340,6 +344,32 @@ function snowflakeAt(ms: number): string {
 /** メッセージやチャンネルのIDから、作られた時刻(UNIX時間のミリ秒)。IDの上位のビットは、作られた時刻 */
 export function snowflakeTime(id: string): number {
 	return Number((BigInt(id) >> 22n) + DISCORD_EPOCH);
+}
+
+/**
+ * メッセージを文にするときに書き添える情報をまとめて読む。発言者・メンションされた人・リアクションを付けた人の名前と、
+ * スレッドが作られたメッセージのスレッドの名前と、リアクション(仕様: docs/spec/architecture.md「スレッド」「リアクション」)
+ */
+export async function annotationsFor(
+	messages: readonly StoredMessageInput[],
+	deps: HistoryDeps,
+): Promise<{
+	names: Map<string, string>;
+	threads: Map<string, string>;
+	reactions: Map<string, MessageReaction[]>;
+}> {
+	const reactions = await loadReactions(
+		deps.db,
+		messages.map((message) => message.messageId),
+	);
+	const reactors = [...reactions.values()].flatMap((list) =>
+		list.flatMap((reaction) => reaction.userIds),
+	);
+	return {
+		names: await namesFor(messages, deps, reactors),
+		threads: await threadNamesFor(messages, deps),
+		reactions,
+	};
 }
 
 /**

@@ -4,7 +4,7 @@ import { loadChannels } from "../store/channels";
 import { loadMessagesByIds } from "../store/messages";
 import type { FileCatalog } from "./attachments";
 import { messageLine } from "./conversation";
-import { fromDiscord, type HistoryDeps, namesFor } from "./history";
+import { annotationsFor, fromDiscord, type HistoryDeps } from "./history";
 
 /**
  * スレッドの中での会話なら、会話の最初に書く前置き(仕様: docs/spec/architecture.md「スレッド」)。
@@ -47,17 +47,17 @@ export async function threadPreface(
 	if (starter === null) {
 		return intro;
 	}
-	const names = await namesFor([starter], history);
+	// このスレッドを始めたメッセージなので、スレッドの名前は書き添えない(1行目に書いてある)
+	const { names, reactions } = await annotationsFor([starter], history);
 	return [
 		intro,
 		forum ? "投稿の最初のメッセージです:" : "スレッドを始めたメッセージです:",
-		messageLine(
-			starter,
-			botUserId,
+		messageLine(starter, botUserId, {
 			names,
-			forum || parent === undefined ? null : `#${parent.name}`,
+			reactions,
+			place: forum || parent === undefined ? null : `#${parent.name}`,
 			files,
-		),
+		}),
 	].join("\n");
 }
 

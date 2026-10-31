@@ -194,14 +194,10 @@ describe("スレッドが作られたメッセージ", () => {
 
 		expect(threads).toEqual(new Map([[TRIP, "旅行の計画"]]));
 		expect(
-			messageLine(
-				stored(TRIP_STARTER),
-				BOT.id,
-				new Map(),
-				null,
-				undefined,
+			messageLine(stored(TRIP_STARTER), BOT.id, {
+				names: new Map(),
 				threads,
-			),
+			}),
 		).toBe(
 			"[2026-10-20(火) 09:00] Alice: 来月、旅行に行かない?\n[スレッド「旅行の計画」]",
 		);
