@@ -108,7 +108,7 @@ export function summaryRequest(options: {
 	names: ReadonlyMap<string, string>;
 }): ChatRequest {
 	const lines = options.messages.map((message) =>
-		messageLine(message, options.botUserId, options.names),
+		messageLine(message, options.botUserId, { names: options.names }),
 	);
 	const text = [
 		...(options.previous === null

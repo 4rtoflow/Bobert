@@ -454,6 +454,7 @@ describe("Queueの仕事の振り分け", () => {
 			delete: vi.fn(async () => {}),
 			import: vi.fn(async () => {}),
 			reindex: vi.fn(async () => {}),
+			reaction: vi.fn(async () => {}),
 			...overrides,
 		};
 	}
@@ -487,6 +488,34 @@ describe("Queueの仕事の振り分け", () => {
 		);
 
 		expect(order).toEqual(["a", "b", "ingest"]);
+	});
+
+	it("リアクションの付け外しは、まとめて処理し、成功したら完了にする", async () => {
+		const batches: number[] = [];
+		const messages = ["8000", "8001"].map((messageId, index) =>
+			queueMessage({
+				kind: "reaction",
+				action: "remove_all",
+				guildId: "4000",
+				channelId: "3000",
+				messageId,
+				at: index,
+			}),
+		);
+
+		await processBatch(
+			messages,
+			handlers({
+				reaction: async (jobs) => {
+					batches.push(jobs.length);
+				},
+			}),
+		);
+
+		expect(batches).toEqual([2]);
+		for (const message of messages) {
+			expect(message.ack).toHaveBeenCalled();
+		}
 	});
 
 	it("保存と削除は、種類ごとにまとめて処理し、成功したら完了にする", async () => {

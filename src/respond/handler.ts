@@ -42,6 +42,7 @@ import { compactButtonRow } from "./compact-button";
 import { toConversation } from "./conversation";
 import { replyEffort } from "./effort";
 import {
+	annotationsFor,
 	fromDiscord,
 	type HistoryDeps,
 	type MessageFetcher,
@@ -49,7 +50,6 @@ import {
 	type PinLister,
 	readConversation,
 	refreshImageUrls,
-	threadNamesFor,
 } from "./history";
 import {
 	allowedMentions,
@@ -445,17 +445,18 @@ export async function answer(
 	// スレッドの中なら、スレッドと親のチャンネルのことを、会話の最初に書く(仕様: docs/spec/architecture.md「スレッド」)。
 	// スレッドを始めたメッセージは会話より前なので、その添付ファイルの番号を、会話より先に付ける
 	const preface = await threadPreface(history, chain, botUserId, files);
+	// 名前と、スレッドの名前と、リアクション(仕様: docs/spec/architecture.md「リアクション」)を書き添える
+	const annotations = await annotationsFor(chain, history);
 	const messages = toConversation(chain, {
 		botUserId,
 		includeImages,
-		names: await namesFor(chain, history),
+		...annotations,
 		summary: summary?.summary ?? null,
 		files,
 		// 画像のURLを取り直すときに、いちばん古い発言が消えていて外れたら、書き添える先がない
 		parentDeleted:
 			conversation.parentDeleted === true &&
 			chain[0]?.messageId === conversation.messages[0]?.messageId,
-		threads: await threadNamesFor(chain, history),
 		preface,
 	});
 	const webSearch = settings.featWebSearch

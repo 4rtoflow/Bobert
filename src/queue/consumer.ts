@@ -17,10 +17,12 @@ import type {
 	ImportJob,
 	IngestJob,
 	QueueMessage,
+	ReactionJob,
 	ReindexJob,
 	RespondJob,
 	StoredMessageInput,
 } from "./messages";
+import { applyReactions } from "./reactions";
 
 /**
  * Queueに入った仕事を処理する。失敗した仕事は、Queueの設定の回数までやり直す。
@@ -66,6 +68,7 @@ export async function handleQueueBatch(
 					await env.INGEST_QUEUE.send(next satisfies QueueMessage);
 				},
 			}),
+		reaction: (jobs) => applyReactions(jobs, deps),
 	});
 }
 
@@ -80,10 +83,11 @@ export interface JobHandlers {
 	delete: (jobs: DeleteJob[]) => Promise<void>;
 	import: (job: ImportJob) => Promise<void>;
 	reindex: (job: ReindexJob) => Promise<void>;
+	reaction: (jobs: ReactionJob[]) => Promise<void>;
 }
 
 /**
- * 仕事を種類ごとに分けて処理する。保存と削除はまとめて、それ以外は1件ずつ。
+ * 仕事を種類ごとに分けて処理する。保存と削除とリアクションはまとめて、それ以外は1件ずつ。
  * チャンネルの記録は、保存より先に、受け取った順に反映する(保存するかどうかを、チャンネルの記録で決めるため)
  */
 export async function processBatch(
@@ -125,6 +129,10 @@ export async function processBatch(
 		(message): message is Message<ReindexJob> =>
 			message.body.kind === "reindex",
 	);
+	const reactions = messages.filter(
+		(message): message is Message<ReactionJob> =>
+			message.body.kind === "reaction",
+	);
 
 	await eachOne(channels, handlers.channels);
 	await eachOne(respond, handlers.respond);
@@ -135,6 +143,7 @@ export async function processBatch(
 	await settle(deletion, (jobs) => handlers.delete(jobs));
 	await eachOne(imports, handlers.import);
 	await eachOne(reindex, handlers.reindex);
+	await settle(reactions, (jobs) => handlers.reaction(jobs));
 }
 
 /** 1件ずつ処理する。失敗した仕事だけを、やり直しに回す */

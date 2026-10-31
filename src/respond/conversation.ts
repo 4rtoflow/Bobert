@@ -4,11 +4,14 @@ import type {
 	EmbedInfo,
 	StoredMessageInput,
 } from "../queue/messages";
+import type { MessageReaction } from "../store/reactions";
 import { type FileCatalog, isImage, isReadableImage } from "./attachments";
 import { formatJst } from "./time";
 
 /** 1回に渡す画像の枚数の上限。新しいものから数える */
 const MAX_IMAGES = 10;
+/** リアクションを書き添えるときに、1つの絵文字で名前を出す人数の上限 */
+const MAX_REACTION_NAMES = 10;
 
 export interface ConversationOptions {
 	botUserId: string;
@@ -27,8 +30,24 @@ export interface ConversationOptions {
 	parentDeleted?: boolean;
 	/** スレッドが作られたメッセージと、そのスレッドの名前(メッセージIDごと)。スレッドの名前を書き添える */
 	threads?: ReadonlyMap<string, string>;
+	/** メッセージに付いているリアクション(メッセージIDごと)。Bobert以外の発言に書き添える */
+	reactions?: ReadonlyMap<string, readonly MessageReaction[]>;
 	/** 会話の最初に書く前置き(スレッドの中での会話なら、スレッドと親のチャンネルの説明) */
 	preface?: string | null;
+}
+
+/** メッセージを文にするとき(道具の結果)に、書き添える情報 */
+export interface LineOptions {
+	/** サーバーで見えている名前(人ごとに、最後に分かったもの)。なければ、メッセージに付いている名前を使う */
+	names: ReadonlyMap<string, string>;
+	/** 時刻の後に書く、チャンネルの名前(今いるチャンネル以外のメッセージ。例: 「#雑談」) */
+	place?: string | null;
+	/** あれば、添付ファイルに番号を付ける(ファイルを読む道具で読める)。なければ、ファイル名だけを書き添える */
+	files?: FileCatalog;
+	/** スレッドが作られたメッセージと、そのスレッドの名前(メッセージIDごと) */
+	threads?: ReadonlyMap<string, string>;
+	/** メッセージに付いているリアクション(メッセージIDごと) */
+	reactions?: ReadonlyMap<string, readonly MessageReaction[]>;
 }
 
 /** 編集されたメッセージ(Bobert以外)の本文の後に書き添える。Discordの画面の表示と同じ */
@@ -62,6 +81,7 @@ export function toConversation(
 		: new Map<string, AttachmentInfo[]>();
 	const messages: ChatMessage[] = [];
 	for (const [index, message] of chain.entries()) {
+		// Bobertの発言(AIの発言)には、リアクションなどを書き添えない。AIが返答に同じ書き方をまねないようにするため
 		if (message.authorId === options.botUserId) {
 			messages.push({
 				role: "assistant",
@@ -77,6 +97,7 @@ export function toConversation(
 					attachmentNote(message, attachment, options.files),
 				),
 			...threadNote(message, options.threads),
+			...reactionNote(message, options.reactions, options.names),
 			...(index === 0 && options.parentDeleted ? [PARENT_DELETED_NOTE] : []),
 		];
 		messages.push({
@@ -160,19 +181,20 @@ export function selectImages(
  * Bobertの発言は、末尾の注記を外す。
  * placeを渡すと、時刻の後に書く(今いるチャンネル以外のメッセージの、チャンネルの名前。例: 「[時刻] #雑談 名前: 本文」)。
  * filesを渡すと、添付ファイルに番号を付ける(ファイルを読む道具で読める)。なければ、ファイル名だけを書き添える。
- * threadsを渡すと、スレッドが作られたメッセージに、スレッドの名前を書き添える
+ * threadsを渡すと、スレッドが作られたメッセージに、スレッドの名前を書き添える。reactionsを渡すと、リアクションを書き添える
  */
 export function messageLine(
 	message: StoredMessageInput,
 	botUserId: string,
-	names: ReadonlyMap<string, string>,
-	place: string | null = null,
-	files?: FileCatalog,
-	threads?: ReadonlyMap<string, string>,
+	options: LineOptions,
 ): string {
+	const { names, place = null, files, threads, reactions } = options;
 	const where = place === null ? "" : `${place} `;
 	if (message.authorId === botUserId) {
-		return `[${formatJst(message.createdAt)}] ${where}${authorName(message, names)}: ${botText(message)}`;
+		return [
+			`[${formatJst(message.createdAt)}] ${where}${authorName(message, names)}: ${botText(message)}`,
+			...reactionNote(message, reactions, names),
+		].join("\n");
 	}
 	return humanLine(
 		message,
@@ -182,6 +204,7 @@ export function messageLine(
 				attachmentNote(message, attachment, files),
 			),
 			...threadNote(message, threads),
+			...reactionNote(message, reactions, names),
 		],
 		where,
 	);
@@ -194,6 +217,45 @@ function threadNote(
 ): string[] {
 	const name = threads?.get(message.messageId);
 	return name === undefined ? [] : [`[スレッド「${name}」]`];
+}
+
+/**
+ * メッセージに付いているリアクション(仕様: docs/spec/architecture.md「リアクション」)。
+ * 例: 「[リアクション] 👍 Alice、Bob / :blobcat: Carol ほか2人」。
+ * 1つの絵文字で名前を出すのは上限の人数までで、残りと、名前の分からない人は、人数だけを書く
+ */
+function reactionNote(
+	message: StoredMessageInput,
+	reactions: ReadonlyMap<string, readonly MessageReaction[]> | undefined,
+	names: ReadonlyMap<string, string>,
+): string[] {
+	const list = reactions?.get(message.messageId) ?? [];
+	if (list.length === 0) {
+		return [];
+	}
+	const parts = list.map((reaction) => {
+		const known = reaction.userIds
+			.flatMap((id) => {
+				const name = names.get(id);
+				return name === undefined ? [] : [name];
+			})
+			.slice(0, MAX_REACTION_NAMES);
+		const rest = reaction.userIds.length - known.length;
+		const who =
+			known.length === 0
+				? `${rest}人`
+				: rest > 0
+					? `${known.join("、")} ほか${rest}人`
+					: known.join("、");
+		return `${emojiLabel(reaction.emoji)} ${who}`;
+	});
+	return [`[リアクション] ${parts.join(" / ")}`];
+}
+
+/** 絵文字の書き方。カスタム絵文字(記録は「名前:ID」)は「:名前:」にする */
+function emojiLabel(emoji: string): string {
+	const custom = emoji.match(/^(.*):\d+$/);
+	return custom ? `:${custom[1]}:` : emoji;
 }
 
 /**

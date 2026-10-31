@@ -16,6 +16,7 @@ import {
 	toStoredMessage,
 } from "./messages";
 import { isFatalCloseCode, WATCHDOG_INTERVAL_MS } from "./protocol";
+import { REACTION_EVENTS, reactionJob } from "./reactions";
 import {
 	type ConnectMode,
 	GatewaySession,
@@ -339,6 +340,14 @@ export class Gateway extends DurableObject<Env> {
 				return;
 			}
 			default: {
+				// リアクションの付け外し。誰がどの絵文字を付けたかを記録する
+				if (REACTION_EVENTS.has(event)) {
+					const job = reactionJob(event, data, Date.now());
+					if (job !== null) {
+						await this.env.INGEST_QUEUE.send(job satisfies QueueMessage);
+					}
+					return;
+				}
 				// チャンネル・スレッド・ロールの作成・変更・削除と、Bot自身のメンバーの変更。共有チャンネルかどうかの判定に使う
 				const jobs = channelSyncJobs(
 					event,

@@ -10,6 +10,7 @@ import {
 	messageVersion,
 	saveMessages,
 } from "../store/messages";
+import { deleteMessageReactions } from "../store/reactions";
 import { type ChannelDeps, resolveSharedChannels } from "./channels";
 import type { ReindexJob, StoredMessageInput } from "./messages";
 
@@ -128,13 +129,14 @@ async function embedMessages(
 	return { embedded: embeddable.length, emptied: emptied.length };
 }
 
-/** 削除されたメッセージを、D1とVectorizeから消す */
+/** 削除されたメッセージを、D1とVectorizeから消す。リアクションの記録も消す */
 export async function deleteMessages(
 	messageIds: readonly string[],
 	deps: IngestDeps,
 ): Promise<void> {
 	const ids = [...new Set(messageIds)];
 	await deleteStoredMessages(deps.db, ids);
+	await deleteMessageReactions(deps.db, ids);
 	await deps.vectors.deleteByIds(ids);
 	logEvent("queue", "deleted", { messages: ids.length });
 }
