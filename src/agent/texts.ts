@@ -76,8 +76,32 @@ export function effortLine(effort: string): string {
 export const FIRST_MESSAGE_NOTES = [
 	"費用は、あなたのAnthropicのキーにかかります(トークン代と、動いている間の1時間あたり$0.08)。",
 	"会話と作業の記録は、セッションを終えるまで、あなたのAnthropicのアカウントに残ります(Claude Consoleで読めます)。",
+	"ファイルを添付すると、エージェントに渡します(1つ25MBまで)。",
 	"このチャンネルのメッセージは、Bobertには保存しません。あなた以外の人の書き込みは消します。",
 ] as const;
+
+/** 添付ファイルが大きすぎて、エージェントに渡さなかった(その発言への返信) */
+export function attachmentTooLarge(filename: string): string {
+	return `-# 「${filename}」は25MBを超えているので、エージェントに渡していません。`;
+}
+
+/** エージェントが作ったファイルを出すときの行(ファイルを添付する) */
+export const OUTPUT_FILES_LINE = "-# エージェントが作ったファイル";
+
+/** エージェントが作ったファイルが、Discordに上げられる大きさを超えている */
+export function outputTooLarge(filename: string, size: string): string {
+	return `-# 「${filename}」(${size})は、Discordに上げられる大きさを超えているので、出せませんでした。`;
+}
+
+/** Bobertに「ファイルを添付」の権限がなく、ファイルを出せなかった */
+export const NO_ATTACH_FILES =
+	"-# Bobertに「ファイルを添付」の権限がないため、ファイルを出せませんでした。サーバーの管理者に、Bobertの役職へこの権限を足してもらってください。";
+
+/** ファイルの大きさを、MB単位で書く(小数点以下1桁まで) */
+export function formatMegabytes(bytes: number): string {
+	const megabytes = Math.round((bytes / (1024 * 1024)) * 10) / 10;
+	return `${megabytes}MB`;
+}
 
 export const END_BUTTON_LABEL = "セッションを終える";
 

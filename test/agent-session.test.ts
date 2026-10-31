@@ -122,6 +122,7 @@ describe("エージェントのチャンネルのDurable Object", () => {
 			fromBot: false,
 			content: "テストを動かして",
 			mentions: [],
+			attachments: [],
 		});
 
 		await vi.waitFor(() => {
@@ -157,6 +158,91 @@ describe("エージェントのチャンネルのDurable Object", () => {
 		});
 	});
 
+	it("添付ファイルを、本人のアカウントに上げてサンドボックスに置き、置き場所を書いて送る", async () => {
+		const owner = await newUser("anthropic");
+		const channelId = "62103";
+		const stub = await startedChannel(channelId, owner.id);
+		const calls = mockFetch((call: FetchCall) => {
+			const path = call.url.pathname;
+			if (call.url.hostname === "cdn.discordapp.com") {
+				return new Response("a,b\n1,2\n");
+			}
+			if (call.url.hostname === "api.anthropic.com") {
+				if (call.method === "POST" && path === "/v1/files") {
+					return Response.json({ id: "file_up", type: "file" });
+				}
+				if (
+					call.method === "POST" &&
+					path === "/v1/sessions/sesn_1/resources"
+				) {
+					return Response.json({
+						id: "res_1",
+						type: "file",
+						file_id: "file_copy",
+						mount_path: "/1/data.csv",
+					});
+				}
+				if (call.method === "DELETE" && path === "/v1/files/file_up") {
+					return Response.json({ id: "file_up", type: "file_deleted" });
+				}
+				if (path === "/v1/sessions/sesn_1/events/stream") {
+					return sse([]);
+				}
+				if (path === "/v1/sessions/sesn_1/events") {
+					return Response.json({ data: [], next_page: null });
+				}
+				return Response.json({ id: "sesn_1", type: "session", status: "idle" });
+			}
+			return new Response(null, { status: 204 });
+		});
+
+		await stub.receive({
+			id: "1",
+			authorId: owner.id,
+			fromBot: false,
+			content: "集計して",
+			mentions: [],
+			attachments: [
+				{
+					filename: "data.csv",
+					size: 8,
+					url: "https://cdn.discordapp.com/attachments/1/2/data.csv",
+					contentType: "text/csv",
+				},
+			],
+		});
+
+		expect(
+			calls.some(
+				(call) => call.method === "POST" && call.url.pathname === "/v1/files",
+			),
+		).toBe(true);
+		expect(
+			calls.find(
+				(call) => call.url.pathname === "/v1/sessions/sesn_1/resources",
+			)?.body,
+		).toEqual({ type: "file", file_id: "file_up", mount_path: "/1/data.csv" });
+		expect(
+			calls.find(
+				(call) =>
+					call.method === "POST" &&
+					call.url.pathname === "/v1/sessions/sesn_1/events",
+			)?.body,
+		).toEqual({
+			events: [
+				{
+					type: "user.message",
+					content: [
+						{
+							type: "text",
+							text: "集計して\n\n添付ファイル:\n- /mnt/session/uploads/1/data.csv",
+						},
+					],
+				},
+			],
+		});
+	});
+
 	it("本人以外の発言は消し、その人をメンションして知らせる", async () => {
 		const owner = await newUser("anthropic");
 		const channelId = "62102";
@@ -169,6 +255,7 @@ describe("エージェントのチャンネルのDurable Object", () => {
 			fromBot: false,
 			content: "のぞき見",
 			mentions: [],
+			attachments: [],
 		});
 
 		expect(

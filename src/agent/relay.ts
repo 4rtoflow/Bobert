@@ -1,5 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { toFile } from "@anthropic-ai/sdk";
 import type {
+	BetaManagedAgentsAgentCustomToolUseEvent,
 	BetaManagedAgentsAgentToolUseEvent,
 	BetaManagedAgentsSessionErrorEvent,
 	BetaManagedAgentsSessionEvent,
@@ -12,6 +14,7 @@ import type {
 	RESTPatchAPIChannelMessageJSONBody,
 	RESTPostAPIChannelMessageJSONBody,
 } from "discord-api-types/v10";
+import { DiscordApiError, type MessageFile } from "../discord/api";
 import { ButtonStyle, ComponentType } from "../discord/constants";
 import { logEvent } from "../log";
 import { REFUSAL_TEXT } from "../respond/replies";
@@ -21,19 +24,25 @@ import {
 	describeAgentError,
 	describeSessionError,
 	isSessionGone,
+	SEND_FILES_TOOL,
 } from "./managed";
 import {
 	ALLOW_BUTTON_LABEL,
 	APPROVAL_INTRO,
 	allowedMessage,
+	attachmentTooLarge,
 	DELETE_CHANNEL_BUTTON_LABEL,
 	DENY_BUTTON_LABEL,
 	deniedMessage,
 	deniedToolLine,
 	ENDED,
+	formatMegabytes,
 	HELD_NOTICE,
 	KEY_CANNOT_OPERATE,
+	NO_ATTACH_FILES,
+	OUTPUT_FILES_LINE,
 	othersNotice,
+	outputTooLarge,
 	STOP_BUTTON_LABEL,
 	STOPPED_LINE,
 	sessionFailed,
@@ -58,6 +67,30 @@ export const AGENT_DENY_PREFIX = "agent:deny:";
 
 /** 本人以外の発言を消したときの知らせを、消すまでの時間 */
 export const OTHERS_NOTICE_MS = 10_000;
+
+/** エージェントに渡す添付ファイルの、1つの大きさの上限(Workersで扱える大きさに収めるため) */
+export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+/** 添付ファイルを置く場所と、エージェントがファイルを出すときに置く場所(Managed Agentsの決まり) */
+const UPLOADS_DIR = "/mnt/session/uploads";
+const OUTPUTS_DIR = "/mnt/session/outputs/";
+
+/** Discordの1通に添付できるファイルの数 */
+const MAX_FILES_PER_MESSAGE = 10;
+
+/**
+ * エージェントが置いたファイルが、一覧に出るまで待つ回数と間隔。
+ * 置いてから一覧に出るまで、数秒かかることがあるため
+ */
+const OUTPUT_LOOKUP_ATTEMPTS = 5;
+const OUTPUT_LOOKUP_INTERVAL_MS = 1500;
+
+/** セッションが出したファイルの一覧を読むのに要る、ベータのヘッダー */
+const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
+
+/** Discordのエラーコード: 権限が足りない、送るものが大きすぎる */
+const MISSING_PERMISSIONS = 50013;
+const REQUEST_TOO_LARGE = 40005;
 
 /** 道具の値を作業の様子に書くときの、長さの上限 */
 const OPERATION_MAX_LENGTH = 100;
@@ -89,7 +122,7 @@ export interface PendingApproval {
 export interface HeldMessage {
 	/** 預かったことの知らせ。送ったら消す */
 	noticeId: string | null;
-	text: string;
+	message: IncomingMessage;
 }
 
 /** 作業の様子の知らせ */
@@ -127,6 +160,11 @@ export interface SessionState {
 	lastError: BetaManagedAgentsSessionErrorEvent["error"] | null;
 	/** 消す予定の、本人以外への知らせ */
 	notices: { messageId: string; dueAt: number }[];
+	/**
+	 * 答えた、Bobertが受け持つ道具の呼び出し。セッションが「答えを待っている」と止まっても、
+	 * これだけを待っているなら、もう答えてあるので、流れを受け続ける
+	 */
+	answeredTools: string[];
 }
 
 /** セッションを始めたときの情報 */
@@ -151,6 +189,7 @@ export function initialState(setup: SessionSetup): SessionState {
 		stopRequested: false,
 		lastError: null,
 		notices: [],
+		answeredTools: [],
 	};
 }
 
@@ -163,12 +202,26 @@ export interface IncomingMessage {
 	content: string;
 	/** メンションされた人。本文の<@ID>を名前にするのに使う */
 	mentions: { id: string; name: string }[];
+	attachments: IncomingAttachment[];
+}
+
+/** 発言に付いた添付ファイル */
+export interface IncomingAttachment {
+	filename: string;
+	/** 大きさ(バイト) */
+	size: number;
+	/** DiscordのCDNのURL。有効期限がある */
+	url: string;
+	contentType: string | null;
 }
 
 /** Discordへの書き込み(チャンネルは決まっている) */
 export interface RelayDiscord {
-	/** 投稿して、メッセージのIDを返す */
-	post(body: RESTPostAPIChannelMessageJSONBody): Promise<string>;
+	/** 投稿して、メッセージのIDを返す。filesを渡すと添付する */
+	post(
+		body: RESTPostAPIChannelMessageJSONBody,
+		files?: MessageFile[],
+	): Promise<string>;
 	edit(
 		messageId: string,
 		body: RESTPatchAPIChannelMessageJSONBody,
@@ -182,6 +235,11 @@ export interface RelayDeps {
 	client(): Promise<Anthropic | null>;
 	/** セッションを終えた印を、D1に付ける */
 	markEnded(): Promise<void>;
+	/** 添付ファイルを、DiscordのCDNから読む */
+	fetchAttachment(url: string): Promise<Uint8Array>;
+	/** このサーバーで、Discordに1つ上げられるファイルの大きさ(バイト) */
+	uploadLimit(): Promise<number>;
+	sleep(ms: number): Promise<void>;
 	now(): number;
 }
 
@@ -207,8 +265,7 @@ export class SessionRelay {
 		if (state.sessionId === null) {
 			return false;
 		}
-		const text = ownerText(message);
-		if (text.trim() === "") {
+		if (ownerText(message).trim() === "" && message.attachments.length === 0) {
 			return false;
 		}
 		if (state.approvals.length > 0) {
@@ -222,10 +279,10 @@ export class SessionRelay {
 					log("held_notice_failed", state, error);
 					return null;
 				});
-			state.held.push({ noticeId, text });
+			state.held.push({ noticeId, message });
 			return false;
 		}
-		return this.sendMessages([text]);
+		return this.sendMessages([message]);
 	}
 
 	/** 本人以外の発言を消し、人の発言なら、その人に知らせる(知らせは10秒後に消す) */
@@ -259,6 +316,9 @@ export class SessionRelay {
 				state.awaitingRun = false;
 				await this.ensureProgress();
 				return "continue";
+			case "agent.custom_tool_use":
+				await this.onCustomTool(event);
+				return "continue";
 			case "agent.tool_use":
 				await this.onToolUse(event);
 				return "continue";
@@ -280,6 +340,17 @@ export class SessionRelay {
 					return "continue";
 				}
 				if (event.stop_reason.type === "requires_action") {
+					const ids = event.stop_reason.event_ids ?? [];
+					const answeredOnly =
+						ids.length > 0 &&
+						ids.every((id) => state.answeredTools.includes(id));
+					state.answeredTools = state.answeredTools.filter(
+						(id) => !ids.includes(id),
+					);
+					// 待っているのが、もう答えた(Bobertが受け持つ)道具だけなら、セッションは動き続ける
+					if (answeredOnly) {
+						return "continue";
+					}
 					state.working = false;
 					return "close";
 				}
@@ -406,7 +477,7 @@ export class SessionRelay {
 		if (state.held.length > 0) {
 			const held = state.held;
 			state.held = [];
-			await this.sendMessages(held.map((message) => message.text));
+			await this.sendMessages(held.map((entry) => entry.message));
 			for (const message of held) {
 				if (message.noticeId !== null) {
 					await deps.discord.remove(message.noticeId).catch(() => {});
@@ -458,7 +529,13 @@ export class SessionRelay {
 	}
 
 	/** 本人の発言をセッションに送る。送れなければ、チャンネルで知らせる */
-	private async sendMessages(texts: readonly string[]): Promise<boolean> {
+	/**
+	 * 本人の発言をセッションに送る。添付ファイルは、先にサンドボックスに置き、置き場所を発言の終わりに書く。
+	 * 送れなければ、チャンネルで知らせる
+	 */
+	private async sendMessages(
+		messages: readonly IncomingMessage[],
+	): Promise<boolean> {
 		const { state, deps } = this;
 		const sessionId = state.sessionId;
 		if (sessionId === null) {
@@ -470,6 +547,16 @@ export class SessionRelay {
 			return false;
 		}
 		try {
+			const texts: string[] = [];
+			for (const message of messages) {
+				const text = await this.prepare(client, sessionId, message);
+				if (text !== null) {
+					texts.push(text);
+				}
+			}
+			if (texts.length === 0) {
+				return false;
+			}
 			await client.beta.sessions.events.send(sessionId, {
 				events: texts.map((text) => ({
 					type: "user.message" as const,
@@ -494,6 +581,270 @@ export class SessionRelay {
 		}
 		state.working = true;
 		return true;
+	}
+
+	/**
+	 * 発言を、エージェントに送る文にする。添付ファイルはサンドボックスに置き、置き場所を終わりに書く。
+	 * 25MBを超えるファイルは渡さず、その発言への返信で知らせる。送るものがなければnull
+	 */
+	private async prepare(
+		client: Anthropic,
+		sessionId: string,
+		message: IncomingMessage,
+	): Promise<string | null> {
+		const text = ownerText(message);
+		const paths: string[] = [];
+		for (const attachment of message.attachments) {
+			if (attachment.size > MAX_ATTACHMENT_BYTES) {
+				await this.deps.discord
+					.post({
+						content: attachmentTooLarge(attachment.filename),
+						message_reference: { message_id: message.id },
+						allowed_mentions: { parse: [], replied_user: false },
+					})
+					.catch((error: unknown) => {
+						log("attachment_notice_failed", this.state, error);
+					});
+				continue;
+			}
+			paths.push(await this.mount(client, sessionId, message.id, attachment));
+		}
+		if (text.trim() === "" && paths.length === 0) {
+			return null;
+		}
+		if (paths.length === 0) {
+			return text;
+		}
+		const list = paths.map((path) => `- ${path}`).join("\n");
+		return `${text}\n\n添付ファイル:\n${list}`.trim();
+	}
+
+	/**
+	 * 添付ファイルを、本人のAnthropicのアカウントに上げて、サンドボックスに置く。置き場所を返す。
+	 * 置いたファイルは、セッション用の写しになるので、上げた元のファイルは消す
+	 */
+	private async mount(
+		client: Anthropic,
+		sessionId: string,
+		messageId: string,
+		attachment: IncomingAttachment,
+	): Promise<string> {
+		const name = safeFileName(attachment.filename);
+		const bytes = await this.deps.fetchAttachment(attachment.url);
+		const uploaded = await client.files.upload({
+			file: await toFile(
+				bytes,
+				name,
+				attachment.contentType === null
+					? undefined
+					: { type: attachment.contentType },
+			),
+		});
+		const resource = await client.beta.sessions.resources.add(sessionId, {
+			type: "file",
+			file_id: uploaded.id,
+			mount_path: `/${messageId}/${name}`,
+		});
+		if (resource.file_id !== uploaded.id) {
+			await client.files.delete(uploaded.id).catch((error: unknown) => {
+				log("upload_cleanup_failed", this.state, error);
+			});
+		}
+		return `${UPLOADS_DIR}/${messageId}/${name}`;
+	}
+
+	/** Bobertが受け持つ道具の呼び出しに答える */
+	private async onCustomTool(
+		event: BetaManagedAgentsAgentCustomToolUseEvent,
+	): Promise<void> {
+		const { state, deps } = this;
+		const sessionId = state.sessionId;
+		if (sessionId === null) {
+			return;
+		}
+		const client = await deps.client();
+		if (client === null) {
+			await this.terminate(KEY_CANNOT_OPERATE);
+			return;
+		}
+		const result =
+			event.name === SEND_FILES_TOOL
+				? await this.sendFiles(client, sessionId, event.input)
+				: { text: `Unknown tool: ${event.name}`, error: true };
+		try {
+			await client.beta.sessions.events.send(sessionId, {
+				events: [
+					{
+						type: "user.custom_tool_result",
+						custom_tool_use_id: event.id,
+						content: [{ type: "text", text: result.text }],
+						is_error: result.error,
+					},
+				],
+			});
+			state.answeredTools.push(event.id);
+		} catch (error) {
+			if (isSessionGone(error)) {
+				await this.terminate(KEY_CANNOT_OPERATE);
+				return;
+			}
+			log("tool_result_failed", state, error);
+		}
+	}
+
+	/**
+	 * send_filesの道具: エージェントが /mnt/session/outputs/ に置いたファイルを、チャンネルに添付する。
+	 * 結果は、エージェントに返す文にする(本人には、ファイルと、出せなかったときの知らせを見せる)
+	 */
+	private async sendFiles(
+		client: Anthropic,
+		sessionId: string,
+		input: Record<string, unknown>,
+	): Promise<{ text: string; error: boolean }> {
+		const { deps } = this;
+		const names = Array.isArray(input.names)
+			? input.names
+					.filter((name): name is string => typeof name === "string")
+					.map(outputName)
+					.filter((name) => name !== "")
+			: [];
+		if (names.length === 0) {
+			return {
+				text: "names に、/mnt/session/outputs/ に置いたファイルの名前を指定してください。",
+				error: true,
+			};
+		}
+		const found = await this.findOutputs(client, sessionId, names);
+		const limit = await deps.uploadLimit();
+		const missing = names.filter((name) => !found.has(name));
+		const tooLarge: { name: string; size: number }[] = [];
+		const ready: { name: string; file: MessageFile }[] = [];
+		for (const name of names) {
+			const output = found.get(name);
+			if (output === undefined) {
+				continue;
+			}
+			if (output.size_bytes > limit) {
+				tooLarge.push({
+					name: baseName(output.filename),
+					size: output.size_bytes,
+				});
+				continue;
+			}
+			const response = await client.files.download(output.id);
+			ready.push({
+				name,
+				file: {
+					name: baseName(output.filename),
+					content: new Uint8Array(await response.arrayBuffer()),
+					contentType: output.mime_type,
+				},
+			});
+		}
+		const sent: string[] = [];
+		let noPermission = false;
+		for (let start = 0; start < ready.length; start += MAX_FILES_PER_MESSAGE) {
+			const chunk = ready.slice(start, start + MAX_FILES_PER_MESSAGE);
+			try {
+				await deps.discord.post(
+					{ content: OUTPUT_FILES_LINE, allowed_mentions: { parse: [] } },
+					chunk.map((entry) => entry.file),
+				);
+				sent.push(...chunk.map((entry) => entry.name));
+			} catch (error) {
+				if (!(error instanceof DiscordApiError)) {
+					throw error;
+				}
+				if (error.code === MISSING_PERMISSIONS) {
+					noPermission = true;
+					break;
+				}
+				if (error.status === 413 || error.code === REQUEST_TOO_LARGE) {
+					tooLarge.push(
+						...chunk.map((entry) => ({
+							name: entry.file.name,
+							size: entry.file.content.length,
+						})),
+					);
+					continue;
+				}
+				throw error;
+			}
+		}
+		if (noPermission) {
+			await deps.discord.post({
+				content: NO_ATTACH_FILES,
+				allowed_mentions: { parse: [] },
+			});
+		}
+		for (const file of tooLarge) {
+			await deps.discord.post({
+				content: outputTooLarge(file.name, formatMegabytes(file.size)),
+				allowed_mentions: { parse: [] },
+			});
+		}
+		const report: string[] = [];
+		if (noPermission) {
+			report.push(
+				"Bobertに、Discordでファイルを添付する権限がないため、出せませんでした。",
+			);
+		} else if (sent.length > 0) {
+			report.push(`チャンネルに出しました: ${sent.join(", ")}`);
+		}
+		if (tooLarge.length > 0) {
+			report.push(
+				`大きすぎて、Discordに上げられませんでした: ${tooLarge.map((file) => file.name).join(", ")}`,
+			);
+		}
+		if (missing.length > 0) {
+			report.push(
+				`${OUTPUTS_DIR} に見つかりませんでした: ${missing.join(", ")}`,
+			);
+		}
+		return { text: report.join("\n"), error: sent.length === 0 };
+	}
+
+	/**
+	 * セッションが出したファイルの一覧から、名前で探す。置いてから一覧に出るまで時間がかかることがあるので、
+	 * 見つからない名前があれば、少し待って読み直す
+	 */
+	private async findOutputs(
+		client: Anthropic,
+		sessionId: string,
+		names: readonly string[],
+	): Promise<Map<string, OutputFile>> {
+		let found = new Map<string, OutputFile>();
+		for (let attempt = 0; attempt < OUTPUT_LOOKUP_ATTEMPTS; attempt++) {
+			if (attempt > 0) {
+				await this.deps.sleep(OUTPUT_LOOKUP_INTERVAL_MS);
+			}
+			const byName = new Map<string, OutputFile>();
+			for await (const file of client.beta.files.list({
+				scope_id: sessionId,
+				betas: [MANAGED_AGENTS_BETA],
+			})) {
+				// 同じ名前が何度も出ていれば、新しいものを使う
+				for (const key of [
+					outputName(file.filename),
+					baseName(file.filename),
+				]) {
+					const current = byName.get(key);
+					if (current === undefined || current.created_at < file.created_at) {
+						byName.set(key, file);
+					}
+				}
+			}
+			found = new Map(
+				names.flatMap((name) => {
+					const file = byName.get(name);
+					return file === undefined ? [] : [[name, file] as const];
+				}),
+			);
+			if (found.size === names.length) {
+				break;
+			}
+		}
+		return found;
 	}
 
 	private async onToolUse(
@@ -613,6 +964,7 @@ export class SessionRelay {
 		state.held = [];
 		state.working = false;
 		state.stopRequested = false;
+		state.answeredTools = [];
 		if (progress !== null) {
 			await this.retireProgress(progress);
 		}
@@ -658,6 +1010,48 @@ export class SessionRelay {
 		state.recentIds = [id];
 		return true;
 	}
+}
+
+/** セッションが出したファイル */
+interface OutputFile {
+	id: string;
+	filename: string;
+	size_bytes: number;
+	mime_type: string;
+	created_at: string;
+}
+
+/**
+ * Discordに1つ上げられるファイルの大きさ。サーバーのブーストの段階で決まる
+ * (段階2は50MB、段階3は100MB、それ以外は10MB)
+ */
+export function discordUploadLimit(premiumTier: number): number {
+	const megabytes = premiumTier >= 3 ? 100 : premiumTier === 2 ? 50 : 10;
+	return megabytes * 1024 * 1024;
+}
+
+/** 出すファイルの名前。/mnt/session/outputs/ から後ろにする */
+function outputName(path: string): string {
+	const trimmed = path.trim();
+	return trimmed.startsWith(OUTPUTS_DIR)
+		? trimmed.slice(OUTPUTS_DIR.length)
+		: trimmed.replace(/^\/+/, "");
+}
+
+function baseName(path: string): string {
+	return path.split("/").at(-1) ?? path;
+}
+
+/** 置き場所に使うファイルの名前。区切りの文字(/と\)と制御文字を「_」にし、100文字までにする */
+export function safeFileName(filename: string): string {
+	const name = [...filename]
+		.map((char) =>
+			char.charCodeAt(0) < 32 || char === "/" || char === "\\" ? "_" : char,
+		)
+		.join("")
+		.trim()
+		.slice(0, 100);
+	return name === "" || name === "." || name === ".." ? "file" : name;
 }
 
 /** 本人の発言の本文。メンション(<@ID>)は、@名前にする */
