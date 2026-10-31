@@ -625,6 +625,7 @@ describe("返答でスキルを使う", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_pinned_messages",
 			"find_members",
 			"read_file",
 			"read_skill",
@@ -684,6 +685,7 @@ describe("返答でスキルを使う", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_pinned_messages",
 			"find_members",
 			"read_file",
 			"read_skill",
@@ -709,6 +711,7 @@ describe("返答でスキルを使う", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_pinned_messages",
 			"find_members",
 			"read_file",
 		]);

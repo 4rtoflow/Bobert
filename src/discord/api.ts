@@ -2,6 +2,7 @@ import type {
 	APIChannel,
 	APIGuildMember,
 	APIMessage,
+	RESTGetAPIChannelMessagesPinsResult,
 	RESTGetAPIChannelResult,
 	RESTGetAPIChannelThreadsArchivedPublicResult,
 	RESTGetAPIGatewayBotResult,
@@ -155,6 +156,22 @@ export function getChannelMessages(
 		"GET channel messages",
 		"GET",
 		`/channels/${channelId}/messages?${query}`,
+		{ botToken },
+	);
+}
+
+/**
+ * チャンネルのピン留めされたメッセージを、新しくピン留めされた順に、最大50件取得する。
+ * 読むにはメッセージ履歴を読む権限が必要
+ */
+export function getChannelPins(
+	botToken: string,
+	channelId: string,
+): Promise<RESTGetAPIChannelMessagesPinsResult> {
+	return discordRequest(
+		"GET channel pins",
+		"GET",
+		`/channels/${channelId}/messages/pins?limit=50`,
 		{ botToken },
 	);
 }

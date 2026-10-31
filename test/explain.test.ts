@@ -244,6 +244,7 @@ describe("説明の仕事", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_pinned_messages",
 			"find_members",
 			"read_file",
 		]);
@@ -290,6 +291,7 @@ describe("説明の仕事", () => {
 			"read_channel_history",
 			"search_channel_messages",
 			"list_channels",
+			"read_pinned_messages",
 			"find_members",
 			"read_file",
 			"read_reply_chain",

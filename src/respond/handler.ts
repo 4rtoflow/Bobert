@@ -5,6 +5,7 @@ import {
 	DiscordApiError,
 	getChannelMessage,
 	getChannelMessages,
+	getChannelPins,
 	triggerTyping,
 } from "../discord/api";
 import { chatWithAnthropic } from "../llm/anthropic";
@@ -46,6 +47,7 @@ import {
 	type HistoryDeps,
 	type MessageFetcher,
 	namesFor,
+	type PinLister,
 	readConversation,
 	refreshImageUrls,
 } from "./history";
@@ -83,6 +85,7 @@ import {
 	channelHistoryTool,
 	channelListTool,
 	type FileReads,
+	pinnedMessagesTool,
 	readFileTool,
 	readSkillTool,
 	replyChainTool,
@@ -200,6 +203,17 @@ export function historyFor(
 			),
 		ingest: (messages) => enqueueIngest(env, messages),
 		knownNames: location.knownNames,
+	};
+}
+
+/** Discordから、チャンネルのピン留めされたメッセージを読む(ピン留めを読む道具で使う) */
+function pinListerFor(token: string): PinLister {
+	return async (channelId) => {
+		const pins = await getChannelPins(token, channelId);
+		return {
+			messages: pins.items.map((item) => item.message),
+			hasMore: pins.has_more,
+		};
 	};
 }
 
@@ -433,7 +447,7 @@ export async function answer(
 	const webSearch = settings.featWebSearch
 		? await webSearchAvailable(env, userId, settings, model)
 		: false;
-	// AIが必要なときに、このチャンネルと、サーバーの共有チャンネルの履歴を読んだり探したりできるようにする。
+	// AIが必要なときに、このチャンネルと、サーバーの共有チャンネルの履歴やピン留めを読んだり探したりできるようにする。
 	// メンションを書けるよう、メンバーを名前で探せるようにする(仕様: docs/spec/architecture.md「メンバーとメンション」)。
 	// このサーバーにスキルがあれば、その一覧を指示に入れ、本文を読めるようにする(仕様: docs/spec/behavior.md「スキル」)。
 	// 会話の最初のメッセージが返信なら、その返信先も読めるようにする(要約があるときは、要約した部分の続きなので渡さない)。
@@ -449,6 +463,12 @@ export async function answer(
 				channelHistoryTool(history, botUserId, files),
 				searchMessagesTool(history, botUserId, files),
 				channelListTool(history),
+				pinnedMessagesTool(
+					history,
+					botUserId,
+					pinListerFor(env.DISCORD_BOT_TOKEN),
+					files,
+				),
 				...(guildId !== null
 					? [
 							findMembersTool(
