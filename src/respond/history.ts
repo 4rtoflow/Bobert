@@ -76,6 +76,8 @@ export interface Conversation {
 	messages: StoredMessageInput[];
 	/** 会話の古い部分を要約してあれば、その要約 */
 	summary: ConversationSummary | null;
+	/** いちばん古い発言の返信先が削除されていたので、そこでたどるのを止めた */
+	parentDeleted: boolean;
 }
 
 /**
@@ -87,34 +89,39 @@ export async function readConversation(
 	start: StoredMessageInput,
 	deps: HistoryDeps,
 ): Promise<Conversation> {
-	const { chain, summary } = await walkReplyChain(start, deps, {
+	const { chain, summary, parentDeleted } = await walkReplyChain(start, deps, {
 		limit: Number.MAX_SAFE_INTEGER,
 		stopAtSummary: true,
 	});
 	// 要約した位置(要約の終わりのメッセージ)と、それより前は、要約に含まれている
-	return { messages: summary ? chain.slice(1) : chain, summary };
+	return {
+		messages: summary ? chain.slice(1) : chain,
+		summary,
+		parentDeleted,
+	};
 }
 
 /**
  * 返信のつながりを、startから古い方へたどって読み、古い順に並べて返す(startを含めて、最大limit件)。
- * 要約した位置でも止めない(返信先を読む道具で使う)
+ * 要約した位置でも止めない(返信先を読む道具で使う)。
+ * parentDeletedなら、いちばん古いメッセージの返信先が削除されていたので、そこで止めた
  */
 export async function readReplyChain(
 	start: StoredMessageInput,
 	deps: HistoryDeps,
 	limit: number,
-): Promise<StoredMessageInput[]> {
-	const { chain } = await walkReplyChain(start, deps, {
+): Promise<{ messages: StoredMessageInput[]; parentDeleted: boolean }> {
+	const { chain, parentDeleted } = await walkReplyChain(start, deps, {
 		limit,
 		stopAtSummary: false,
 	});
-	return chain;
+	return { messages: chain, parentDeleted };
 }
 
 /**
  * 返信のつながりをたどる。保存したメッセージ(D1)から読む。
  * 保存していないもの(Botが動き出す前のものや、保存の処理がまだ済んでいないもの)は、Discordから読み、保存にも回す。
- * Discordから読むのは、1回で100件まで。返信先が消えていたら、そこで止める。
+ * Discordから読むのは、1回で100件まで。返信先が消えていたら、そこで止め、parentDeletedにする。
  * stopAtSummaryなら、要約した位置で止め、その要約を返す。
  */
 async function walkReplyChain(
@@ -124,10 +131,12 @@ async function walkReplyChain(
 ): Promise<{
 	chain: StoredMessageInput[];
 	summary: ConversationSummary | null;
+	parentDeleted: boolean;
 }> {
 	const chain = [start];
 	const fetched: StoredMessageInput[] = [];
 	let summary: ConversationSummary | null = null;
+	let parentDeleted = false;
 	let nextId = start.replyToId;
 	while (nextId !== null && chain.length < options.limit) {
 		const stored = await loadStoredChain(
@@ -151,6 +160,8 @@ async function walkReplyChain(
 		}
 		const message = await deps.fetchMessage(deps.channelId, nextId);
 		if (message === null) {
+			// 保存分にもDiscordにもない。削除されている(同じチャンネルなので、読む権限がないことは、まずない)
+			parentDeleted = true;
 			break;
 		}
 		const converted = fromDiscord(message, deps.guildId);
@@ -192,7 +203,7 @@ async function walkReplyChain(
 	if (fetched.length > 0) {
 		await deps.ingest(fetched);
 	}
-	return { chain: chain.reverse(), summary };
+	return { chain: chain.reverse(), summary, parentDeleted };
 }
 
 /**

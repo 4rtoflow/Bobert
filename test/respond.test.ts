@@ -350,6 +350,33 @@ describe("メンションと返信への応答", () => {
 		});
 	});
 
+	it("話しかけたメッセージの返信先が削除されていたら、そのことをAIに伝える", async () => {
+		const user = { ...ALICE, id: "131" };
+		await saveCredential(env, user.id, "anthropic", {
+			apiKey: "sk-ant-test",
+			workspaceId: null,
+		});
+		// 返信先は、Discordにも保存分にもない
+		const deleted = discordMessage("5026", BOB, "消された発言");
+		const trigger = discordReply(
+			"5027",
+			user,
+			`<@${BOT.id}> これどういう意味?`,
+			deleted,
+			{ mentions: [BOT] },
+		);
+		const calls = mockApis([trigger], () => anthropicStream("分からないよ"));
+
+		await handleRespondJob(respondJob(trigger), testEnv);
+
+		const request = calls.find(
+			(call) => call.url.hostname === "api.anthropic.com",
+		);
+		expect(JSON.stringify(request?.body)).toContain(
+			"これどういう意味?\\n(返信先のメッセージは削除されています)",
+		);
+	});
+
 	it("長い返答は分けて投稿し、2通目からは前の返信につなげる", async () => {
 		const user = { ...ALICE, id: "111" };
 		await saveCredential(env, user.id, "anthropic", {

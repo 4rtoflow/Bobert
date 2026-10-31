@@ -209,6 +209,60 @@ describe("AIに渡す会話への変換", () => {
 		]);
 	});
 
+	it("編集されたメッセージには、本文の後に(編集済み)と書き添える。Bobertの発言には書かない", () => {
+		const edited = { edited_timestamp: "2026-10-24T00:05:00.000Z" };
+		const chain = stored(
+			discordMessage("1", BOB, "明日は9時集合", edited),
+			discordMessage("2", BOT, "了解!", edited),
+			discordMessage("3", ALICE, "わかった"),
+		);
+
+		const { messages } = toConversation(chain, OPTIONS);
+
+		expect(messages.map((message) => message.parts[0])).toEqual([
+			{ type: "text", text: at("bob: 明日は9時集合(編集済み)") },
+			{ type: "text", text: "了解!" },
+			{ type: "text", text: at("Alice: わかった") },
+		]);
+	});
+
+	it("いちばん古い発言の返信先が削除されていたら、そのことを書き添える", () => {
+		const chain = stored(
+			discordMessage("1", BOB, "それな"),
+			discordMessage("2", ALICE, "だよね"),
+		);
+
+		const { messages } = toConversation(chain, {
+			...OPTIONS,
+			parentDeleted: true,
+		});
+
+		expect(messages.map((message) => message.parts[0])).toEqual([
+			{
+				type: "text",
+				text: at("bob: それな\n(返信先のメッセージは削除されています)"),
+			},
+			{ type: "text", text: at("Alice: だよね") },
+		]);
+	});
+
+	it("Bobertの発言の返信先が削除されていたら、補う人の発言で、そのことを伝える", () => {
+		const chain = stored(
+			discordMessage("1", BOT, "こんにちは"),
+			discordMessage("2", ALICE, "やあ"),
+		);
+
+		const { messages } = toConversation(chain, {
+			...OPTIONS,
+			parentDeleted: true,
+		});
+
+		expect(messages[0]).toEqual({
+			role: "user",
+			parts: [{ type: "text", text: "(返信先のメッセージは削除されています)" }],
+		});
+	});
+
 	it("ほかのBotの発言は、Botであることと、どのコマンドへの返答かを書き添え、Embedの中身も渡す", () => {
 		const ohirun: APIUser = {
 			id: "300",

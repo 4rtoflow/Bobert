@@ -146,18 +146,33 @@ describe("返信のつながりを読む", () => {
 		});
 	});
 
-	it("返信先が消えていたら、そこで止める", async () => {
+	it("返信先が消えていたら、そこで止め、消えていたことを返す", async () => {
 		const deleted = discordMessage("1201", BOB, "消えた発言");
 		const trigger = discordReply("1202", ALICE, "これは?", deleted);
 		const { history, ingested } = fakeHistory([]);
 
-		const { messages: chain } = await readConversation(
+		const { messages: chain, parentDeleted } = await readConversation(
 			stored(trigger),
 			history,
 		);
 
 		expect(chain.map((message) => message.messageId)).toEqual(["1202"]);
+		expect(parentDeleted).toBe(true);
 		expect(ingested).toEqual([]);
+	});
+
+	it("会話の始まりまでたどれたときは、返信先が消えていたことにしない", async () => {
+		const first = discordMessage("1211", BOB, "はじめまして");
+		const trigger = discordReply("1212", ALICE, "よろしく", first);
+		const { history } = fakeHistory([first]);
+
+		const { messages: chain, parentDeleted } = await readConversation(
+			stored(trigger),
+			history,
+		);
+
+		expect(chain.map((message) => message.messageId)).toEqual(["1211", "1212"]);
+		expect(parentDeleted).toBe(false);
 	});
 
 	it("上限の件数までしか読まない(話しかけたメッセージに近いものから)", async () => {
@@ -175,7 +190,7 @@ describe("返信のつながりを読む", () => {
 		await saveMessages(env.DB, messages.slice(0, -1).map(stored));
 		const { history } = fakeHistory([]);
 
-		const chain = await readReplyChain(
+		const { messages: chain, parentDeleted } = await readReplyChain(
 			stored(messages.at(-1) as APIMessage),
 			history,
 			3,
@@ -186,6 +201,8 @@ describe("返信のつながりを読む", () => {
 			"1304",
 			"1305",
 		]);
+		// 上限で止めたときは、返信先が消えていたことにしない
+		expect(parentDeleted).toBe(false);
 	});
 });
 
