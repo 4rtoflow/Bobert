@@ -213,18 +213,31 @@ export async function findAllowedRepository(
 		: { status: "found", repository, token: result.token };
 }
 
+/** 本人が連携で許可したリポジトリを読んだ結果 */
+export type AllowedRepositories =
+	/** 連携していないか、GitHubでアプリが外されていた */
+	| { status: "unlinked" }
+	| { status: "found"; repositories: GitHubRepository[] };
+
 /**
- * 本人が連携で許可したリポジトリの名前(owner/repo)。連携していないか、アプリがどこにも入っていなければ空。
- * /agent の欄の候補に使う。アプリが外されていても、ここでは連携の記録を消さない(リポジトリを選んだときに気づく)
+ * 本人が連携で許可したリポジトリ(/agent のセレクトメニューに出す)。
+ * アプリがどこにも入っていなければ(GitHubで外された)、連携の記録を消して、連携していないと返す
  */
-export async function listAllowedRepositoryNames(
+export async function listAllowedRepositories(
 	env: Env,
 	userId: string,
-): Promise<string[]> {
+): Promise<AllowedRepositories> {
 	const result = await withToken(env, userId, API_TOKEN_VALIDITY_MS, (token) =>
 		allowedRepositories(token.value),
 	);
-	return result?.value?.map((entry) => entry.fullName) ?? [];
+	if (result === null) {
+		return { status: "unlinked" };
+	}
+	if (result.value === null) {
+		await unlink(env, userId, result.token.version, "uninstalled");
+		return { status: "unlinked" };
+	}
+	return { status: "found", repositories: result.value };
 }
 
 /** 本人が許可したリポジトリ。アプリがどこにも入っていなければnull */

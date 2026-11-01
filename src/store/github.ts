@@ -174,6 +174,13 @@ export async function deleteGitHubLink(
  */
 export type GitHubLinkStage = "authorize" | "install";
 
+/**
+ * 「GitHubと連携」を押した場面。
+ * - agent: /agent の返事から。連携できたら、同じメッセージを、リポジトリを選ぶセレクトメニューに書き換える
+ * - link: エージェントのチャンネルでの知らせなどから。連携できたら、「GitHubと連携しました。」とだけ書く
+ */
+export type GitHubLinkPurpose = "agent" | "link";
+
 /** 連携のリンクの途中の状態 */
 export interface GitHubLinkState {
 	/** 「GitHubと連携」を押した人 */
@@ -181,6 +188,7 @@ export interface GitHubLinkState {
 	/** ボタンへの返事(本人にだけ見える)のInteractionのトークン。連携できたら、この返事を書き換える */
 	interactionToken: string;
 	stage: GitHubLinkStage;
+	purpose: GitHubLinkPurpose;
 	/** 承認の画面のPKCEのcode_verifier。アプリを入れる画面からの戻りではnull */
 	codeVerifier: string | null;
 	expiresAt: number;
@@ -198,14 +206,15 @@ export async function saveGitHubLinkState(
 		db.prepare("DELETE FROM github_link_states WHERE expires_at < ?").bind(now),
 		db
 			.prepare(
-				`INSERT INTO github_link_states (state, user_id, interaction_token, stage, code_verifier, expires_at, created_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?)`,
+				`INSERT INTO github_link_states (state, user_id, interaction_token, stage, purpose, code_verifier, expires_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
 			.bind(
 				state,
 				value.userId,
 				value.interactionToken,
 				value.stage,
+				value.purpose,
 				value.codeVerifier,
 				value.expiresAt,
 				value.createdAt,
@@ -222,13 +231,14 @@ export async function takeGitHubLinkState(
 	const row = await db
 		.prepare(
 			`DELETE FROM github_link_states WHERE state = ?
-			RETURNING user_id, interaction_token, stage, code_verifier, expires_at, created_at`,
+			RETURNING user_id, interaction_token, stage, purpose, code_verifier, expires_at, created_at`,
 		)
 		.bind(state)
 		.first<{
 			user_id: string;
 			interaction_token: string;
 			stage: GitHubLinkStage;
+			purpose: GitHubLinkPurpose;
 			code_verifier: string | null;
 			expires_at: number;
 			created_at: number;
@@ -240,6 +250,7 @@ export async function takeGitHubLinkState(
 		userId: row.user_id,
 		interactionToken: row.interaction_token,
 		stage: row.stage,
+		purpose: row.purpose,
 		codeVerifier: row.code_verifier,
 		expiresAt: row.expires_at,
 		createdAt: row.created_at,

@@ -2,8 +2,6 @@ import type { RESTPutAPIApplicationCommandsJSONBody } from "discord-api-types/v1
 import {
 	AGENT_COMMAND_DESCRIPTION,
 	AGENT_COMMAND_NAME,
-	AGENT_REPOSITORY_OPTION_DESCRIPTION,
-	AGENT_REPOSITORY_OPTION_NAME,
 	ENDAGENT_COMMAND_DESCRIPTION,
 	ENDAGENT_COMMAND_NAME,
 } from "../agent/texts";
@@ -92,16 +90,6 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: AGENT_COMMAND_NAME,
 		description: AGENT_COMMAND_DESCRIPTION,
-		options: [
-			{
-				type: ApplicationCommandOptionType.String,
-				name: AGENT_REPOSITORY_OPTION_NAME,
-				description: AGENT_REPOSITORY_OPTION_DESCRIPTION,
-				required: false,
-				// 入力すると、本人がGitHubで許可したリポジトリを候補に出す
-				autocomplete: true,
-			},
-		],
 	},
 	{
 		...GUILD_ONLY,

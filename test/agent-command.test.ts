@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { repositorySelectMessage } from "../src/agent/repository-menu";
 import {
 	getAgentChannel,
 	getAgentResources,
@@ -8,13 +9,15 @@ import {
 } from "../src/agent/store";
 import { agentSessionStub } from "../src/agent/stubs";
 import {
+	AGENT_LINK_FIRST,
 	ALREADY_ENDED,
+	CHOOSE_REPOSITORY,
 	COMPACT_UNAVAILABLE,
 	createdMessage,
 	DELETE_AGENTS_NOTE,
 	END_CONFIRM,
 	ENDED,
-	GITHUB_NOT_LINKED_FOR_AGENT,
+	GITHUB_LINK_PROMPT,
 	KEY_MISSING,
 	NO_MANAGE_CHANNELS,
 	NOT_AGENT_CHANNEL,
@@ -24,8 +27,9 @@ import {
 	tooManySessions,
 } from "../src/agent/texts";
 import {
-	ApplicationCommandOptionType,
 	ApplicationCommandType,
+	ButtonStyle,
+	ComponentType,
 	InteractionResponseType,
 	InteractionType,
 	MessageFlags,
@@ -68,55 +72,73 @@ afterEach(() => {
 function agentCommand(
 	user: Awaited<ReturnType<typeof newUser>>,
 	permissions = AGENT_PERMISSIONS,
-	repository: string | null = null,
 ) {
 	return {
 		...guildInteraction(
 			InteractionType.ApplicationCommand,
-			{
-				id: "61",
-				name: "agent",
-				type: ApplicationCommandType.ChatInput,
-				...(repository === null
-					? {}
-					: {
-							options: [
-								{
-									name: "repository",
-									type: ApplicationCommandOptionType.String,
-									value: repository,
-								},
-							],
-						}),
-			},
+			{ id: "61", name: "agent", type: ApplicationCommandType.ChatInput },
 			user,
 		),
 		app_permissions: permissions,
 	};
 }
 
-/** /agent の repository の欄への入力(候補の問い合わせ) */
-function repositoryAutocomplete(
+/** /agent の返事(本人にだけ見える)の、ボタンかセレクトメニューを使う。valuesを渡すとセレクトメニュー */
+function menuComponent(
 	user: Awaited<ReturnType<typeof newUser>>,
-	value: string,
+	customId: string,
+	values: string[] | null = null,
+	permissions = AGENT_PERMISSIONS,
 ) {
-	return guildInteraction(
-		InteractionType.ApplicationCommandAutocomplete,
-		{
-			id: "61",
-			name: "agent",
-			type: ApplicationCommandType.ChatInput,
-			options: [
-				{
-					name: "repository",
-					type: ApplicationCommandOptionType.String,
-					value,
-					focused: true,
-				},
-			],
-		},
-		user,
-	);
+	return {
+		...guildInteraction(
+			InteractionType.MessageComponent,
+			values === null
+				? { custom_id: customId, component_type: ComponentType.Button }
+				: {
+						custom_id: customId,
+						component_type: ComponentType.StringSelect,
+						values,
+					},
+			user,
+		),
+		app_permissions: permissions,
+	};
+}
+
+/** /agent を使い、返事の「リポジトリを使わずに始める」を押して、セッションを始める */
+async function startWithoutRepository(
+	user: Awaited<ReturnType<typeof newUser>>,
+	permissions = AGENT_PERMISSIONS,
+	guildId = GUILD_ID,
+) {
+	await sendInteraction({
+		...agentCommand(user, permissions),
+		guild_id: guildId,
+	});
+	await sendInteraction({
+		...menuComponent(user, "agent:start_plain", null, permissions),
+		guild_id: guildId,
+	});
+}
+
+/** 保留にした返事を書き換えた中身(古い順) */
+function editedBodies(calls: FetchCall[]): {
+	content?: string;
+	components?: {
+		components: {
+			custom_id?: string;
+			url?: string;
+			options?: { label: string; value: string }[];
+		}[];
+	}[];
+}[] {
+	return calls
+		.filter(
+			(call) =>
+				call.method === "PATCH" && call.url.pathname.includes("/webhooks/"),
+		)
+		.map((call) => call.body as ReturnType<typeof editedBodies>[number]);
 }
 
 /** GitHubと連携した記録を入れる(期限のないトークン) */
@@ -143,10 +165,18 @@ function allowedRepositoriesApi(call: FetchCall): Response | null {
 	if (call.url.pathname === "/user/installations/11/repositories") {
 		return Response.json({
 			total_count: 2,
-			repositories: ["octocat/hello", "octocat/world"].map((fullName) => ({
-				full_name: fullName,
-				default_branch: "main",
-			})),
+			repositories: [
+				{
+					full_name: "octocat/hello",
+					default_branch: "main",
+					pushed_at: "2026-10-01T00:00:00Z",
+				},
+				{
+					full_name: "octocat/world",
+					default_branch: "main",
+					pushed_at: "2026-10-30T00:00:00Z",
+				},
+			],
 		});
 	}
 	return new Response(null, { status: 404 });
@@ -297,7 +327,7 @@ describe("/agent", () => {
 		);
 	});
 
-	it("チャンネルを作り、セッションを始め、最初のメッセージを出す", async () => {
+	it("「リポジトリを使わずに始める」で、チャンネルを作り、セッションを始め、最初のメッセージを出す", async () => {
 		const user = await newUser("anthropic");
 		const calls = mockAgentApis();
 
@@ -307,6 +337,13 @@ describe("/agent", () => {
 			InteractionResponseType.DeferredChannelMessageWithSource,
 		);
 		expect(response.data.flags).toBe(MessageFlags.Ephemeral);
+		// /agent の返事では、まだセッションを始めない
+		expect(
+			calls.some((call) => call.url.hostname === "api.anthropic.com"),
+		).toBe(false);
+
+		await sendInteraction(menuComponent(user, "agent:start_plain"));
+
 		const channelCall = calls.find((call) =>
 			call.url.pathname.endsWith("/channels"),
 		);
@@ -352,7 +389,7 @@ describe("/agent", () => {
 		expect(sessionAgent(calls).system).not.toContain("スキル");
 		// リポジトリを選ばなければ、つながず、PRを作る道具も渡さない
 		expect(sessionAgent(calls).system).toContain(
-			"- このセッションには、GitHubのリポジトリをつないでいません。リポジトリを使いたいと言われたら、/agent の repository の欄でリポジトリを選んで、新しいセッションを始めるよう伝えてください。\n- Webページ、",
+			"- このセッションには、GitHubのリポジトリをつないでいません。リポジトリを使いたいと言われたら、/agent でリポジトリを選んで、新しいセッションを始めるよう伝えてください。\n- Webページ、",
 		);
 		expect(sessionCall?.body).not.toHaveProperty("resources");
 		const first = calls.find(
@@ -394,7 +431,11 @@ describe("/agent", () => {
 						`/api/v10/channels/${channelId}/messages/pins/m1`,
 			),
 		).toBe(true);
-		expect(editedContent(calls)).toBe(createdMessage(channelId));
+		// 選んだメッセージを、作ったチャンネルの知らせに書き換え、ボタンを外す
+		expect(editedBodies(calls).at(-1)).toEqual({
+			content: createdMessage(channelId),
+			components: [],
+		});
 
 		const channel = await getAgentChannel(env.DB, channelId);
 		expect(channel).toMatchObject({
@@ -430,7 +471,7 @@ describe("/agent", () => {
 				: null,
 		);
 
-		await sendInteraction({ ...agentCommand(user), guild_id: guildId });
+		await startWithoutRepository(user, AGENT_PERMISSIONS, guildId);
 
 		const agent = sessionAgent(calls);
 		expect(agent.system).toContain(
@@ -449,9 +490,7 @@ describe("/agent", () => {
 		const user = await newUser("anthropic");
 		const calls = mockAgentApis();
 
-		await sendInteraction(
-			agentCommand(user, String(PermissionFlags.ManageChannels)),
-		);
+		await startWithoutRepository(user, String(PermissionFlags.ManageChannels));
 
 		const first = calls.find(
 			(call) =>
@@ -472,7 +511,7 @@ describe("/agent", () => {
 		);
 	});
 
-	it("repository の欄でリポジトリを選ぶと、セッションを作るときにつなぎ、PRを作る道具を渡す", async () => {
+	it("連携している人には、最近pushした順にリポジトリを並べたセレクトメニューを出し、選んだリポジトリを、セッションを作るときにつなぐ", async () => {
 		const user = await newUser("anthropic");
 		await linkGitHub(user.id);
 		const calls = mockAgentApis((call) => {
@@ -498,8 +537,35 @@ describe("/agent", () => {
 			return allowedRepositoriesApi(call);
 		});
 
+		await sendInteraction(agentCommand(user));
+
+		expect(editedBodies(calls)[0]).toEqual({
+			content: CHOOSE_REPOSITORY,
+			components: [
+				{
+					type: ComponentType.ActionRow,
+					components: [
+						{
+							type: ComponentType.StringSelect,
+							custom_id: "agent:repository",
+							placeholder: "リポジトリを選ぶ",
+							options: [
+								{ label: "リポジトリを使わない", value: "none" },
+								// octocat/world の方が、後でpushされている
+								{ label: "octocat/world", value: "octocat/world" },
+								{ label: "octocat/hello", value: "octocat/hello" },
+							],
+						},
+					],
+				},
+			],
+		});
+		expect(
+			calls.some((call) => call.url.hostname === "api.anthropic.com"),
+		).toBe(false);
+
 		await sendInteraction(
-			agentCommand(user, AGENT_PERMISSIONS, "octocat/hello"),
+			menuComponent(user, "agent:repository", ["octocat/hello"]),
 		);
 
 		const sessionCall = calls.find(
@@ -522,24 +588,55 @@ describe("/agent", () => {
 		expect(agent.system).toContain(
 			"- このセッションでは、GitHubのリポジトリ octocat/hello を /workspace/hello に取り込んであります。",
 		);
+		expect(editedBodies(calls).at(-1)?.content).toContain("を作りました。");
+		expect(editedBodies(calls).at(-1)?.components).toEqual([]);
 	});
 
-	it("GitHubと連携していない人がリポジトリを入れたら、連携のボタンを付けて案内し、セッションもチャンネルも作らない", async () => {
+	it("セレクトメニューで「リポジトリを使わない」を選ぶと、リポジトリをつながずに始める", async () => {
+		const user = await newUser("anthropic");
+		await linkGitHub(user.id);
+		const calls = mockAgentApis(allowedRepositoriesApi);
+
+		await sendInteraction(menuComponent(user, "agent:repository", ["none"]));
+
+		const sessionCall = calls.find(
+			(call) => call.method === "POST" && call.url.pathname === "/v1/sessions",
+		);
+		expect(sessionCall?.body).not.toHaveProperty("resources");
+		expect(sessionAgent(calls).tools.map((tool) => tool.name)).not.toContain(
+			"create_pull_request",
+		);
+		expect(editedBodies(calls).at(-1)?.content).toContain("を作りました。");
+	});
+
+	it("連携していない人には、セレクトメニューの前に、連携のボタンと「リポジトリを使わずに始める」を出す", async () => {
 		const user = await newUser("anthropic");
 		const calls = mockAgentApis();
 
-		await sendInteraction(
-			agentCommand(user, AGENT_PERMISSIONS, "octocat/hello"),
-		);
+		await sendInteraction(agentCommand(user));
 
-		expect(editedContent(calls)).toBe(GITHUB_NOT_LINKED_FOR_AGENT);
-		const edit = calls.find(
-			(call) =>
-				call.method === "PATCH" && call.url.pathname.includes("/webhooks/"),
-		)?.body as { components: { components: { custom_id: string }[] }[] };
-		expect(
-			edit.components[0]?.components.map((button) => button.custom_id),
-		).toEqual(["agent:github"]);
+		expect(editedBodies(calls)[0]).toEqual({
+			content: AGENT_LINK_FIRST,
+			components: [
+				{
+					type: ComponentType.ActionRow,
+					components: [
+						{
+							type: ComponentType.Button,
+							style: ButtonStyle.Primary,
+							label: "GitHubと連携",
+							custom_id: "agent:github_start",
+						},
+						{
+							type: ComponentType.Button,
+							style: ButtonStyle.Secondary,
+							label: "リポジトリを使わずに始める",
+							custom_id: "agent:start_plain",
+						},
+					],
+				},
+			],
+		});
 		expect(
 			calls.some((call) => call.url.hostname === "api.anthropic.com"),
 		).toBe(false);
@@ -548,48 +645,73 @@ describe("/agent", () => {
 		);
 	});
 
-	it("許可していないリポジトリを入れたら、使えないと知らせ、セッションを作らない", async () => {
+	it("/agent の返事の「GitHubと連携」を押すと、同じメッセージを、GitHubへのリンクと「リポジトリを使わずに始める」に書き換える", async () => {
+		const user = await newUser("anthropic");
+		mockAgentApis();
+
+		const response = await sendInteraction(
+			menuComponent(user, "agent:github_start"),
+		);
+
+		expect(response.type).toBe(InteractionResponseType.UpdateMessage);
+		expect(response.data.content).toBe(GITHUB_LINK_PROMPT);
+		const [open, plain] = response.data.components[0].components;
+		expect(open).toMatchObject({
+			style: ButtonStyle.Link,
+			label: "GitHubを開く",
+		});
+		expect(open.url).toMatch(
+			/^https:\/\/github\.com\/login\/oauth\/authorize\?/,
+		);
+		expect(plain).toMatchObject({ custom_id: "agent:start_plain" });
+		// 連携できたら、このメッセージをセレクトメニューに書き換えるため、/agent からの連携だと覚えておく
+		const state = new URL(open.url).searchParams.get("state");
+		const row = await env.DB.prepare(
+			"SELECT purpose FROM github_link_states WHERE state = ?",
+		)
+			.bind(state)
+			.first<{ purpose: string }>();
+		expect(row?.purpose).toBe("agent");
+	});
+
+	it("選ぶ間にリポジトリが使えなくなっていたら、使えないと知らせ、セッションを作らない", async () => {
 		const user = await newUser("anthropic");
 		await linkGitHub(user.id);
 		const calls = mockAgentApis(allowedRepositoriesApi);
 
 		await sendInteraction(
-			agentCommand(user, AGENT_PERMISSIONS, "octocat/secret"),
+			menuComponent(user, "agent:repository", ["octocat/secret"]),
 		);
 
-		expect(editedContent(calls)).toBe(repositoryNotUsable("octocat/secret"));
+		expect(editedBodies(calls).at(-1)).toMatchObject({
+			content: repositoryNotUsable("octocat/secret"),
+			components: [{ components: [{ custom_id: "agent:start_plain" }] }],
+		});
 		expect(
 			calls.some((call) => call.url.hostname === "api.anthropic.com"),
 		).toBe(false);
 	});
 
-	it("repository の欄に入力すると、許可したリポジトリのうち、入力した文字を含むものを候補に出す", async () => {
-		const user = await newUser("anthropic");
-		await linkGitHub(user.id);
-		mockFetch(
-			(call) =>
-				allowedRepositoriesApi(call) ?? new Response(null, { status: 404 }),
+	it("リポジトリは24個まで出し、出しきれないときは、そのことを書き足す", () => {
+		const repositories = Array.from({ length: 30 }, (_, index) => ({
+			fullName: `octocat/repo-${index}`,
+			defaultBranch: "main",
+			pushedAt: index,
+		}));
+
+		const message = repositorySelectMessage(CHOOSE_REPOSITORY, repositories);
+
+		expect(message.content).toBe(
+			`${CHOOSE_REPOSITORY}\n-# 最近更新した24個を出しています。`,
 		);
-
-		const response = await sendInteraction(repositoryAutocomplete(user, "HEL"));
-
-		expect(response).toEqual({
-			type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-			data: { choices: [{ name: "octocat/hello", value: "octocat/hello" }] },
-		});
-	});
-
-	it("GitHubと連携していなければ、repository の欄に候補を出さない", async () => {
-		const user = await newUser("anthropic");
-		const calls = mockFetch(() => new Response(null, { status: 404 }));
-
-		const response = await sendInteraction(repositoryAutocomplete(user, ""));
-
-		expect(response).toEqual({
-			type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-			data: { choices: [] },
-		});
-		expect(calls).toEqual([]);
+		const [row] = (message.components ?? []) as {
+			components: { options: { value: string }[] }[];
+		}[];
+		const options = row?.components[0]?.options;
+		expect(options).toHaveLength(25);
+		expect(options?.[0]?.value).toBe("none");
+		// 最近pushしたものから
+		expect(options?.[1]?.value).toBe("octocat/repo-29");
 	});
 
 	it("キーが無効でセッションを始められなければ、理由を添えて知らせ、チャンネルは作らない", async () => {
@@ -606,9 +728,9 @@ describe("/agent", () => {
 				: null,
 		);
 
-		await sendInteraction(agentCommand(user));
+		await startWithoutRepository(user);
 
-		expect(editedContent(calls)).toBe(
+		expect(editedBodies(calls).at(-1)?.content).toBe(
 			"エージェントのセッションを始められませんでした。AnthropicのAPIキーが無効です。`/setup` から登録し直してください。",
 		);
 		expect(calls.some((call) => call.url.pathname.endsWith("/channels"))).toBe(
@@ -627,9 +749,9 @@ describe("/agent", () => {
 				: null,
 		);
 
-		await sendInteraction(agentCommand(user));
+		await startWithoutRepository(user);
 
-		expect(editedContent(calls)).toBe(NO_MANAGE_CHANNELS);
+		expect(editedBodies(calls).at(-1)?.content).toBe(NO_MANAGE_CHANNELS);
 		expect(
 			calls.some(
 				(call) =>

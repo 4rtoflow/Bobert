@@ -12,6 +12,7 @@ import {
 	GITHUB_PAGE_CANCELLED,
 	GITHUB_PAGE_ERROR,
 	GITHUB_PAGE_EXPIRED,
+	LINKED_CHOOSE_REPOSITORY,
 } from "../src/agent/texts";
 import { sha256Base64Url } from "../src/crypto";
 import {
@@ -251,6 +252,39 @@ describe("GitHubとの連携のリンク", () => {
 		expect(await again.text()).toContain(GITHUB_PAGE_EXPIRED);
 	});
 
+	it("/agent の返事の「GitHubと連携」から連携できたら、同じメッセージを、リポジトリを選ぶセレクトメニューに書き換える", async () => {
+		const owner = await newUser("anthropic");
+		const link = new URL(
+			await createGitHubAuthLink(env, ORIGIN, owner.id, BUTTON_TOKEN, "agent"),
+		);
+		const state = link.searchParams.get("state") ?? "";
+		const calls = mockFetch((call) => {
+			if (call.url.hostname === "github.com") {
+				return issuedTokens("ghu_new", "ghr_new");
+			}
+			return installationsApi(call) ?? Response.json({});
+		});
+
+		const response = await callback(
+			`code=the-code&state=${state}&installation_id=11&setup_action=install`,
+		);
+
+		expect(response.status).toBe(200);
+		const edit = calls.find(
+			(call) =>
+				call.method === "PATCH" &&
+				call.url.pathname ===
+					`/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/${BUTTON_TOKEN}/messages/@original`,
+		)?.body as {
+			content: string;
+			components: { components: { options: { value: string }[] }[] }[];
+		};
+		expect(edit.content).toBe(LINKED_CHOOSE_REPOSITORY);
+		expect(
+			edit.components[0]?.components[0]?.options.map((option) => option.value),
+		).toEqual(["none", "octocat/hello"]);
+	});
+
 	it("承認したが、まだアプリを入れていなければ、アプリを入れる画面へ進め、戻ってきたら保存する", async () => {
 		const owner = await newUser("anthropic");
 		const link = await createLink(owner.id);
@@ -308,6 +342,7 @@ describe("GitHubとの連携のリンク", () => {
 			userId: owner.id,
 			interactionToken: BUTTON_TOKEN,
 			stage: "install",
+			purpose: "link",
 			codeVerifier: null,
 			expiresAt: now + 60_000,
 			createdAt: now,
@@ -341,6 +376,7 @@ describe("GitHubとの連携のリンク", () => {
 				userId: owner.id,
 				interactionToken: BUTTON_TOKEN,
 				stage: "authorize",
+				purpose: "link",
 				codeVerifier: "verifier",
 				expiresAt: now - 1,
 				createdAt: now - 600_001,
