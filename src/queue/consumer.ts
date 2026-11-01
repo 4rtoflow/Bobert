@@ -1,6 +1,7 @@
 import { getChannelMessages } from "../discord/api";
 import { handleImportCommandJob } from "../import/start";
 import { logEvent } from "../log";
+import { handleMemoryJob } from "../memory/update";
 import { handleCompactJob } from "../respond/compact";
 import { handleExplainJob } from "../respond/explain";
 import { handleRespondJob } from "../respond/handler";
@@ -16,6 +17,7 @@ import type {
 	ImportCommandJob,
 	ImportJob,
 	IngestJob,
+	MemoryJob,
 	QueueMessage,
 	ReactionJob,
 	ReindexJob,
@@ -39,6 +41,7 @@ export async function handleQueueBatch(
 		explain: (job) => handleExplainJob(job, env),
 		compact: (job) => handleCompactJob(job, env),
 		importCommand: (job) => handleImportCommandJob(job, env),
+		memory: (job) => handleMemoryJob(job, env),
 		ingest: async (messages) => {
 			await ingestMessages(messages, deps);
 		},
@@ -79,6 +82,7 @@ export interface JobHandlers {
 	explain: (job: ExplainJob) => Promise<void>;
 	compact: (job: CompactJob) => Promise<void>;
 	importCommand: (job: ImportCommandJob) => Promise<void>;
+	memory: (job: MemoryJob) => Promise<void>;
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
 	delete: (jobs: DeleteJob[]) => Promise<void>;
 	import: (job: ImportJob) => Promise<void>;
@@ -116,6 +120,9 @@ export async function processBatch(
 		(message): message is Message<ImportCommandJob> =>
 			message.body.kind === "import_command",
 	);
+	const memory = messages.filter(
+		(message): message is Message<MemoryJob> => message.body.kind === "memory",
+	);
 	const ingest = messages.filter(
 		(message): message is Message<IngestJob> => message.body.kind === "ingest",
 	);
@@ -139,6 +146,7 @@ export async function processBatch(
 	await eachOne(explain, handlers.explain);
 	await eachOne(compact, handlers.compact);
 	await eachOne(importCommands, handlers.importCommand);
+	await eachOne(memory, handlers.memory);
 	await settle(ingest, (jobs) => handlers.ingest(jobs.map(withDefaults)));
 	await settle(deletion, (jobs) => handlers.delete(jobs));
 	await eachOne(imports, handlers.import);

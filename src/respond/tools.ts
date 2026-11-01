@@ -784,7 +784,7 @@ async function downloadText(url: string): Promise<string | null> {
 }
 
 /** チャンネルが共有チャンネルか(記録になければ、共有しないとみなす) */
-async function isShared(
+export async function isShared(
 	history: HistoryDeps,
 	channelId: string,
 ): Promise<boolean> {

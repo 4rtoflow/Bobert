@@ -450,6 +450,7 @@ describe("Queueの仕事の振り分け", () => {
 			explain: vi.fn(async () => {}),
 			compact: vi.fn(async () => {}),
 			importCommand: vi.fn(async () => {}),
+			memory: vi.fn(async () => {}),
 			ingest: vi.fn(async () => {}),
 			delete: vi.fn(async () => {}),
 			import: vi.fn(async () => {}),
