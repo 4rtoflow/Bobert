@@ -139,6 +139,8 @@ export interface GitHubRepository {
 	/** owner/repo */
 	fullName: string;
 	defaultBranch: string;
+	/** 最後にpushされた時刻(ミリ秒)。分からなければnull。/agent のセレクトメニューで、新しい順に並べるのに使う */
+	pushedAt: number | null;
 }
 
 /** インストールで、このトークンが使えるリポジトリ(本人がBobertに触らせると選んだもの) */
@@ -149,7 +151,11 @@ export async function listInstallationRepositories(
 	const repositories: GitHubRepository[] = [];
 	for (let page = 1; page <= MAX_REPOSITORY_PAGES; page++) {
 		const data = await apiRequest<{
-			repositories: { full_name: string; default_branch: string }[];
+			repositories: {
+				full_name: string;
+				default_branch: string;
+				pushed_at?: string | null;
+			}[];
 		}>(
 			token,
 			"GET",
@@ -159,6 +165,9 @@ export async function listInstallationRepositories(
 			...data.repositories.map((repository) => ({
 				fullName: repository.full_name,
 				defaultBranch: repository.default_branch,
+				pushedAt: repository.pushed_at
+					? Date.parse(repository.pushed_at)
+					: null,
 			})),
 		);
 		if (data.repositories.length < PER_PAGE) {

@@ -11,11 +11,6 @@ export const ENDAGENT_COMMAND_NAME = "endagent";
 export const AGENT_COMMAND_DESCRIPTION =
 	"Claudeのエージェントに作業を頼む、自分専用のチャンネルの作成(Anthropicのキーが必要)";
 
-/** /agent の、セッションにつなぐGitHubのリポジトリの欄(省ける。入力すると、本人が許可したリポジトリを候補に出す) */
-export const AGENT_REPOSITORY_OPTION_NAME = "repository";
-export const AGENT_REPOSITORY_OPTION_DESCRIPTION =
-	"このセッションで使うGitHubのリポジトリ。GitHubと連携すると、許可したリポジトリが候補に出る";
-
 /** /endagent の説明 */
 export const ENDAGENT_COMMAND_DESCRIPTION =
 	"エージェントのセッションの終了(エージェントのチャンネルの中で使う)";
@@ -209,23 +204,44 @@ export const GITHUB_LINKED = "GitHubと連携しました。";
 /** 連携していないのに、エージェントがGitHubを使おうとしたとき。ボタン「GitHubと連携」を付ける */
 export const GITHUB_NOT_LINKED = "GitHubと連携していません。";
 
-/** 連携していない人が、/agent でリポジトリを入れたとき(本人にだけ見える)。ボタン「GitHubと連携」を付ける */
-export const GITHUB_NOT_LINKED_FOR_AGENT =
-	"GitHubと連携していません。連携してから、もう一度 `/agent` でリポジトリを選んでください。";
+/**
+ * /agent の返事(本人にだけ見える)で、GitHubと連携していない人に見せる文。
+ * ボタン「GitHubと連携」と「リポジトリを使わずに始める」を付ける
+ */
+export const AGENT_LINK_FIRST =
+	"GitHubのリポジトリを使うときは、先にGitHubと連携してください。";
+export const START_WITHOUT_REPOSITORY_LABEL = "リポジトリを使わずに始める";
 
-/** /agent で、使えないリポジトリを入れたとき(本人にだけ見える。許可していない、名前の打ち間違いなど) */
+/** /agent の返事で、GitHubと連携している人に見せる文。リポジトリを選ぶセレクトメニューを付ける */
+export const CHOOSE_REPOSITORY =
+	"このセッションで使うGitHubのリポジトリを選んでください。";
+
+/** /agent の返事から連携できたとき。同じメッセージを、この文とセレクトメニューに書き換える */
+export const LINKED_CHOOSE_REPOSITORY =
+	"GitHubと連携しました。このセッションで使うGitHubのリポジトリを選んでください。";
+
+/** リポジトリを選ぶセレクトメニューの、何も選んでいないときの表示と、先頭の選択肢 */
+export const REPOSITORY_SELECT_PLACEHOLDER = "リポジトリを選ぶ";
+export const NO_REPOSITORY_OPTION_LABEL = "リポジトリを使わない";
+
+/** セレクトメニューに出しきれないとき(最近更新したものから、countまで出す)に、メッセージの最後に足す行 */
+export function repositoriesTruncated(count: number): string {
+	return `-# 最近更新した${count}個を出しています。`;
+}
+
+/** /agent で選んだリポジトリが、選ぶ間に使えなくなっていたとき(本人にだけ見える。GitHubで外されたなど) */
 export function repositoryNotUsable(fullName: string): string {
 	return `「${fullName}」は使えません。GitHubで、Bobertに触らせるリポジトリに選んでから、もう一度試してください。`;
 }
 
-/** /agent で、リポジトリを確かめるときに、GitHubとのやり取りでエラーが起きたとき(本人にだけ見える) */
+/** /agent で、リポジトリを読むときや確かめるときに、GitHubとのやり取りでエラーが起きたとき(本人にだけ見える) */
 export const GITHUB_LOOKUP_FAILED =
 	"GitHubとのやり取りでエラーが起きました。少し待ってから、もう一度試してください。";
 
 /** 連携のブラウザのページの見出しと本文 */
 export const GITHUB_PAGE_LINKED_TITLE = "GitHubと連携しました";
 export const GITHUB_PAGE_LINKED =
-	"Discordに戻って、`/agent` でリポジトリを選び、エージェントに作業を頼んでみてください。このページは閉じてかまいません。";
+	"Discordに戻ってください。このページは閉じてかまいません。";
 export const GITHUB_PAGE_FAILED_TITLE = "連携できませんでした";
 export const GITHUB_PAGE_CANCELLED =
 	"連携がキャンセルされたか、リンクが正しくありません。Discordで、もう一度「GitHubと連携」を押してください。";

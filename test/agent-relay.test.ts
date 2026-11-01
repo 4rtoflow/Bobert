@@ -890,7 +890,11 @@ function fakeRepositoryClient() {
 }
 
 /** 本人が許可したリポジトリ */
-const HELLO = { fullName: "octocat/hello", defaultBranch: "main" };
+const HELLO = {
+	fullName: "octocat/hello",
+	defaultBranch: "main",
+	pushedAt: null,
+};
 const TOKEN = { value: "ghu_token", expiresAt: null, version: 1 };
 
 function githubTool(name: string, input: Record<string, unknown>): AgentEvent {

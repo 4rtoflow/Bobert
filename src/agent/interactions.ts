@@ -1,5 +1,4 @@
 import type {
-	APIApplicationCommandAutocompleteInteraction,
 	APIButtonComponent,
 	APIChatInputApplicationCommandInteraction,
 	APIInteractionResponse,
@@ -15,7 +14,6 @@ import {
 	pinMessage,
 } from "../discord/api";
 import {
-	ApplicationCommandOptionType,
 	ButtonStyle,
 	ComponentType,
 	InteractionResponseType,
@@ -24,8 +22,9 @@ import {
 	PermissionFlags,
 } from "../discord/constants";
 import {
+	type AllowedRepositories,
 	findAllowedRepository,
-	listAllowedRepositoryNames,
+	listAllowedRepositories,
 	type RepositoryLookup,
 } from "../github/account";
 import { type MessageEdit, respondLater } from "../interactions/deferred";
@@ -33,7 +32,11 @@ import { logEvent } from "../log";
 import { createGitHubAuthLink } from "../oauth/github";
 import { LLM_ERROR_TEXT } from "../respond/replies";
 import { listSkills } from "../store/skills";
-import { getUserSettings, loadCredential } from "../store/users";
+import {
+	type Credential,
+	getUserSettings,
+	loadCredential,
+} from "../store/users";
 import { firstMessage } from "./first-message";
 import {
 	agentClient,
@@ -55,10 +58,19 @@ import {
 	AGENT_PR_CANCEL_PREFIX,
 	AGENT_PR_CREATE_PREFIX,
 	AGENT_STOP_ID,
-	githubLinkRow,
 	REPOSITORY_TOKEN_VALIDITY_MS,
 	repositoryName,
 } from "./relay";
+import {
+	AGENT_GITHUB_START_ID,
+	AGENT_REPOSITORY_SELECT_ID,
+	AGENT_START_PLAIN_ID,
+	linkFirstMessage,
+	linkOpenedComponents,
+	NO_REPOSITORY_VALUE,
+	repositorySelectMessage,
+	startWithoutRepositoryRow,
+} from "./repository-menu";
 import type { EndResult } from "./session-object";
 import {
 	type AgentChannel,
@@ -71,10 +83,10 @@ import {
 } from "./store";
 import { agentSessionStub, gatewayStub } from "./stubs";
 import {
-	AGENT_REPOSITORY_OPTION_NAME,
 	ALREADY_ENDED,
 	agentChannelName,
 	CHANNEL_LIMIT_REACHED,
+	CHOOSE_REPOSITORY,
 	createdMessage,
 	DELETE_CHANNEL_FAILED,
 	DELETE_CONFIRM,
@@ -85,7 +97,6 @@ import {
 	ENDED,
 	GITHUB_LINK_PROMPT,
 	GITHUB_LOOKUP_FAILED,
-	GITHUB_NOT_LINKED_FOR_AGENT,
 	GITHUB_OPEN_BUTTON_LABEL,
 	KEY_MISSING,
 	NO_MANAGE_CHANNELS,
@@ -97,13 +108,6 @@ import {
 	startFailed,
 	tooManySessions,
 } from "./texts";
-
-/** /agent の repository の欄の候補を返すまでの時間の上限。Discordは3秒以内の返事を求めるため */
-const AUTOCOMPLETE_TIMEOUT_MS = 2_500;
-
-/** 候補の数と、候補の名前の長さの上限(Discordの決まり) */
-const MAX_CHOICES = 25;
-const MAX_CHOICE_LENGTH = 100;
 
 /** 1人が1つのサーバーで持てる、終えていないセッションの数 */
 export const MAX_ACTIVE_SESSIONS = 3;
@@ -118,9 +122,17 @@ const MEMBER_ALLOW =
 	PermissionFlags.SendMessages |
 	PermissionFlags.ReadMessageHistory;
 
+/** /agent の返事や、その中のボタンとセレクトメニューのInteractionのうち、セッションを始めるのに使う部分 */
+interface StartContext {
+	application_id: string;
+	/** Bobertがそのチャンネルで持つ権限 */
+	app_permissions?: string;
+}
+
 /**
- * /agent: 本人専用のチャンネルを作り、Managed Agentsのセッションを始める(仕様: docs/spec/behavior.md「エージェント」)。
- * 時間がかかるので、本人にだけ見える保留の応答を返してから続ける
+ * /agent: 本人にだけ見える返事で、セッションにつなぐGitHubのリポジトリを選んでもらう(仕様: docs/spec/behavior.md「エージェント」)。
+ * 連携していない人には、先に連携のボタンを出す。選んだら、本人専用のチャンネルを作り、Managed Agentsのセッションを始める。
+ * GitHubを読むのに時間がかかるので、保留の応答を返してから続ける
  */
 export function agentCommand(
 	interaction: APIChatInputApplicationCommandInteraction,
@@ -134,42 +146,107 @@ export function agentCommand(
 		interaction,
 		user.id,
 		"reply",
-		() => startAgent(interaction, env, user, guildId),
+		() => agentStartMenu(interaction, env, user, guildId),
 		{ content: startFailed(LLM_ERROR_TEXT), components: [] },
 	);
 }
 
-async function startAgent(
-	interaction: APIChatInputApplicationCommandInteraction,
+/**
+ * /agent の返事。始められなければ(キーがない、セッションが多すぎる、権限がない)、その理由を返す。
+ * 連携していれば、リポジトリを選ぶセレクトメニューを、していなければ、連携のボタンを返す
+ */
+async function agentStartMenu(
+	context: StartContext,
 	env: Env,
 	user: APIUser,
 	guildId: string,
 ): Promise<MessageEdit> {
-	const db = env.DB;
-	const credential = await loadCredential(env, user.id, "anthropic");
-	if (credential === null) {
-		return { content: KEY_MISSING };
+	const checked = await precheck(env, user.id, guildId, context);
+	if ("reply" in checked) {
+		return checked.reply;
 	}
-	const active = await activeAgentChannels(db, guildId, user.id);
-	if (active.length >= MAX_ACTIVE_SESSIONS) {
+	let allowed: AllowedRepositories;
+	try {
+		allowed = await listAllowedRepositories(env, user.id);
+	} catch (error) {
+		// GitHubとのやり取りに失敗しても、リポジトリを使わずには始められるようにする
+		log("github_lookup_failed", user.id, error);
 		return {
-			content: tooManySessions(active.map((channel) => channel.channelId)),
+			content: GITHUB_LOOKUP_FAILED,
+			components: [startWithoutRepositoryRow()],
 		};
 	}
-	const permissions = BigInt(interaction.app_permissions ?? "0");
+	return allowed.status === "unlinked"
+		? linkFirstMessage()
+		: repositorySelectMessage(CHOOSE_REPOSITORY, allowed.repositories);
+}
+
+/**
+ * セッションを始められるかを確かめる(/agent の返事を出すときと、リポジトリを選んだときの両方で確かめる)。
+ * 始められれば本人のキーを、始められなければ、その理由の返事を返す
+ */
+async function precheck(
+	env: Env,
+	userId: string,
+	guildId: string,
+	context: StartContext,
+): Promise<{ credential: Credential } | { reply: MessageEdit }> {
+	const credential = await loadCredential(env, userId, "anthropic");
+	if (credential === null) {
+		return { reply: { content: KEY_MISSING, components: [] } };
+	}
+	const active = await activeAgentChannels(env.DB, guildId, userId);
+	if (active.length >= MAX_ACTIVE_SESSIONS) {
+		return {
+			reply: {
+				content: tooManySessions(active.map((channel) => channel.channelId)),
+				components: [],
+			},
+		};
+	}
+	const permissions = BigInt(context.app_permissions ?? "0");
 	if (!hasPermission(permissions, PermissionFlags.ManageChannels)) {
-		return { content: NO_MANAGE_CHANNELS };
+		return { reply: { content: NO_MANAGE_CHANNELS, components: [] } };
 	}
-	// GitHubのリポジトリを選んでいたら、連携と許可を確かめる。リポジトリは、セッションを作るときにしかつなげないため
-	const repositoryInput = repositoryOption(interaction);
-	let repository: ChosenRepository | null = null;
-	if (repositoryInput !== null) {
-		const chosen = await chooseRepository(env, user.id, repositoryInput);
-		if (chosen.status === "reply") {
-			return chosen.reply;
-		}
-		repository = chosen.repository;
+	return { credential };
+}
+
+/**
+ * /agent の返事のセレクトメニューで選んだリポジトリ(か、「リポジトリを使わない」)で、セッションを始める。
+ * 選ぶ間に、リポジトリが使えなくなっていたり、連携が外されていたりしたら、その返事を返す
+ */
+async function startFromMenu(
+	context: StartContext,
+	env: Env,
+	user: APIUser,
+	guildId: string,
+	value: string,
+): Promise<MessageEdit> {
+	if (value === NO_REPOSITORY_VALUE) {
+		return startAgent(context, env, user, guildId, null);
 	}
+	const chosen = await chooseRepository(env, user.id, value);
+	if (chosen.status === "reply") {
+		return chosen.reply;
+	}
+	return startAgent(context, env, user, guildId, chosen.repository);
+}
+
+/** 本人専用のチャンネルを作り、セッションを始める。repositoryを渡すと、セッションを作るときにつなぐ */
+async function startAgent(
+	context: StartContext,
+	env: Env,
+	user: APIUser,
+	guildId: string,
+	repository: ChosenRepository | null,
+): Promise<MessageEdit> {
+	const db = env.DB;
+	const checked = await precheck(env, user.id, guildId, context);
+	if ("reply" in checked) {
+		return checked.reply;
+	}
+	const { credential } = checked;
+	const permissions = BigInt(context.app_permissions ?? "0");
 
 	const settings = await getUserSettings(db, user.id);
 	const model = agentModel(settings);
@@ -199,7 +276,10 @@ async function startAgent(
 		repositoryResourceId = started.repositoryResourceId;
 	} catch (error) {
 		log("session_start_failed", user.id, error);
-		return { content: startFailed(describeAgentError(error, model)) };
+		return {
+			content: startFailed(describeAgentError(error, model)),
+			components: [],
+		};
 	}
 
 	let channelId: string;
@@ -219,7 +299,7 @@ async function startAgent(
 					allow: String(MEMBER_ALLOW),
 				},
 				{
-					id: interaction.application_id,
+					id: context.application_id,
 					type: OverwriteType.Member,
 					allow: String(MEMBER_ALLOW),
 				},
@@ -232,10 +312,10 @@ async function startAgent(
 		});
 		if (error instanceof DiscordApiError) {
 			if (error.code === MISSING_PERMISSIONS) {
-				return { content: NO_MANAGE_CHANNELS };
+				return { content: NO_MANAGE_CHANNELS, components: [] };
 			}
 			if (error.code === MAX_GUILD_CHANNELS) {
-				return { content: CHANNEL_LIMIT_REACHED };
+				return { content: CHANNEL_LIMIT_REACHED, components: [] };
 			}
 		}
 		throw error;
@@ -303,45 +383,7 @@ async function startAgent(
 		effort,
 		withRepository: repository !== null,
 	});
-	return { content: createdMessage(channelId) };
-}
-
-/**
- * /agent の repository の欄の候補: 本人がGitHubで許可したリポジトリのうち、入力した文字を含むもの
- * (大文字と小文字は区別しない)。連携していないときや、時間内に読めなかったときは、候補を出さない
- */
-export async function agentAutocomplete(
-	interaction: APIApplicationCommandAutocompleteInteraction,
-	env: Env,
-	userId: string,
-): Promise<APIInteractionResponse> {
-	const focused = interaction.data.options.find(
-		(option) => "focused" in option && option.focused === true,
-	);
-	const typed =
-		focused?.type === ApplicationCommandOptionType.String
-			? focused.value.trim().toLowerCase()
-			: "";
-	const names = await Promise.race([
-		listAllowedRepositoryNames(env, userId).catch((error: unknown) => {
-			log("repository_autocomplete_failed", userId, error);
-			return [];
-		}),
-		new Promise<string[]>((resolve) =>
-			setTimeout(() => resolve([]), AUTOCOMPLETE_TIMEOUT_MS),
-		),
-	]);
-	const choices = names
-		.filter(
-			(name) =>
-				name.length <= MAX_CHOICE_LENGTH && name.toLowerCase().includes(typed),
-		)
-		.slice(0, MAX_CHOICES)
-		.map((name) => ({ name, value: name }));
-	return {
-		type: InteractionResponseType.ApplicationCommandAutocompleteResult,
-		data: { choices },
-	};
+	return { content: createdMessage(channelId), components: [] };
 }
 
 /** /agent で選んだGitHubのリポジトリ。セッションにつなぐ名前と場所、本人のトークンと、その記録の番号 */
@@ -352,22 +394,8 @@ interface ChosenRepository {
 	tokenVersion: number;
 }
 
-/** /agent の repository の欄の値。入れていなければnull */
-function repositoryOption(
-	interaction: APIChatInputApplicationCommandInteraction,
-): string | null {
-	const option = interaction.data.options?.find(
-		(entry) => entry.name === AGENT_REPOSITORY_OPTION_NAME,
-	);
-	if (option?.type !== ApplicationCommandOptionType.String) {
-		return null;
-	}
-	const value = option.value.trim();
-	return value === "" ? null : value;
-}
-
 /**
- * /agent で入れたリポジトリを、本人が連携で許可したリポジトリの中から探す。
+ * /agent で選んだリポジトリを、本人が連携で許可したリポジトリの中から探す(選ぶ間に、外されていることがある)。
  * 見つからなければ、本人に見せる返事を返す。トークンは、セッションの最初の作業の間に切れないよう、
  * 残りの有効期間が足りなければ更新しておく(その後は、作業を始めるたびにBobertが入れ替える)
  */
@@ -381,7 +409,10 @@ async function chooseRepository(
 > {
 	const fullName = repositoryName(input);
 	if (fullName === null) {
-		return { status: "reply", reply: { content: repositoryNotUsable(input) } };
+		return {
+			status: "reply",
+			reply: { content: repositoryNotUsable(input), components: [] },
+		};
 	}
 	let lookup: RepositoryLookup;
 	try {
@@ -393,21 +424,25 @@ async function chooseRepository(
 		);
 	} catch (error) {
 		log("github_lookup_failed", userId, error);
-		return { status: "reply", reply: { content: GITHUB_LOOKUP_FAILED } };
+		return {
+			status: "reply",
+			reply: {
+				content: GITHUB_LOOKUP_FAILED,
+				components: [startWithoutRepositoryRow()],
+			},
+		};
 	}
 	switch (lookup.status) {
 		case "unlinked":
-			return {
-				status: "reply",
-				reply: {
-					content: GITHUB_NOT_LINKED_FOR_AGENT,
-					components: [githubLinkRow()],
-				},
-			};
+			// 選ぶ間に、GitHubでアプリが外された。連携のボタンから出し直す
+			return { status: "reply", reply: linkFirstMessage() };
 		case "not_allowed":
 			return {
 				status: "reply",
-				reply: { content: repositoryNotUsable(fullName) },
+				reply: {
+					content: repositoryNotUsable(fullName),
+					components: [startWithoutRepositoryRow()],
+				},
 			};
 		case "found":
 			return {
@@ -462,14 +497,55 @@ export async function agentComponent(
 	if (!customId.startsWith("agent:")) {
 		return null;
 	}
-	// 「GitHubと連携」は、押した人が自分のGitHubと連携するボタン。/agent の返事(エージェントのチャンネルの外)にも付けるので、
-	// チャンネルを確かめる前に扱う。連携のリンクは10分で使えなくなるので、押したときに作る
+	// /agent の返事(本人にだけ見える。エージェントのチャンネルの外)のボタンとセレクトメニューは、チャンネルを確かめる前に扱う
+	if (customId === AGENT_GITHUB_START_ID) {
+		// 連携のリンクは10分で使えなくなるので、押したときに作る。連携できたら、同じメッセージをセレクトメニューに書き換える
+		const link = await createGitHubAuthLink(
+			env,
+			origin,
+			userId,
+			interaction.token,
+			"agent",
+		);
+		return {
+			type: InteractionResponseType.UpdateMessage,
+			data: {
+				content: GITHUB_LINK_PROMPT,
+				components: linkOpenedComponents(link),
+			},
+		};
+	}
+	if (
+		customId === AGENT_START_PLAIN_ID ||
+		customId === AGENT_REPOSITORY_SELECT_ID
+	) {
+		const user = interaction.member?.user ?? interaction.user;
+		const guildId = interaction.guild_id;
+		if (user === undefined || guildId === undefined) {
+			return { type: InteractionResponseType.DeferredMessageUpdate };
+		}
+		const value =
+			interaction.data.component_type === ComponentType.StringSelect
+				? (interaction.data.values[0] ?? NO_REPOSITORY_VALUE)
+				: NO_REPOSITORY_VALUE;
+		return respondLater(
+			ctx,
+			interaction,
+			userId,
+			"update",
+			() => startFromMenu(interaction, env, user, guildId, value),
+			{ content: startFailed(LLM_ERROR_TEXT), components: [] },
+		);
+	}
+	// 「GitHubと連携」(エージェントのチャンネルで、連携が外されていたときの知らせ)は、押した人が自分のGitHubと連携するボタン。
+	// 連携のリンクは10分で使えなくなるので、押したときに作る
 	if (customId === AGENT_GITHUB_ID) {
 		const link = await createGitHubAuthLink(
 			env,
 			origin,
 			userId,
 			interaction.token,
+			"link",
 		);
 		return ephemeral(GITHUB_LINK_PROMPT, [
 			{

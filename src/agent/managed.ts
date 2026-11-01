@@ -75,7 +75,7 @@ export function agentSystemPrompt(
 
 function githubPromptLine(repository: SessionRepository | null): string {
 	if (repository === null) {
-		return "- このセッションには、GitHubのリポジトリをつないでいません。リポジトリを使いたいと言われたら、/agent の repository の欄でリポジトリを選んで、新しいセッションを始めるよう伝えてください。";
+		return "- このセッションには、GitHubのリポジトリをつないでいません。リポジトリを使いたいと言われたら、/agent でリポジトリを選んで、新しいセッションを始めるよう伝えてください。";
 	}
 	return `- このセッションでは、GitHubのリポジトリ ${repository.fullName} を ${repository.mountPath} に取り込んであります。gitでコミットしてpushできます(認証は、Anthropic側で付け足されます)。PRは、${CREATE_PULL_REQUEST_TOOL}の道具で作ってください。作る前に、利用者に確認が求められます。ほかのリポジトリは、このセッションでは使えません。使いたいと言われたら、/agent でリポジトリを選んで、新しいセッションを始めるよう伝えてください。`;
 }

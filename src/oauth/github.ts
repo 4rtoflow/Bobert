@@ -1,3 +1,4 @@
+import { repositorySelectMessage } from "../agent/repository-menu";
 import {
 	GITHUB_LINKED,
 	GITHUB_PAGE_CANCELLED,
@@ -6,12 +7,16 @@ import {
 	GITHUB_PAGE_FAILED_TITLE,
 	GITHUB_PAGE_LINKED,
 	GITHUB_PAGE_LINKED_TITLE,
+	LINKED_CHOOSE_REPOSITORY,
 } from "../agent/texts";
 import { randomToken, sha256Base64Url } from "../crypto";
 import { editOriginalInteractionResponse } from "../discord/api";
+import { listAllowedRepositories } from "../github/account";
 import { exchangeGitHubCode, listInstallations } from "../github/api";
+import type { MessageEdit } from "../interactions/deferred";
 import { logEvent } from "../log";
 import {
+	type GitHubLinkPurpose,
 	type GitHubLinkState,
 	type GitHubTokens,
 	saveGitHubLink,
@@ -35,13 +40,15 @@ const LINK_TTL_MS = 10 * 60_000;
  * 先にアプリを入れる画面へ送らないのは、すでにアプリを入れている人が、その画面からBobertに戻ってこないため
  * (アプリの設定を変えても、GitHubはコールバックへ戻さない)。
  * stateで、戻ってきたときに誰のトークンとして保存するかを決める。
- * ボタンへの返事のInteractionのトークンも一緒に保存し、連携できたら、その返事を書き換えて知らせる
+ * ボタンへの返事のInteractionのトークンも一緒に保存し、連携できたら、その返事を書き換えて知らせる。
+ * purposeがagent(/agent の返事のボタン)なら、連携できたら、その返事を、リポジトリを選ぶセレクトメニューに書き換える
  */
 export async function createGitHubAuthLink(
 	env: Env,
 	origin: string,
 	userId: string,
 	interactionToken: string,
+	purpose: GitHubLinkPurpose = "link",
 	now = Date.now(),
 ): Promise<string> {
 	const state = randomToken();
@@ -53,6 +60,7 @@ export async function createGitHubAuthLink(
 			userId,
 			interactionToken,
 			stage: "authorize",
+			purpose,
 			codeVerifier,
 			expiresAt: now + LINK_TTL_MS,
 			createdAt: now,
@@ -72,7 +80,8 @@ export async function createGitHubAuthLink(
  * GitHubからのコールバック: codeをトークンと交換し、暗号化して保存する。
  * - 承認の画面から戻ってきたが、まだアプリをどこにも入れていない: 同じstateで、アプリを入れる画面へ進める。
  *   アプリを入れると(「Request user authorization (OAuth) during installation」により)、GitHubがcodeとstateを付けて、またここへ戻す
- * - 済んだら、ボタンへの返事を「GitHubと連携しました。」に書き換える
+ * - 済んだら、ボタンへの返事を「GitHubと連携しました。」に書き換える。/agent の返事のボタンからなら、
+ *   リポジトリを選ぶセレクトメニューに書き換える
  */
 export async function handleGitHubCallback(
 	request: Request,
@@ -130,6 +139,7 @@ export async function handleGitHubCallback(
 
 /**
  * 連携できたことを、ボタンへの返事(本人にだけ見える)を書き換えて知らせる。
+ * /agent の返事のボタンからなら、同じメッセージを、リポジトリを選ぶセレクトメニューに書き換える。
  * 知らせられなくても連携は済んでいるので、記録だけ残す
  */
 async function afterLinked(env: Env, saved: GitHubLinkState): Promise<void> {
@@ -137,7 +147,9 @@ async function afterLinked(env: Env, saved: GitHubLinkState): Promise<void> {
 		await editOriginalInteractionResponse(
 			env.DISCORD_APPLICATION_ID,
 			saved.interactionToken,
-			{ content: GITHUB_LINKED, components: [] },
+			saved.purpose === "agent"
+				? await repositoryChoice(env, saved.userId)
+				: { content: GITHUB_LINKED, components: [] },
 		);
 	} catch (error) {
 		logEvent("oauth", "github_link_notify_failed", {
@@ -145,6 +157,31 @@ async function afterLinked(env: Env, saved: GitHubLinkState): Promise<void> {
 			error: error instanceof Error ? error.message : "unknown",
 		});
 	}
+}
+
+/**
+ * 連携できた直後の、リポジトリを選ぶセレクトメニュー。リポジトリを読めなければ、連携できたことだけを書く
+ * (もう一度 /agent を使えば、セレクトメニューが出る)
+ */
+async function repositoryChoice(
+	env: Env,
+	userId: string,
+): Promise<MessageEdit> {
+	try {
+		const allowed = await listAllowedRepositories(env, userId);
+		if (allowed.status === "found") {
+			return repositorySelectMessage(
+				LINKED_CHOOSE_REPOSITORY,
+				allowed.repositories,
+			);
+		}
+	} catch (error) {
+		logEvent("oauth", "github_repositories_failed", {
+			userId,
+			error: error instanceof Error ? error.name : "unknown",
+		});
+	}
+	return { content: GITHUB_LINKED, components: [] };
 }
 
 /** アプリを入れる画面(触らせるリポジトリを選ぶ画面)。stateは、戻ってくるときにGitHubがそのまま付ける */
