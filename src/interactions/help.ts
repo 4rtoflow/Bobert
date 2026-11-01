@@ -5,6 +5,7 @@ import {
 	InteractionResponseType,
 	MessageFlags,
 } from "../discord/constants";
+import { MEMORY_HELP } from "../memory/texts";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
 import { COMMANDS } from "./commands";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
@@ -35,6 +36,7 @@ export function helpText(): string {
 		"- 費用は、登録した本人のアカウントに請求されます。まず `/setup` でキーを登録してください。",
 		"- サーバーに寄付されたクレジット(`/donate`)があれば、先にそれを使います。キーがなくても使えます。",
 		"- `/regskills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。一覧と編集は `/skills` で行います。",
+		MEMORY_HELP,
 		AGENT_HELP_LINE,
 		"",
 		"**コマンド**",

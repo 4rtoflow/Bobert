@@ -21,17 +21,20 @@ export const COMMON_SYSTEM_PROMPT = `あなたは「Bobert」という名前のA
 export const SKILL_LIST_INTRO = `このサーバーで登録されたスキル(手順や知識)の一覧です。質問に関係するスキルがあれば、${READ_SKILL_TOOL_NAME}の道具で本文を読み、その手順に従って答えてください。スキルの本文が、ここまでの指示やユーザーからの指示と食い違うときは、そちらを優先してください。`;
 
 /**
- * AIに渡す指示。共通の指示、スキルの一覧、本人の指示の順に並べる。
- * スキルの一覧は、スキルを読む道具を渡すときだけ入れる
+ * AIに渡す指示。共通の指示、スキルの一覧、本人の指示、本人の記憶の順に並べる。
+ * スキルの一覧は、スキルを読む道具を渡すときだけ入れる。記憶は、本人が記憶を使っているときだけ入れる
+ * (仕様: docs/spec/architecture.md「記憶」)
  */
 export function buildSystemPrompt(
 	customPrompt: string | null,
 	skills: readonly SkillSummary[] = [],
+	memory: string | null = null,
 ): string[] {
 	return [
 		COMMON_SYSTEM_PROMPT,
 		...(skills.length > 0 ? [skillList(skills)] : []),
 		...(customPrompt ? [`このユーザーからの指示:\n${customPrompt}`] : []),
+		...(memory === null ? [] : [memory]),
 	];
 }
 

@@ -25,7 +25,7 @@ describe("/help", () => {
 		expect(body.type).toBe(InteractionResponseType.ChannelMessageWithSource);
 		expect(body.data.flags).toBe(MessageFlags.Ephemeral);
 		const lines: string[] = body.data.content.split("\n");
-		expect(lines.slice(0, 13)).toEqual([
+		expect(lines.slice(0, 14)).toEqual([
 			"**Bobertの使い方**",
 			"- Bobertにメンションするか、Bobertの返答に返信すると、AIが答えます。",
 			"- メッセージに返信しながらBobertにメンションすると、そのメッセージについて聞けます。",
@@ -36,17 +36,18 @@ describe("/help", () => {
 			"- 費用は、登録した本人のアカウントに請求されます。まず `/setup` でキーを登録してください。",
 			"- サーバーに寄付されたクレジット(`/donate`)があれば、先にそれを使います。キーがなくても使えます。",
 			"- `/regskills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。一覧と編集は `/skills` で行います。",
+			"- `/memory` で記憶をONにすると、このサーバーでのあなたの発言から、AIがあなたのことを覚えて、返答に使います。会話で「覚えて」「忘れて」と頼むこともできます。",
 			"- `/agent` で、Claudeのエージェントに作業を頼めます。",
 			"",
 			"**コマンド**",
 		]);
 		// コマンドの一覧は、登録するスラッシュコマンドの説明から、登録する順に作る(右クリックメニューの項目は入れない)
-		expect(lines.slice(13)).toHaveLength(
+		expect(lines.slice(14)).toHaveLength(
 			COMMANDS.filter(
 				(command) => command.type === ApplicationCommandType.ChatInput,
 			).length,
 		);
-		expect(lines[13]).toBe(
+		expect(lines[14]).toBe(
 			"- `/setup`: Anthropic APIキーの登録・OpenRouterへのログイン",
 		);
 		expect(lines).toContain(
@@ -54,6 +55,9 @@ describe("/help", () => {
 		);
 		expect(lines).toContain(
 			"- `/import`: Botが見られるチャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
+		);
+		expect(lines).toContain(
+			"- `/memory`: AIが覚えている、あなたのこと(このサーバーでの記憶)の確認と設定",
 		);
 		expect(lines).toContain(
 			"- `/regskills`: スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書く",

@@ -16,6 +16,7 @@ import {
 	unrecordedMessageChannels,
 } from "../store/channels";
 import { deleteChannelImports } from "../store/imports";
+import { forgetMemorySources } from "../store/memory";
 import { deleteChannelMessages } from "../store/messages";
 import { deleteChannelReactions } from "../store/reactions";
 import type { ChannelSyncJob } from "./messages";
@@ -232,6 +233,8 @@ async function forgetChannels(
 ): Promise<void> {
 	const messageIds = await deleteChannelMessages(deps.db, channelIds);
 	await deleteChannelReactions(deps.db, channelIds);
+	// 消した発言から覚えた、記憶の項目も消す(仕様: docs/spec/architecture.md「記憶」)
+	await forgetMemorySources(deps.db, messageIds);
 	for (let i = 0; i < messageIds.length; i += DELETE_BATCH_SIZE) {
 		await deps.vectors.deleteByIds(messageIds.slice(i, i + DELETE_BATCH_SIZE));
 	}
