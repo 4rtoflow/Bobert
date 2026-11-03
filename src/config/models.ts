@@ -226,7 +226,7 @@ export const DEFAULT_MODEL_KEY = "claude-haiku-5.5";
 export const MAX_WEB_SEARCHES = 5;
 
 /** 1回の返答で、Bobertの道具を呼べる回数の上限(仕様: docs/spec/architecture.md「過去メッセージを参照する道具」) */
-export const MAX_TOOL_CALLS = 5;
+export const MAX_TOOL_CALLS = 100;
 
 /**
  * 1回の返答で、スキルを読める回数の上限(仕様: docs/spec/behavior.md「スキル」)。

@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { APIMessage } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TOOL_CALLS } from "../src/config/models";
 import { chatWithAnthropic } from "../src/llm/anthropic";
 import { chatWithOpenRouter } from "../src/llm/openrouter";
 import type { ChatRequest, ChatTool } from "../src/llm/types";
@@ -144,7 +145,7 @@ describe("道具のやり取り(Anthropic)", () => {
 		expect(result.requestUsages).toHaveLength(2);
 	});
 
-	it("道具の呼び出しが上限(5回)に達したら、道具を使わずに答えさせる", async () => {
+	it("道具の呼び出しが上限(MAX_TOOL_CALLS)に達したら、道具を使わずに答えさせる", async () => {
 		const tool = fakeTool();
 		let call = 0;
 		const calls = mockFetch((fetchCall) =>
@@ -167,7 +168,7 @@ describe("道具のやり取り(Anthropic)", () => {
 			request("claude-haiku-5-5", [tool]),
 		);
 
-		expect(tool.calls).toBe(5);
+		expect(tool.calls).toBe(MAX_TOOL_CALLS);
 		expect(bodies(calls).at(-1).tool_choice).toEqual({ type: "none" });
 		expect(result.text).toBe("答えます。");
 	});
@@ -286,7 +287,7 @@ describe("道具のやり取り(OpenRouter)", () => {
 		expect(result.requestUsages).toHaveLength(2);
 	});
 
-	it("道具の呼び出しが上限(5回)に達したら、道具を使わずに答えさせる", async () => {
+	it("道具の呼び出しが上限(MAX_TOOL_CALLS)に達したら、道具を使わずに答えさせる", async () => {
 		const tool = fakeTool();
 		let call = 0;
 		const calls = mockFetch((fetchCall) =>
@@ -300,7 +301,7 @@ describe("道具のやり取り(OpenRouter)", () => {
 			request("openai/gpt-6-luna", [tool]),
 		);
 
-		expect(tool.calls).toBe(5);
+		expect(tool.calls).toBe(MAX_TOOL_CALLS);
 		expect(bodies(calls).at(-1).tool_choice).toBe("none");
 		expect(result.text).toBe("答えます。");
 	});

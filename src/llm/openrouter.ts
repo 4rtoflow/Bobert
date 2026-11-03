@@ -74,7 +74,7 @@ interface OpenRouterResponse {
  * 1回の返答で、AIとやり取りする回数の上限。道具の結果を返すときに数える。
  * スキルを読む分とファイルを読む分は、道具の呼び出しの上限とは別に数えるので、その回数を足す
  */
-const MAX_ROUNDS = 10 + MAX_SKILL_READS + MAX_FILE_READS;
+const MAX_ROUNDS = MAX_TOOL_CALLS + 5 + MAX_SKILL_READS + MAX_FILE_READS;
 
 /** 道具の結果で読んだ画像とPDFを、道具の結果の後に人の発言として渡すときの、前置き */
 const TOOL_FILES_INTRO = "(ファイルを読む道具で読んだファイルです)";
