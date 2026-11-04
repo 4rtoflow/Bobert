@@ -75,7 +75,7 @@ export interface CompactJob {
 
 /**
  * 記憶の更新(仕様: docs/spec/architecture.md「記憶」)。本人の発言から、覚えておくことの一覧を、本人のキーでまとめ直す。
- * 返答の後(1日1回まで)と、/memory でONにしたとき(最初の一覧)に入れる
+ * 返答の後(1日1回まで)と、/memory でONにしたとき(最初の一覧)と、読んでいない発言が残っているとき(続き)に入れる
  */
 export interface MemoryJob {
 	kind: "memory";

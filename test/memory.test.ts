@@ -495,7 +495,7 @@ describe("記憶をまとめる仕事", () => {
 		} satisfies MemoryJob;
 	}
 
-	it("最初は、新しい方から本人の発言とBobertの答えを読み、AIの変更を当てて保存する。ONにした画面を、一覧に書き換える", async () => {
+	it("最初は、いちばん古い発言から本人の発言とBobertの答えを読み、AIの変更を当てて保存する。ONにした画面を、一覧に書き換える", async () => {
 		const user = await userWith("anthropic");
 		await setMemoryEnabled(env.DB, user.id, GUILD_ID, true);
 		const first = stored(user.id, "Rustでゲームを作ってる", 1_000);
@@ -546,6 +546,59 @@ describe("記憶をまとめる仕事", () => {
 		expect(edit?.url.pathname).toBe(
 			`/api/v10/webhooks/${env.DISCORD_APPLICATION_ID}/interaction-token/messages/@original`,
 		);
+		expect(edit?.body).toEqual(memoryScreen(state));
+	});
+
+	it("1回で読む発言の数には上限があり、残りがあれば、続きを読む仕事を入れる。ONにした画面は、読み終えたときに書き換える", async () => {
+		const { environment, sent } = fakeQueues();
+		const user = await userWith("anthropic");
+		await setMemoryEnabled(env.DB, user.id, GUILD_ID, true);
+		await saveMessages(env.DB, [
+			stored(user.id, "いちばん古い発言", 1_000),
+			stored(user.id, "2番目の発言", 2_000),
+			stored(user.id, "いちばん新しい発言", 3_000),
+		]);
+		const calls = mockFetch((call) =>
+			call.url.hostname === "api.anthropic.com"
+				? answerWith({ add: [], update: [], delete: [] })
+				: Response.json({}),
+		);
+
+		await handleMemoryJob(job(user.id, "interaction-token"), environment, 2);
+
+		// いちばん古い発言から2件を読み、続きの仕事を入れる。画面は、まだ書き換えない
+		expect(synthesisRequests(calls).map((request) => request.input)).toEqual([
+			[
+				"今の一覧:",
+				"(まだありません)",
+				"",
+				"Aliceの新しい発言:",
+				`(m1) [${formatJst(1_000)}] いちばん古い発言`,
+				`(m2) [${formatJst(2_000)}] 2番目の発言`,
+			].join("\n"),
+		]);
+		expect(await loadMemory(env.DB, user.id, GUILD_ID)).toMatchObject({
+			readUntil: 2_000,
+		});
+		expect(sent).toEqual([job(user.id, "interaction-token")]);
+		expect(calls.some((call) => call.method === "PATCH")).toBe(false);
+
+		await handleMemoryJob(job(user.id, "interaction-token"), environment, 2);
+
+		// 続きの仕事は、残りの発言を読む。読み終えたので、続きは入れず、画面を書き換える
+		expect(synthesisRequests(calls).at(-1)?.input).toBe(
+			[
+				"今の一覧:",
+				"(まだありません)",
+				"",
+				"Aliceの新しい発言:",
+				`(m1) [${formatJst(3_000)}] いちばん新しい発言`,
+			].join("\n"),
+		);
+		const state = await loadMemory(env.DB, user.id, GUILD_ID);
+		expect(state).toMatchObject({ readUntil: 3_000 });
+		expect(sent).toHaveLength(1);
+		const edit = calls.find((call) => call.method === "PATCH");
 		expect(edit?.body).toEqual(memoryScreen(state));
 	});
 
