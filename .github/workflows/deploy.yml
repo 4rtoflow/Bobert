@@ -118,10 +118,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      # 依存パッケージは使わないので、インストールしない(TypeScriptのまま、Node.jsで実行する)
+      # 依存パッケージは使わないので、インストールしない(TypeScriptのまま、Node.jsで実行する)。
+      # setup-nodeは、package.json の packageManager(pnpm)を見て、pnpmのキャッシュを自動で使おうとする。
+      # このジョブではpnpmを入れないので、キャッシュを使わないようにする(使うと、pnpmが見つからずに失敗する)
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          package-manager-cache: false
       # Discordに送れなかったときは、タグを付けずに失敗する。デプロイはそのまま。
       # 失敗したジョブをやり直す(Re-run failed jobs)と、同じ内容を送り直す
       - name: Post What's New and tag the version
