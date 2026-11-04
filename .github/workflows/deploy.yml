@@ -1,6 +1,8 @@
 # mainへのpushで、チェックを実行し、通ったら本番にデプロイする。
 # 順番: チェック(ci.yml)→ D1のマイグレーション → Workerのデプロイ → スラッシュコマンドの登録
-# 使うシークレット: CLOUDFLARE_API_TOKEN、CLOUDFLARE_ACCOUNT_ID、ADMIN_TOKEN(準備はREADME「本番へのデプロイ」)
+#       → What's NewをDiscordに送り、版のタグを付ける
+# 使うシークレット: CLOUDFLARE_API_TOKEN、CLOUDFLARE_ACCOUNT_ID、ADMIN_TOKEN、WHATS_NEW_WEBHOOK_URL
+# (準備はREADME「本番へのデプロイ」)
 # (仕様: docs/spec/architecture.md「開発と運用」)。
 name: Deploy
 
@@ -99,3 +101,31 @@ jobs:
           done
           echo "::error::デプロイした版(${deployed})で登録できたことを、2分のうちに確かめられませんでした。"
           exit 1
+
+  # デプロイが済んだら、前の版のタグからmainに入ったPRをラベルで分け、版を上げて、
+  # What's NewをDiscordに送り、このコミットに版のタグ(v1.3.0など)を付ける。
+  # 版の上げ方とラベルの付け方: README「版とWhat's New」
+  whats-new:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # 版のタグを作る
+      contents: write
+      # コミットから、そのPRのタイトルとラベルを調べる
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # 依存パッケージは使わないので、インストールしない(TypeScriptのまま、Node.jsで実行する)
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      # Discordに送れなかったときは、タグを付けずに失敗する。デプロイはそのまま。
+      # 失敗したジョブをやり直す(Re-run failed jobs)と、同じ内容を送り直す
+      - name: Post What's New and tag the version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WHATS_NEW_WEBHOOK_URL: ${{ secrets.WHATS_NEW_WEBHOOK_URL }}
+        run: node scripts/whats-new.ts

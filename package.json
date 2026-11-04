@@ -1,6 +1,5 @@
 {
 	"name": "bobert",
-	"version": "0.1.0",
 	"private": true,
 	"description": "Discord上でAIと会話できるBot。LLMの費用は各ユーザーが自分のキーで負担する。",
 	"type": "module",

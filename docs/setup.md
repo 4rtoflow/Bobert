@@ -42,7 +42,8 @@
 ### GitHub
 
 - **リポジトリ:** [4rtoflow/Bobert](https://github.com/4rtoflow/Bobert)。作成済みで、まだ空。
-- **Actionsのシークレット:** CloudflareのAPIトークン、アカウントID、本番の管理用エンドポイントのトークン(`ADMIN_TOKEN`)。mainへのpushで本番にデプロイし、スラッシュコマンドを登録するのに使う(READMEの「本番へのデプロイ」)。
+- **Actionsのシークレット:** CloudflareのAPIトークン、アカウントID、本番の管理用エンドポイントのトークン(`ADMIN_TOKEN`)。mainへのpushで本番にデプロイし、スラッシュコマンドを登録するのに使う(READMEの「本番へのデプロイ」)。ほかに、デプロイの後にWhat's Newを送るDiscordのWebhookのURL(`WHATS_NEW_WEBHOOK_URL`)。
+- **ラベル:** `機能追加`と`軽微な修正`。PRに付けると、mainに入ったときに、What's Newに載り、版が上がる(READMEの「版とWhat's New」)。2026-11-04に作成済み。
 
 ### GitHub App(エージェントのGitHubとの連携)
 
