@@ -582,8 +582,12 @@ describe("/agent", () => {
 			],
 		});
 		const agent = sessionAgent(calls);
-		expect(agent.tools.map((tool) => tool.name)).toContain(
-			"create_pull_request",
+		expect(agent.tools.map((tool) => tool.name)).toEqual(
+			expect.arrayContaining([
+				"create_pull_request",
+				"github_read",
+				"github_write",
+			]),
 		);
 		expect(agent.system).toContain(
 			"- このセッションでは、GitHubのリポジトリ octocat/hello を /workspace/hello に取り込んであります。",
@@ -603,9 +607,10 @@ describe("/agent", () => {
 			(call) => call.method === "POST" && call.url.pathname === "/v1/sessions",
 		);
 		expect(sessionCall?.body).not.toHaveProperty("resources");
-		expect(sessionAgent(calls).tools.map((tool) => tool.name)).not.toContain(
-			"create_pull_request",
-		);
+		const names = sessionAgent(calls).tools.map((tool) => tool.name);
+		expect(names).not.toContain("create_pull_request");
+		expect(names).not.toContain("github_read");
+		expect(names).not.toContain("github_write");
 		expect(editedBodies(calls).at(-1)?.content).toContain("を作りました。");
 	});
 

@@ -35,6 +35,12 @@ export const SEND_FILES_TOOL = "send_files";
 /** 本人のトークンで、GitHubにPRを作る道具(Bobertが受け持つ。作る前に、本人に確認を求める) */
 export const CREATE_PULL_REQUEST_TOOL = "create_pull_request";
 
+/** つないだリポジトリのIssue、PR、Actions、Projects、Pagesを読む道具(Bobertが受け持つ。確認は求めない) */
+export const GITHUB_READ_TOOL = "github_read";
+
+/** つないだリポジトリのIssue、PR、Actions、Projects、Pagesに書く道具(Bobertが受け持つ。作る前に、本人に確認を求める) */
+export const GITHUB_WRITE_TOOL = "github_write";
+
 /** エージェントへの共通の指示のうち、GitHubの行より前(仕様: docs/spec/behavior.md「エージェントへの共通の指示」) */
 const AGENT_PROMPT_HEAD = `あなたは、Discordのチャンネルで、利用者1人から作業を頼まれるエージェントです。BobertというDiscordのBotが、利用者とあなたの間をつないでいます。
 
@@ -77,7 +83,7 @@ function githubPromptLine(repository: SessionRepository | null): string {
 	if (repository === null) {
 		return "- このセッションには、GitHubのリポジトリをつないでいません。リポジトリを使いたいと言われたら、/agent でリポジトリを選んで、新しいセッションを始めるよう伝えてください。";
 	}
-	return `- このセッションでは、GitHubのリポジトリ ${repository.fullName} を ${repository.mountPath} に取り込んであります。gitでコミットしてpushできます(認証は、Anthropic側で付け足されます)。PRは、${CREATE_PULL_REQUEST_TOOL}の道具で作ってください。作る前に、利用者に確認が求められます。ほかのリポジトリは、このセッションでは使えません。使いたいと言われたら、/agent でリポジトリを選んで、新しいセッションを始めるよう伝えてください。`;
+	return `- このセッションでは、GitHubのリポジトリ ${repository.fullName} を ${repository.mountPath} に取り込んであります。gitでコミットしてpushできます(認証は、Anthropic側で付け足されます)。PRは、${CREATE_PULL_REQUEST_TOOL}の道具で作ってください。作る前に、利用者に確認が求められます。IssueやPR、Actions、Projects、Pagesは、${GITHUB_READ_TOOL}で読み、${GITHUB_WRITE_TOOL}で書けます。書くときは、利用者への確認が求められます。操作の結果は、道具の結果として返ります。ほかのリポジトリは、このセッションでは使えません。使いたいと言われたら、/agent でリポジトリを選んで、新しいセッションを始めるよう伝えてください。`;
 }
 
 /** リポジトリを取り込む場所。Managed Agentsの既定(/workspace/<リポジトリ名>)と同じ */
@@ -150,6 +156,140 @@ const PULL_REQUEST_TOOL: AgentTool = {
 	},
 };
 
+/** GitHubのIssue、PR、Actions、Projects、Pagesを読む道具。リポジトリをつないだセッションにだけ渡す */
+const GITHUB_READ_DEFINITION: AgentTool = {
+	type: "custom",
+	name: GITHUB_READ_TOOL,
+	description:
+		"このセッションに取り込んだGitHubのリポジトリの、Issue、PR、Actions、Projects(v2)、Pagesを読む。読むだけで、利用者への確認はない。kindで読むものを選ぶ: issues(Issueの一覧。state、labels、limit)、issue(Issueの本文とコメント。number)、pulls(PRの一覧。state、limit)、pull(PRの本文、変更したファイル、レビュー、コメント。number)、workflows(ワークフローの一覧)、runs(実行の一覧。workflow、branch、status、limit)、run(実行のジョブの一覧。run_id)、job_logs(ジョブのログ。job_id。失敗の理由を調べるときに使う)、projects(つながったProjectの一覧)、project(Projectのフィールドと項目。number)、pages(Pagesの設定と、最後のビルド)。",
+	input_schema: {
+		type: "object",
+		properties: {
+			repository: {
+				type: "string",
+				description: "owner/repo の形のリポジトリの名前",
+			},
+			kind: {
+				type: "string",
+				enum: [
+					"issues",
+					"issue",
+					"pulls",
+					"pull",
+					"workflows",
+					"runs",
+					"run",
+					"job_logs",
+					"projects",
+					"project",
+					"pages",
+				],
+			},
+			number: {
+				type: "integer",
+				description: "issue、pull、projectで、番号",
+			},
+			state: {
+				type: "string",
+				enum: ["open", "closed", "all"],
+				description: "issues、pullsで、絞り込む状態。省くとopen",
+			},
+			labels: {
+				type: "array",
+				items: { type: "string" },
+				description: "issuesで、絞り込むラベル",
+			},
+			limit: {
+				type: "integer",
+				description: "一覧の件数。省くと20、多くても50",
+			},
+			workflow: {
+				type: "string",
+				description: "runsで、ワークフローのファイル名かID(例: ci.yml)",
+			},
+			branch: { type: "string", description: "runsで、ブランチ" },
+			status: {
+				type: "string",
+				description:
+					"runsで、状態(例: completed、in_progress、failure、success)",
+			},
+			run_id: { type: "integer", description: "runで、実行のID" },
+			job_id: { type: "integer", description: "job_logsで、ジョブのID" },
+		},
+		required: ["repository", "kind"],
+	},
+};
+
+/** GitHubのIssue、PR、Actions、Projects、Pagesに書く道具。リポジトリをつないだセッションにだけ渡す */
+const GITHUB_WRITE_DEFINITION: AgentTool = {
+	type: "custom",
+	name: GITHUB_WRITE_TOOL,
+	description:
+		"このセッションに取り込んだGitHubのリポジトリで、Issue、PR、Actions、Projects(v2)、Pagesを操作する(PRを作るのは create_pull_request を使う)。実行する前に、利用者にリポジトリ、操作、対象を見せて確認を求め、利用者が選んだ結果を返す。actionで操作を選ぶ: issue_create(title、body、labels、assignees)、issue_comment(number、body)、issue_update(number、title、body、labels、assigneesのうち変えるもの。labelsとassigneesは、渡したもので置き換わる)、issue_close(number、reason: completedかnot_planned)、issue_reopen(number)、pr_comment(number、body)、pr_review(number、event: APPROVE、REQUEST_CHANGES、COMMENT、body)、pr_merge(number、merge_method: merge、squash、rebase、commit_title、commit_message)、pr_close(number)、workflow_dispatch(workflow、ref、inputs。ref を省くと既定のブランチ)、run_rerun(run_id、failed_only)、run_cancel(run_id)、project_add_item(project、number: 追加するIssueかPRの番号)、project_update_item(project、item_id、field、value。item_idは github_read の project で分かる)、pages_build。",
+	input_schema: {
+		type: "object",
+		properties: {
+			repository: {
+				type: "string",
+				description: "owner/repo の形のリポジトリの名前",
+			},
+			action: {
+				type: "string",
+				enum: [
+					"issue_create",
+					"issue_comment",
+					"issue_update",
+					"issue_close",
+					"issue_reopen",
+					"pr_comment",
+					"pr_review",
+					"pr_merge",
+					"pr_close",
+					"workflow_dispatch",
+					"run_rerun",
+					"run_cancel",
+					"project_add_item",
+					"project_update_item",
+					"pages_build",
+				],
+			},
+			number: { type: "integer", description: "IssueかPRの番号" },
+			title: { type: "string" },
+			body: { type: "string", description: "本文やコメント(GitHubのMarkdown)" },
+			labels: { type: "array", items: { type: "string" } },
+			assignees: { type: "array", items: { type: "string" } },
+			reason: { type: "string", enum: ["completed", "not_planned"] },
+			event: {
+				type: "string",
+				enum: ["APPROVE", "REQUEST_CHANGES", "COMMENT"],
+			},
+			merge_method: { type: "string", enum: ["merge", "squash", "rebase"] },
+			commit_title: { type: "string" },
+			commit_message: { type: "string" },
+			workflow: {
+				type: "string",
+				description: "ワークフローのファイル名かID(例: ci.yml)",
+			},
+			ref: { type: "string", description: "ブランチかタグ" },
+			inputs: {
+				type: "object",
+				description: "ワークフローの入力(名前と値)",
+				additionalProperties: { type: "string" },
+			},
+			run_id: { type: "integer", description: "実行のID" },
+			failed_only: {
+				type: "boolean",
+				description: "run_rerunで、失敗したジョブだけ再実行する",
+			},
+			project: { type: "integer", description: "Projectの番号" },
+			item_id: { type: "string", description: "Projectの項目のID" },
+			field: { type: "string", description: "Projectのフィールドの名前" },
+			value: { type: "string", description: "フィールドの新しい値" },
+		},
+		required: ["repository", "action"],
+	},
+};
+
 /** サーバーのスキルの本文を読む道具(Bobertが受け持つ) */
 export const READ_SKILL_TOOL = "read_skill";
 
@@ -185,7 +325,9 @@ export function sessionConfig(
 	const system = agentSystemPrompt(repository);
 	const tools = [
 		...AGENT_TOOLS,
-		...(repository === null ? [] : [PULL_REQUEST_TOOL]),
+		...(repository === null
+			? []
+			: [PULL_REQUEST_TOOL, GITHUB_READ_DEFINITION, GITHUB_WRITE_DEFINITION]),
 	];
 	if (skills.length === 0) {
 		return { system, tools, skills: DOCUMENT_SKILLS };

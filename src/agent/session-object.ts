@@ -13,7 +13,9 @@ import {
 	gitHubAccessToken,
 	hasBranch,
 	openPullRequest,
+	writeToGitHub,
 } from "../github/account";
+import { prepareGitHubWrite, runGitHubRead } from "../github/operations";
 import type { AnthropicCredential } from "../llm/anthropic";
 import { logEvent } from "../log";
 import { findSkillByName } from "../store/skills";
@@ -122,6 +124,29 @@ export class AgentSession extends DurableObject<Env> {
 			const { result, stream } = await this.relay(state).answerPullRequest(
 				toolUseId,
 				create,
+			);
+			await this.saveState(state);
+			if (stream) {
+				this.startStreaming();
+			}
+			await this.scheduleAlarm(state);
+			return result;
+		});
+	}
+
+	/** GitHubの操作の確認のボタン(「実行する」か「実行しない」) */
+	async answerGitHubWrite(
+		toolUseId: string,
+		run: boolean,
+	): Promise<ApprovalResult> {
+		return this.serial(async () => {
+			const state = await this.loadState();
+			if (state === null) {
+				return "stale";
+			}
+			const { result, stream } = await this.relay(state).answerGitHubWrite(
+				toolUseId,
+				run,
 			);
 			await this.saveState(state);
 			if (stream) {
@@ -437,6 +462,12 @@ export class AgentSession extends DurableObject<Env> {
 					hasBranch(token, fullName, branch),
 				createPullRequest: (request) =>
 					openPullRequest(this.env, state.ownerId, request),
+				readRepository: (token, fullName, request) =>
+					runGitHubRead(token, fullName, request),
+				prepareWrite: (token, repository, action) =>
+					prepareGitHubWrite(token, repository, action),
+				writeRepository: (request) =>
+					writeToGitHub(this.env, state.ownerId, request),
 				accessToken: (minValidityMs) =>
 					gitHubAccessToken(this.env, state.ownerId, minValidityMs),
 			},

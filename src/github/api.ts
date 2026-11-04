@@ -242,13 +242,24 @@ export async function revokeGitHubGrant(
 	}
 }
 
-/** GitHubのAPIを、本人のトークンで呼ぶ */
-async function apiRequest<T>(
+/** GitHubのAPIを、本人のトークンで呼ぶ。本文のない応答(204など)は、undefinedを返す */
+export async function apiRequest<T>(
 	token: string,
 	method: string,
 	path: string,
 	body?: unknown,
 ): Promise<T> {
+	const text = await apiText(token, method, path, body);
+	return (text === "" ? undefined : JSON.parse(text)) as T;
+}
+
+/** GitHubのAPIを、本人のトークンで呼んで、応答の本文を文字で返す(ジョブのログなど、JSONでない応答用) */
+export async function apiText(
+	token: string,
+	method: string,
+	path: string,
+	body?: unknown,
+): Promise<string> {
 	const response = await fetch(`${API_BASE}${path}`, {
 		method,
 		headers: {
@@ -266,7 +277,7 @@ async function apiRequest<T>(
 			await errorDetail(response),
 		);
 	}
-	return (await response.json()) as T;
+	return await response.text();
 }
 
 function apiHeaders(): Record<string, string> {
@@ -294,6 +305,6 @@ async function errorDetail(response: Response): Promise<string> {
 }
 
 /** owner/repo を、URLのパスに入れる形にする */
-function repositoryPath(fullName: string): string {
+export function repositoryPath(fullName: string): string {
 	return fullName.split("/").map(encodeURIComponent).join("/");
 }

@@ -17,6 +17,7 @@ import {
 	refreshGitHubToken,
 	revokeGitHubGrant,
 } from "./api";
+import { type GitHubWriteAction, runGitHubWrite } from "./operations";
 
 /**
  * 本人のGitHubとの連携を使う(仕様: docs/spec/architecture.md「エージェント」)。
@@ -316,6 +317,60 @@ export async function openPullRequest(
 		if (error instanceof GitHubApiError) {
 			logEvent("github", "pull_request_failed", {
 				userId,
+				status: error.status,
+			});
+			return { status: "failed", reason: error.detail };
+		}
+		throw error;
+	}
+}
+
+/** 本人の確認を受けて行う、GitHubへの書き込み(PRを作る以外) */
+export interface GitHubWriteRequest {
+	/** owner/repo */
+	repository: string;
+	action: GitHubWriteAction;
+	/** 確認の「対象」の行の値 */
+	target: string;
+	/** 確認で引用した内容。なければ空 */
+	detail: string;
+}
+
+/** GitHubに書き込んだ結果 */
+export type GitHubWriteOutcome =
+	| { status: "unlinked" }
+	/** 行った。urlは、結果のページ(なければnull) */
+	| { status: "done"; url: string | null }
+	/** GitHubに断られた。reasonは、GitHubが返したエラーの説明 */
+	| { status: "failed"; reason: string };
+
+/** 本人のトークンで、GitHubに書き込む */
+export async function writeToGitHub(
+	env: Env,
+	userId: string,
+	request: GitHubWriteRequest,
+): Promise<GitHubWriteOutcome> {
+	try {
+		const result = await withToken(
+			env,
+			userId,
+			API_TOKEN_VALIDITY_MS,
+			(token) =>
+				runGitHubWrite(token.value, request.repository, request.action),
+		);
+		if (result === null) {
+			return { status: "unlinked" };
+		}
+		logEvent("github", "write_done", {
+			userId,
+			action: request.action.action,
+		});
+		return { status: "done", url: result.value.url };
+	} catch (error) {
+		if (error instanceof GitHubApiError) {
+			logEvent("github", "write_failed", {
+				userId,
+				action: request.action.action,
 				status: error.status,
 			});
 			return { status: "failed", reason: error.detail };

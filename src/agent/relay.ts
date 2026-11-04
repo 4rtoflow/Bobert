@@ -19,10 +19,20 @@ import { DiscordApiError, type MessageFile } from "../discord/api";
 import { ButtonStyle, ComponentType } from "../discord/constants";
 import type {
 	GitHubToken,
+	GitHubWriteOutcome,
+	GitHubWriteRequest,
 	PullRequestOutcome,
 	PullRequestRequest,
 	RepositoryLookup,
 } from "../github/account";
+import { GitHubApiError, type GitHubRepository } from "../github/api";
+import {
+	type GitHubReadRequest,
+	type GitHubWriteAction,
+	type PreparedWrite,
+	parseGitHubRead,
+	parseGitHubWrite,
+} from "../github/operations";
 import { logEvent } from "../log";
 import { REFUSAL_TEXT } from "../respond/replies";
 import { DISCORD_MESSAGE_LIMIT, splitMessage } from "../respond/split";
@@ -31,6 +41,8 @@ import {
 	CREATE_PULL_REQUEST_TOOL,
 	describeAgentError,
 	describeSessionError,
+	GITHUB_READ_TOOL,
+	GITHUB_WRITE_TOOL,
 	isSessionGone,
 	READ_SKILL_TOOL,
 	SEND_FILES_TOOL,
@@ -46,8 +58,18 @@ import {
 	deniedToolLine,
 	ENDED,
 	formatMegabytes,
+	GITHUB_CANCEL_BUTTON_LABEL,
 	GITHUB_LINK_BUTTON_LABEL,
 	GITHUB_NOT_LINKED,
+	GITHUB_OPERATION_LABELS,
+	GITHUB_PAGES_TARGET,
+	GITHUB_RUN_BUTTON_LABEL,
+	GITHUB_WRITE_CONFIRM_INTRO,
+	GITHUB_WRITE_FAILED,
+	GITHUB_WRITE_NOT_RUN,
+	githubOperationLine,
+	githubTargetLine,
+	githubWriteDone,
 	HELD_NOTICE,
 	KEY_CANNOT_OPERATE,
 	NO_ATTACH_FILES,
@@ -87,6 +109,8 @@ export const AGENT_DENY_PREFIX = "agent:deny:";
 export const AGENT_GITHUB_ID = "agent:github";
 export const AGENT_PR_CREATE_PREFIX = "agent:pr_create:";
 export const AGENT_PR_CANCEL_PREFIX = "agent:pr_cancel:";
+export const AGENT_GITHUB_RUN_PREFIX = "agent:gh_run:";
+export const AGENT_GITHUB_CANCEL_PREFIX = "agent:gh_cancel:";
 
 /** 本人以外の発言を消したときの知らせを、消すまでの時間 */
 export const OTHERS_NOTICE_MS = 10_000;
@@ -130,7 +154,7 @@ export const REPOSITORY_TOKEN_WATCH_VALIDITY_MS = 10 * 60_000;
 /** PRの確認や作成で、GitHubのAPIを1回呼ぶのに要る、トークンの残りの有効期間 */
 const GITHUB_API_TOKEN_VALIDITY_MS = 5 * 60_000;
 
-/** PRの確認に引用する、説明の長さの上限 */
+/** PRと、GitHubの操作の確認に引用する、説明や内容の長さの上限 */
 const PR_BODY_PREVIEW_LENGTH = 500;
 
 /** 許可されていないリポジトリを指定されたときに、エージェントに伝える、許可されたリポジトリの数の上限 */
@@ -201,6 +225,19 @@ export interface PendingPullRequest {
 	outcome: PullRequestOutcome | null;
 }
 
+/** 本人の確認を待っている、GitHubの操作(PRを作る以外) */
+export interface PendingGitHubWrite {
+	/** エージェントの道具の呼び出しのID。確認のボタンのIDにも使う */
+	toolUseId: string;
+	/** 確認のメッセージ */
+	messageId: string;
+	request: GitHubWriteRequest;
+	/**
+	 * 「実行する」を押した結果。エージェントに伝えられなかったときに、押し直しで同じ操作を繰り返さないよう、先に覚えておく
+	 */
+	outcome: GitHubWriteOutcome | null;
+}
+
 /** チャンネルごとの状態(Durable Objectのストレージに保存する) */
 export interface SessionState {
 	channelId: string;
@@ -242,6 +279,8 @@ export interface SessionState {
 	repositoryTokenVersion: number | null;
 	/** 本人の確認を待っているPR */
 	pullRequests: PendingPullRequest[];
+	/** 本人の確認を待っている、GitHubの操作(PRを作る以外) */
+	githubWrites: PendingGitHubWrite[];
 }
 
 /** セッションを始めたときの情報 */
@@ -274,6 +313,7 @@ export function initialState(setup: SessionSetup): SessionState {
 		repositories: setup.repositories ?? [],
 		repositoryTokenVersion: setup.repositoryTokenVersion ?? null,
 		pullRequests: [],
+		githubWrites: [],
 	};
 }
 
@@ -281,7 +321,7 @@ export function initialState(setup: SessionSetup): SessionState {
 export function withDefaults(
 	state: Omit<
 		SessionState,
-		"repositories" | "repositoryTokenVersion" | "pullRequests"
+		"repositories" | "repositoryTokenVersion" | "pullRequests" | "githubWrites"
 	> &
 		Partial<SessionState>,
 ): SessionState {
@@ -289,6 +329,7 @@ export function withDefaults(
 		repositories: [],
 		repositoryTokenVersion: null,
 		pullRequests: [],
+		githubWrites: [],
 		...state,
 	};
 }
@@ -361,6 +402,20 @@ export interface RelayGitHub {
 	hasBranch(token: string, fullName: string, branch: string): Promise<boolean>;
 	/** 本人のトークンで、PRを作る */
 	createPullRequest(request: PullRequestRequest): Promise<PullRequestOutcome>;
+	/** リポジトリのIssue、PR、Actions、Projects、Pagesを読んで、エージェントに返す文章にする。GitHubに断られたら、GitHubApiErrorを投げる */
+	readRepository(
+		token: string,
+		fullName: string,
+		request: GitHubReadRequest,
+	): Promise<string>;
+	/** 書く操作の対象を確かめる(番号やProjectがあるか)。ないときは、GitHubApiErrorを投げる */
+	prepareWrite(
+		token: string,
+		repository: GitHubRepository,
+		action: GitHubWriteAction,
+	): Promise<PreparedWrite>;
+	/** 本人のトークンで、GitHubに書き込む(PRを作る以外) */
+	writeRepository(request: GitHubWriteRequest): Promise<GitHubWriteOutcome>;
 	/** 本人のトークン。残りの有効期間がminValidityMsより短ければ、更新してから返す。連携していなければnull */
 	accessToken(minValidityMs: number): Promise<GitHubToken | null>;
 }
@@ -681,6 +736,83 @@ export class SessionRelay {
 	}
 
 	/**
+	 * GitHubの操作の確認のボタン。「実行する」なら本人のトークンで書き込み、結果をエージェントに返して、確認のメッセージを書き換える。
+	 * 答えたら、確認を待つ間に預かった発言を送る。streamがtrueなら、イベントの流れを受ける
+	 */
+	async answerGitHubWrite(
+		toolUseId: string,
+		run: boolean,
+	): Promise<{ result: ApprovalResult; stream: boolean }> {
+		const { state, deps } = this;
+		const pending = state.githubWrites.find(
+			(entry) => entry.toolUseId === toolUseId,
+		);
+		const sessionId = state.sessionId;
+		if (pending === undefined || sessionId === null) {
+			return { result: "stale", stream: false };
+		}
+		const client = await deps.client();
+		if (client === null) {
+			await this.terminate(KEY_CANNOT_OPERATE);
+			return { result: "ok", stream: false };
+		}
+		if (run && pending.outcome === null) {
+			pending.outcome = await deps.github
+				.writeRepository(pending.request)
+				.catch((error: unknown): GitHubWriteOutcome => {
+					log("github_write_failed", state, error);
+					return {
+						status: "failed",
+						reason: "GitHubとのやり取りでエラーが起きました",
+					};
+				});
+			if (pending.outcome.status === "unlinked") {
+				await this.noticeGitHubUnlinked();
+			}
+		}
+		// 前に「実行する」を押して、結果を伝えられなかったときは、後から押したボタンにかかわらず、その結果を伝える
+		const outcome = pending.outcome;
+		const result = githubWriteResult(pending.request, outcome);
+		await this.rotateRepositoryTokens(
+			client,
+			sessionId,
+			REPOSITORY_TOKEN_VALIDITY_MS,
+		);
+		try {
+			await client.beta.sessions.events.send(sessionId, {
+				events: [
+					{
+						type: "user.custom_tool_result",
+						custom_tool_use_id: toolUseId,
+						content: [{ type: "text", text: result.text }],
+						is_error: result.error,
+					},
+				],
+			});
+		} catch (error) {
+			if (isSessionGone(error)) {
+				await this.terminate(KEY_CANNOT_OPERATE);
+				return { result: "ok", stream: false };
+			}
+			log("github_write_answer_failed", state, error);
+			return { result: "failed", stream: false };
+		}
+		state.githubWrites = state.githubWrites.filter(
+			(entry) => entry.toolUseId !== toolUseId,
+		);
+		await deps.discord
+			.edit(pending.messageId, {
+				content: githubWriteOutcomeText(outcome),
+				components: [],
+				allowed_mentions: { parse: [] },
+			})
+			.catch((error: unknown) => {
+				log("github_write_edit_failed", state, error);
+			});
+		return this.resumeIfAnswered();
+	}
+
+	/**
 	 * 本人の許可や確認に答えた後。ほかにも待っているものがあれば、全部に答えるまでセッションは動かない。
 	 * 全部に答えたら、セッションが動き始めるので、預かった発言を送る
 	 */
@@ -708,10 +840,12 @@ export class SessionRelay {
 		return { result: "ok", stream: true };
 	}
 
-	/** 本人の許可か、PRの確認を待っているか。待っている間、セッションは新しい発言を受け付けない */
+	/** 本人の許可か、PRやGitHubの操作の確認を待っているか。待っている間、セッションは新しい発言を受け付けない */
 	private waitingForOwner(): boolean {
 		return (
-			this.state.approvals.length > 0 || this.state.pullRequests.length > 0
+			this.state.approvals.length > 0 ||
+			this.state.pullRequests.length > 0 ||
+			this.state.githubWrites.length > 0
 		);
 	}
 
@@ -970,6 +1104,13 @@ export class SessionRelay {
 				// 本人に確認を求めたら、答えは、ボタンが押されたときに返す
 				result = await this.requestPullRequest(event.id, event.input);
 				break;
+			case GITHUB_READ_TOOL:
+				result = await this.readGitHub(event.input);
+				break;
+			case GITHUB_WRITE_TOOL:
+				// 本人に確認を求めたら、答えは、ボタンが押されたときに返す
+				result = await this.requestGitHubWrite(event.id, event.input);
+				break;
 			default:
 				result = { text: `Unknown tool: ${event.name}`, error: true };
 		}
@@ -1070,6 +1211,145 @@ export class SessionRelay {
 			};
 		}
 		state.pullRequests.push({ toolUseId, messageId, request, outcome: null });
+		return null;
+	}
+
+	/**
+	 * github_read / github_writeで使うリポジトリを決める。セッションに取り込んだリポジトリで、本人が許可したものだけ。
+	 * 使えないときは、エージェントに返す結果を付けて返す
+	 */
+	private async toolRepository(value: unknown): Promise<
+		| {
+				status: "found";
+				found: Extract<RepositoryLookup, { status: "found" }>;
+		  }
+		| { status: "missing"; result: ToolResult }
+	> {
+		const { state } = this;
+		const name = repositoryName(value);
+		if (name === null) {
+			return {
+				status: "missing",
+				result: { text: REPOSITORY_NAME_REQUIRED, error: true },
+			};
+		}
+		const wanted = name.toLowerCase();
+		if (
+			!state.repositories.some(
+				(entry) => entry.fullName.toLowerCase() === wanted,
+			)
+		) {
+			const connected = state.repositories
+				.map((entry) => entry.fullName)
+				.join("、");
+			return {
+				status: "missing",
+				result: {
+					text:
+						connected === ""
+							? "このセッションには、GitHubのリポジトリをつないでいないので、GitHubを操作できません。"
+							: `このセッションでGitHubを操作できるのは、取り込んだリポジトリ(${connected})だけです。`,
+					error: true,
+				},
+			};
+		}
+		return this.findRepository(name, GITHUB_API_TOKEN_VALIDITY_MS);
+	}
+
+	/** GitHubの呼び出しが失敗したとき、エージェントに返す結果にする */
+	private githubFailure(error: unknown): ToolResult {
+		if (error instanceof GitHubApiError) {
+			return {
+				text: `GitHubに断られました(${error.status}): ${error.detail}`,
+				error: true,
+			};
+		}
+		log("github_tool_failed", this.state, error);
+		return {
+			text: "GitHubとのやり取りでエラーが起きました。少し待ってから、もう一度試してください。",
+			error: true,
+		};
+	}
+
+	/** github_readの道具: Issue、PR、Actions、Projects、Pagesを読む。読むだけなので、確認は求めない */
+	private async readGitHub(
+		input: Record<string, unknown>,
+	): Promise<ToolResult> {
+		const parsed = parseGitHubRead(input);
+		if (typeof parsed === "string") {
+			return { text: parsed, error: true };
+		}
+		const lookup = await this.toolRepository(input.repository);
+		if (lookup.status !== "found") {
+			return lookup.result;
+		}
+		const { repository, token } = lookup.found;
+		try {
+			return {
+				text: await this.deps.github.readRepository(
+					token.value,
+					repository.fullName,
+					parsed,
+				),
+				error: false,
+			};
+		} catch (error) {
+			return this.githubFailure(error);
+		}
+	}
+
+	/**
+	 * github_writeの道具: 対象を確かめて、本人に確認を求める(「実行する」「実行しない」のボタン)。
+	 * 確認を求めたらnullを返す(答えは、ボタンが押されたときに返す)。行えないことが分かったら、その結果を返す
+	 */
+	private async requestGitHubWrite(
+		toolUseId: string,
+		input: Record<string, unknown>,
+	): Promise<ToolResult | null> {
+		const { state, deps } = this;
+		const parsed = parseGitHubWrite(input);
+		if (typeof parsed === "string") {
+			return { text: parsed, error: true };
+		}
+		const lookup = await this.toolRepository(input.repository);
+		if (lookup.status !== "found") {
+			return lookup.result;
+		}
+		const { repository, token } = lookup.found;
+		let prepared: PreparedWrite;
+		try {
+			prepared = await deps.github.prepareWrite(
+				token.value,
+				repository,
+				parsed,
+			);
+		} catch (error) {
+			return this.githubFailure(error);
+		}
+		const request: GitHubWriteRequest = {
+			repository: repository.fullName,
+			action: prepared.action,
+			target:
+				prepared.action.action === "pages_build"
+					? GITHUB_PAGES_TARGET
+					: prepared.target,
+			detail: prepared.detail,
+		};
+		let messageId: string;
+		try {
+			messageId = await deps.discord.post({
+				content: githubWriteConfirmation(request),
+				components: [githubWriteRow(toolUseId)],
+				allowed_mentions: { parse: [] },
+			});
+		} catch (error) {
+			log("github_write_confirm_failed", state, error);
+			return {
+				text: "Discordに確認のメッセージを出せなかったため、操作を実行できませんでした。",
+				error: true,
+			};
+		}
+		state.githubWrites.push({ toolUseId, messageId, request, outcome: null });
 		return null;
 	}
 
@@ -1422,16 +1702,18 @@ export class SessionRelay {
 		});
 	}
 
-	/** 許可のボタン、PRの確認のボタン、「止める」ボタン、預かった発言の知らせを片付ける */
+	/** 許可のボタン、PRとGitHubの操作の確認のボタン、「止める」ボタン、預かった発言の知らせを片付ける */
 	private async clearInteractive(): Promise<void> {
 		const { state, deps } = this;
 		const progress = state.progress;
 		const approvals = state.approvals;
 		const pullRequests = state.pullRequests;
+		const githubWrites = state.githubWrites;
 		const held = state.held;
 		state.progress = null;
 		state.approvals = [];
 		state.pullRequests = [];
+		state.githubWrites = [];
 		state.held = [];
 		state.working = false;
 		state.stopRequested = false;
@@ -1442,6 +1724,7 @@ export class SessionRelay {
 		for (const message of [
 			...approvals.map((approval) => approval.messageId),
 			...pullRequests.map((pullRequest) => pullRequest.messageId),
+			...githubWrites.map((write) => write.messageId),
 		]) {
 			await deps.discord.edit(message, { components: [] }).catch(() => {});
 		}
@@ -1659,6 +1942,74 @@ function pullRequestOutcomeText(outcome: PullRequestOutcome | null): string {
 		: PR_CREATE_FAILED;
 }
 
+/** GitHubの操作の確認のメッセージ。内容は、先頭の500文字までを引用する */
+export function githubWriteConfirmation(request: GitHubWriteRequest): string {
+	const summary = [
+		GITHUB_WRITE_CONFIRM_INTRO,
+		prRepositoryLine(request.repository),
+		githubOperationLine(
+			GITHUB_OPERATION_LABELS[request.action.action] ?? request.action.action,
+		),
+		...(request.target === "" ? [] : [githubTargetLine(request.target)]),
+	].join("\n");
+	const detail = request.detail.trim();
+	if (detail === "") {
+		return fitMessage(summary);
+	}
+	const preview =
+		detail.length > PR_BODY_PREVIEW_LENGTH
+			? `${detail.slice(0, PR_BODY_PREVIEW_LENGTH)}…`
+			: detail;
+	const quote = preview
+		.split("\n")
+		.map((line) => `> ${line}`)
+		.join("\n");
+	return fitMessage(`${summary}\n${quote}`);
+}
+
+/** GitHubの操作の確認に答えた結果を、エージェントに返す形にする。outcomeがnullなら「実行しない」を押した */
+function githubWriteResult(
+	request: GitHubWriteRequest,
+	outcome: GitHubWriteOutcome | null,
+): ToolResult {
+	if (outcome === null) {
+		return {
+			text: "利用者が、この操作を実行しないことを選びました。",
+			error: true,
+		};
+	}
+	switch (outcome.status) {
+		case "done":
+			return {
+				text:
+					outcome.url === null
+						? `実行しました(${request.action.action})。`
+						: `実行しました(${request.action.action}): ${outcome.url}`,
+				error: false,
+			};
+		case "failed":
+			return {
+				text: `GitHubに断られて、操作を実行できませんでした: ${outcome.reason}`,
+				error: true,
+			};
+		case "unlinked":
+			return {
+				text: "利用者のGitHubとの連携が外されていたため、操作を実行できませんでした。チャンネルに連携のボタンを出しました。",
+				error: true,
+			};
+	}
+}
+
+/** GitHubの操作の確認のメッセージを、答えた結果に書き換える文 */
+function githubWriteOutcomeText(outcome: GitHubWriteOutcome | null): string {
+	if (outcome === null) {
+		return GITHUB_WRITE_NOT_RUN;
+	}
+	return outcome.status === "done"
+		? githubWriteDone(outcome.url)
+		: GITHUB_WRITE_FAILED;
+}
+
 /** 道具の呼び出しを、作業の様子に書く形(種類と値)にする */
 export function toolOperation(
 	name: string,
@@ -1759,6 +2110,24 @@ export function pullRequestRow(
 		button(
 			PR_CANCEL_BUTTON_LABEL,
 			`${AGENT_PR_CANCEL_PREFIX}${toolUseId}`,
+			ButtonStyle.Secondary,
+		),
+	);
+}
+
+/** GitHubの操作の確認のボタン(「実行する」「実行しない」) */
+export function githubWriteRow(
+	toolUseId: string,
+): APIActionRowComponent<APIComponentInMessageActionRow> {
+	return row(
+		button(
+			GITHUB_RUN_BUTTON_LABEL,
+			`${AGENT_GITHUB_RUN_PREFIX}${toolUseId}`,
+			ButtonStyle.Primary,
+		),
+		button(
+			GITHUB_CANCEL_BUTTON_LABEL,
+			`${AGENT_GITHUB_CANCEL_PREFIX}${toolUseId}`,
 			ButtonStyle.Secondary,
 		),
 	);

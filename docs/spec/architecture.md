@@ -521,7 +521,12 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
     - トークンが切れないよう、作業を始めるたびと、動いている間の見回りで、残りの有効期間を確かめ、足りなければ更新して、資源のトークンを入れ替える(`resources.update`)。保存したトークンが、ほかのチャンネルや連携し直しで入れ替わっていたときも、入れ替える。
   - **PR:** Bobertが受け持つ道具(`create_pull_request`)で作る。リポジトリをつないだセッションにだけ渡し、つないだリポジトリにだけ作る。作る前に、pushしたブランチがあるかを確かめ、リポジトリ、ブランチ、タイトル、説明の先頭(500文字まで)を見せて、ボタンで本人に確かめる。「作る」が押されたら、本人のトークンで、GitHubのAPIでPRを作る(PRの作り主は本人になる)。結果(作ったPRのURLか、作れなかった理由)は、道具の結果としてエージェントに返す。
     - コミットとpushは`bash`で行うので、ほかのコマンドと同じく、Anthropic側の判断(`auto`)に従う。
-  - **GitHubで行えること:** リポジトリの取り込み、push、PRの作成まで。IssueやActionsなどは、まだ扱わない([issue #76](https://github.com/4rtoflow/Bobert/issues/76))。アプリには、将来のために、Actions、Issues、Pages、Repository projects、Workflowsの読み書きの権限も付けてある(後から権限を足すと、アプリを入れた人がそれぞれ承認し直す必要があるため)。Workflowsの権限があるので、エージェントは、`.github/workflows`の中のファイルを変えたコミットもpushできる。
+  - **Issue、PR、Actions、Projects、Pages:** Bobertが受け持つ道具2つで、本人のトークンで読み書きする([issue #76](https://github.com/4rtoflow/Bobert/issues/76))。どちらも、リポジトリをつないだセッションにだけ渡し、つないだリポジトリにだけ使える(`create_pull_request`と同じ。許可したリポジトリの中にあるかも確かめる)。
+    - **読む(`github_read`):** `kind`で選ぶ。`issues`/`issue`(Issueの一覧、本文とコメント)、`pulls`/`pull`(PRの一覧、本文と変更したファイルとレビューとコメント)、`workflows`/`runs`/`run`/`job_logs`(ワークフロー、実行、実行のジョブ、ジョブのログ)、`projects`/`project`(Projects v2の一覧、フィールドと項目)、`pages`(設定と最後のビルド)。読むだけなので、確認は求めない。結果は、要点だけのJSONの文章にして返す(長ければ切る。ジョブのログは後ろの15000文字)。
+    - **書く(`github_write`):** `action`で選ぶ。`issue_create`、`issue_comment`、`issue_update`、`issue_close`、`issue_reopen`、`pr_comment`、`pr_review`、`pr_merge`、`pr_close`、`workflow_dispatch`、`run_rerun`、`run_cancel`、`project_add_item`、`project_update_item`、`pages_build`。書く前に、GitHubで対象を確かめる(IssueやPRの番号、実行のID、Projectとそのフィールドや選択肢があるか。なければ、確認を出さずに理由を返す)。確かめたら、リポジトリ、操作、対象、内容の先頭(500文字まで)を見せて、PRと同じくボタンで本人に確かめる。「実行する」が押されたら、本人のトークンで行う。結果(結果のページのURLか、断られた理由)は、道具の結果としてエージェントに返す。確認の状態(`githubWrites`)は、PRの確認と同じく、チャンネルの状態に保存し、待っている間の発言は預かる。
+    - **PRを作る:** 上の「PR」のとおり、`create_pull_request`のまま。
+    - **Projects:** Projects v2(GraphQL)だけを扱う。リポジトリにつながったProjectを、番号で指す。Projects v2をアプリで扱うには、組織やユーザーの「Projects」の権限が要る場合がある(リポジトリの権限の「Repository projects」は、旧式のProjects用)。権限が足りなければ、GitHubに断られた理由がエージェントに返る。
+  - **GitHubで行えること:** リポジトリの取り込み、push、PRの作成、上のIssue、PR、Actions、Projects、Pagesの読み書き。アプリには、Actions、Issues、Pages、Repository projects、Workflowsの読み書きの権限も付けてある。Workflowsの権限があるので、エージェントは、`.github/workflows`の中のファイルを変えたコミットもpushできる。
   - **連携を外す:** `/delete`で、連携の記録を消し、GitHubへの承認も取り消す。GitHubだけを外したいときは、GitHubの設定画面でBobertのアプリを外す。外されたことには、次に使うときにBobertが気づく。
 - **片付け:** セッションを終えたとき、チャンネルが消されたとき、Bobertがサーバーから外されたとき(`GUILD_DELETE`)、`/delete`のときに、セッションを消す。動いている間は消せないので、止めてから消す。
 
