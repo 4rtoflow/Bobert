@@ -12,6 +12,7 @@
 		"dev": "wrangler dev",
 		"deploy:dev": "wrangler deploy --env=\"\"",
 		"deploy:production": "wrangler deploy --env production",
+		"deploy": "node scripts/deploy.ts",
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"lint": "biome check .",
