@@ -725,7 +725,7 @@ describe("/delete とGitHub", () => {
 			),
 		);
 		expect(command.data.content).toBe(
-			`登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${DELETE_GITHUB_NOTE}よろしいですか?`,
+			`登録したAPIキー(Anthropic、OpenRouter、TypeSafe)と設定を、すべて削除します。${DELETE_GITHUB_NOTE}よろしいですか?`,
 		);
 		const calls = mockFetch(() => new Response(null, { status: 204 }));
 

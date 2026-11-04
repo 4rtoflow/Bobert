@@ -27,6 +27,7 @@ Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のも�
 | `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                                                               |
 | `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)                                                                          |
 | `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                                                                 |
+| `src/jev/`             | 右クリックメニューの「Jevに聞く」(TypeSafeのJevの呼び出し、AIに渡す道具と指示、回答の整形)                                          |
 | `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ、リアクション、寄付、スキル、Bobert.md)と、検索用のデータ化 |
 | `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                                                                    |
 | `src/config/models.ts` | `/model`で選べるモデルの候補                                                                                                        |

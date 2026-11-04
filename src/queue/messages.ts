@@ -1,12 +1,13 @@
 import type { ChannelInfo, RoleInfo } from "../discord/channels";
 
 /**
- * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとCompactJobとImportCommandJobとMemoryJob、
+ * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとJevJobとCompactJobとImportCommandJobとMemoryJob、
  * INGEST_QUEUEはそれ以外を運ぶ。
  */
 export type QueueMessage =
 	| RespondJob
 	| ExplainJob
+	| JevJob
 	| CompactJob
 	| ImportCommandJob
 	| MemoryJob
@@ -52,6 +53,28 @@ export interface ExplainJob {
 	/** 説明するメッセージ(Interactionに含まれていたもの) */
 	target: StoredMessageInput;
 	/** 説明を頼まれた時刻(UNIX時間のミリ秒)。今の日時として、AIに伝える */
+	requestedAt: number;
+}
+
+/**
+ * 右クリックメニューの「Jevに聞く」。選んだ人のキーと設定で、AIにJevへの質問を作ってもらい、
+ * 選んだ人のTypeSafeのキーでJevに聞いて、保留にした応答(チャンネルに見える)を、Jevの回答に書き換える。
+ */
+export interface JevJob {
+	kind: "jev";
+	/** InteractionのID。同じInteractionで2回投稿しないために使う */
+	interactionId: string;
+	/** Interactionのトークン。保留にした応答を書き換えるのに使う(15分で切れる) */
+	interactionToken: string;
+	/** 選んだ人。この人の資格情報と設定とTypeSafeのキーを使う */
+	userId: string;
+	/** 選んだ人の、サーバーで見えている名前 */
+	userName: string;
+	channelId: string;
+	guildId: string | null;
+	/** Jevに聞く対象のメッセージ(Interactionに含まれていたもの) */
+	target: StoredMessageInput;
+	/** 頼まれた時刻(UNIX時間のミリ秒)。今の日時として、AIに伝える */
 	requestedAt: number;
 }
 

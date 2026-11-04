@@ -9,6 +9,7 @@ import {
 	selectedCandidate,
 } from "../respond/model";
 import { loadMemory } from "../store/memory";
+import { hasTypeSafeKey } from "../store/typesafe";
 import {
 	getRegisteredProviders,
 	getUserSettings,
@@ -50,8 +51,9 @@ async function settingsMessage(
 	userId: string,
 	guildId: string | undefined,
 ): Promise<MessageEdit> {
-	const [providers, settings, memory] = await Promise.all([
+	const [providers, typeSafe, settings, memory] = await Promise.all([
 		getRegisteredProviders(env.DB, userId),
+		hasTypeSafeKey(env.DB, userId),
 		getUserSettings(env.DB, userId),
 		guildId === undefined ? null : loadMemory(env.DB, userId, guildId),
 	]);
@@ -59,6 +61,7 @@ async function settingsMessage(
 	const lines = [
 		`- Anthropic: ${providers.has("anthropic") ? "登録済み" : "未登録"}`,
 		`- OpenRouter: ${providers.has("openrouter") ? "連携済み" : "未連携"}`,
+		`- TypeSafe: ${typeSafe ? "登録済み" : "未登録"}`,
 		`- モデル: ${modelLine(settings, resolution)}`,
 		`- 思考の深さ: ${
 			resolution.ok

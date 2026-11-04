@@ -52,7 +52,7 @@ export async function deleteCommand(
 		type: InteractionResponseType.ChannelMessageWithSource,
 		data: {
 			flags: MessageFlags.Ephemeral,
-			content: `登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${donation}${memory}${agents}${github}よろしいですか?`,
+			content: `登録したAPIキー(Anthropic、OpenRouter、TypeSafe)と設定を、すべて削除します。${donation}${memory}${agents}${github}よろしいですか?`,
 			components: [
 				{
 					type: ComponentType.ActionRow,

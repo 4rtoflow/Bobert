@@ -217,7 +217,7 @@ export function historyFor(
 }
 
 /** Discordから、チャンネルのピン留めされたメッセージを読む(ピン留めを読む道具で使う) */
-function pinListerFor(token: string): PinLister {
+export function pinListerFor(token: string): PinLister {
 	return async (channelId) => {
 		const pins = await getChannelPins(token, channelId);
 		return {
@@ -629,7 +629,7 @@ function requesterName(
  * モデルが読めるファイル(画像とPDF)。「その他」で入力したOpenRouterのモデルは、モデル情報で確かめる。
  * モデル情報を取得できなければ、どちらも渡さない。
  */
-async function fileSupport(
+export async function fileSupport(
 	model: ResolvedModel,
 	settings: UserSettings,
 ): Promise<FileSupport> {
