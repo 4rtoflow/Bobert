@@ -1,5 +1,5 @@
 /**
- * 記憶の、表示する文言(仕様: docs/spec/behavior.md「記憶」。2026-11-01に承認)
+ * 記憶の、表示する文言(仕様: docs/spec/behavior.md「記憶」。2026-11-01に承認。まとめている間の文と費用の注記は、2026-11-04に変更)
  */
 
 /** /memory の名前と説明 */
@@ -12,7 +12,7 @@ export const MEMORY_OFF_TITLE = "**記憶**: OFF";
 export const MEMORY_OFF_EXPLANATION =
 	"ONにすると、このサーバーでのあなたの発言から、AIが「あなたについて覚えておくこと」をまとめて、あなたへの返答に使います。会話で「覚えて」「忘れて」と頼むこともできます。";
 export const MEMORY_COST_NOTE =
-	"-# まとめる費用は、あなたのキーにかかります(Claude Haiku 5.5。よく話す人でも月5セントほど)。";
+	"-# まとめる費用は、あなたのキーにかかります(Claude Haiku 5.5。最初は発言5,000件ごとに3セントほど)。";
 export const MEMORY_DONATION_NOTE =
 	"-# 寄付されたクレジットで答えるときは、記憶も、寄付した人のアカウントに送られます。";
 /** 一覧を残したままOFFにしているとき、最後に足す行 */
@@ -41,8 +41,7 @@ export const MEMORY_KEY_REQUIRED =
 	"記憶を使うには、AIのキーの登録が必要です。`/setup` から登録してください。";
 
 /** 「ONにする」を押した直後(まとめ終わったら、ONの画面に書き換える) */
-export const MEMORY_BUILDING =
-	"記憶をまとめています。終わったら、このメッセージに一覧を書きます。";
+export const MEMORY_BUILDING = "記憶をまとめています...";
 
 /** 「直す」の入力画面 */
 export const MEMORY_EDIT_TITLE = "記憶を直す";

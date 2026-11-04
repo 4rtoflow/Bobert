@@ -53,10 +53,11 @@ import { MEMORY_KEY_REQUIRED } from "./texts";
 
 /** まとめるのに使うモデル(候補の一覧のキー) */
 const MEMORY_MODEL_KEY = "claude-haiku-5.5";
-/** 最初の一覧で読む発言の数(新しい方から) */
-const MAX_FIRST_MESSAGES = 5_000;
-/** 更新で1回に読む発言の数(古い方から)。長く使わなかった後でも、費用を抑える */
-const MAX_UPDATE_MESSAGES = 5_000;
+/**
+ * 1回の仕事で読む発言の数(古い方から)。残りがあれば、続きを読む仕事をQueueに入れる。
+ * 1回の仕事を、Queueの時間の上限(15分)に収めるため
+ */
+const MESSAGES_PER_JOB = 5_000;
 /** 1回の依頼に入れる発言の文字数の目安。Haiku 5.5の単価が上がる、入力の10万トークンを超えないようにする */
 const MAX_BATCH_CHARS = 60_000;
 /** Bobertの答えを読む長さ(先頭から) */
@@ -94,10 +95,15 @@ export async function scheduleMemoryUpdate(
 }
 
 /**
- * 記憶の更新の仕事。最初は新しい方から5,000件まで、その後は前回より後の発言を読み、AIに一覧の変更を出させて当てる。
- * /memory でONにしたときは、終わったら、その画面を一覧に書き換える
+ * 記憶の更新の仕事。まだ読んでいない発言を古い方から読み(最初は、いちばん古い発言から)、AIに一覧の変更を出させて当てる。
+ * 1回で読むのはmessagesPerJob件まで。残りがあれば、続きを読む仕事をQueueに入れる。
+ * /memory でONにしたときは、読み終えたら、その画面を一覧に書き換える
  */
-export async function handleMemoryJob(job: MemoryJob, env: Env): Promise<void> {
+export async function handleMemoryJob(
+	job: MemoryJob,
+	env: Env,
+	messagesPerJob = MESSAGES_PER_JOB,
+): Promise<void> {
 	const { userId, guildId } = job;
 	const state = await loadMemory(env.DB, userId, guildId);
 	if (state === null || !state.enabled) {
@@ -118,7 +124,7 @@ export async function handleMemoryJob(job: MemoryJob, env: Env): Promise<void> {
 		guildId,
 		userId,
 		state.readUntil,
-		first ? MAX_FIRST_MESSAGES : MAX_UPDATE_MESSAGES,
+		messagesPerJob,
 	);
 	const last = messages.at(-1);
 	if (last === undefined) {
@@ -200,6 +206,8 @@ export async function handleMemoryJob(job: MemoryJob, env: Env): Promise<void> {
 		env.DB,
 		sources.filter((id) => !existing.has(id)),
 	);
+	// 上限まで読んだら、読んでいない発言が残っているかもしれないので、続きを読む
+	const more = messages.length >= messagesPerJob;
 	log("updated", {
 		userId,
 		provider: model.resolved.provider,
@@ -207,8 +215,19 @@ export async function handleMemoryJob(job: MemoryJob, env: Env): Promise<void> {
 		messages: messages.length,
 		items: items.length,
 		skipped,
+		more,
 		...sumUsage(usages),
 	});
+	if (more) {
+		// 画面は、読み終えたときに書き換える
+		await env.RESPOND_QUEUE.send({
+			kind: "memory",
+			userId,
+			guildId,
+			interactionToken: job.interactionToken,
+		} satisfies QueueMessage);
+		return;
+	}
 	await showScreen(env, job);
 }
 

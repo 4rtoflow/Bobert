@@ -293,8 +293,8 @@ export async function loadMessagesByIds(
 
 /**
  * ある人が、そのサーバーで書いた発言(記憶の更新に使う。仕様: docs/spec/architecture.md「記憶」)。
- * afterを渡すと、その時刻より後の発言を古い方からlimit件。nullなら、新しい方からlimit件(最初の一覧)。
- * どちらも古い順に返す。保存しているのは共有チャンネルの発言だけなので、ほかのチャンネルの発言は入らない
+ * afterの時刻より後の発言を、古い方からlimit件返す。afterがnullなら(最初の一覧)、いちばん古い発言から返す。
+ * 保存しているのは共有チャンネルの発言だけなので、ほかのチャンネルの発言は入らない
  */
 export async function loadAuthorMessages(
 	db: D1Database,
@@ -308,7 +308,7 @@ export async function loadAuthorMessages(
 			? await db
 					.prepare(
 						`SELECT * FROM messages WHERE guild_id = ? AND author_id = ?
-						ORDER BY created_at DESC LIMIT ?`,
+						ORDER BY created_at LIMIT ?`,
 					)
 					.bind(guildId, authorId, limit)
 					.all<MessageRow>()
@@ -319,8 +319,7 @@ export async function loadAuthorMessages(
 					)
 					.bind(guildId, authorId, after, limit)
 					.all<MessageRow>();
-	const messages = results.map(fromRow);
-	return after === null ? messages.reverse() : messages;
+	return results.map(fromRow);
 }
 
 /** 渡したIDのうち、保存しているもの(消されていないもの) */
