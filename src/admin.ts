@@ -8,7 +8,9 @@ import type { QueueMessage } from "./queue/messages";
  * - POST /admin/gateway/start: Gatewayへの接続を始める
  * - POST /admin/gateway/stop: Gatewayへの接続を止める
  * - GET /admin/gateway/status: 接続の状態を返す
- * - POST /admin/commands/register: スラッシュコマンドをDiscordに登録する(一覧で丸ごと置き換える)
+ * - POST /admin/commands/register: スラッシュコマンドをDiscordに登録する(一覧で丸ごと置き換える)。
+ *   返事には、登録したWorkerの版のIDを入れる。デプロイの直後は古い版が応答することがあるため、
+ *   自動デプロイ(.github/workflows/deploy.yml)は、これがデプロイした版と同じになるまで登録をやり直す
  * - POST /admin/vectors/reindex: 保存したメッセージのベクトルを、全部入れ直す(メタデータを足したときなど)
  */
 export async function handleAdminRequest(
@@ -47,6 +49,7 @@ export async function handleAdminRequest(
 		return Response.json({
 			ok: true,
 			commands: registered.map((command) => command.name),
+			version: env.CF_VERSION_METADATA.id,
 		});
 	}
 	if (request.method === "POST" && url.pathname === "/admin/vectors/reindex") {
