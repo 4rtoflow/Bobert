@@ -63,7 +63,7 @@ const MAX_CONTINUATIONS = 3;
  * 1回の返答で、AIとやり取りする回数の上限。続きを頼むときと、道具の結果を返すときに数える。
  * スキルを読む分とファイルを読む分は、道具の呼び出しの上限とは別に数えるので、その回数を足す
  */
-const MAX_ROUNDS = 10 + MAX_SKILL_READS + MAX_FILE_READS;
+const MAX_ROUNDS = MAX_TOOL_CALLS + 5 + MAX_SKILL_READS + MAX_FILE_READS;
 
 /**
  * ユーザーのAnthropicのAPIキーで、Claudeを直接呼ぶ。

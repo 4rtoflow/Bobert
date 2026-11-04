@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { APIMessage } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TOOL_CALLS } from "../src/config/models";
 import {
 	formatSkillFile,
 	parseSkillFile,
@@ -440,7 +441,7 @@ describe("道具の呼び出しの上限", () => {
 		return tool;
 	}
 
-	it("スキルを読む道具は、上限(1回の返答で合計5回)に数えない", async () => {
+	it("スキルを読む道具は、上限(MAX_TOOL_CALLS)に数えない", async () => {
 		const history = fakeTool("read_channel_history");
 		const skill = fakeTool("read_skill", false);
 		const request: ChatRequest = {
@@ -460,16 +461,19 @@ describe("道具の呼び出しの上限", () => {
 			if (round === 1) {
 				return openRouterToolCalls([
 					["s1", "read_skill"],
-					...[1, 2, 3, 4, 5].map((index): [string, string] => [
-						`h${index}`,
-						"read_channel_history",
-					]),
+					...Array.from(
+						{ length: MAX_TOOL_CALLS },
+						(_, index): [string, string] => [
+							`h${index + 1}`,
+							"read_channel_history",
+						],
+					),
 				]);
 			}
 			// 上限に達した後に呼ばれた道具は、実行しない。スキルを読む道具は、実行する
 			return round === 2
 				? openRouterToolCalls([
-						["h6", "read_channel_history"],
+						[`h${MAX_TOOL_CALLS + 1}`, "read_channel_history"],
 						["s2", "read_skill"],
 					])
 				: openRouterChat("答え");
@@ -481,13 +485,17 @@ describe("道具の呼び出しの上限", () => {
 			(call) =>
 				call.body as { tool_choice?: string; messages: { content: string }[] },
 		);
-		expect(history.calls).toBe(5);
+		expect(history.calls).toBe(MAX_TOOL_CALLS);
 		expect(skill.calls).toBe(2);
 		// 上限を超えて呼ばれた分も数える。スキルを読む道具の分は数えない
-		expect(result.toolCalls).toBe(6);
+		expect(result.toolCalls).toBe(MAX_TOOL_CALLS + 1);
 		expect(bodies[1]?.tool_choice).toBe("none");
 		expect(bodies[2]?.messages.slice(-2)).toEqual([
-			{ role: "tool", tool_call_id: "h6", content: TOOL_LIMIT_REACHED.content },
+			{
+				role: "tool",
+				tool_call_id: `h${MAX_TOOL_CALLS + 1}`,
+				content: TOOL_LIMIT_REACHED.content,
+			},
 			{ role: "tool", tool_call_id: "s2", content: "結果" },
 		]);
 		expect(result.text).toBe("答え");
