@@ -25,10 +25,11 @@ describe("/help", () => {
 		expect(body.type).toBe(InteractionResponseType.ChannelMessageWithSource);
 		expect(body.data.flags).toBe(MessageFlags.Ephemeral);
 		const lines: string[] = body.data.content.split("\n");
-		expect(lines.slice(0, 16)).toEqual([
+		expect(lines.slice(0, 17)).toEqual([
 			"**Bobertの使い方**",
 			"- Bobertにメンションするか、Bobertの返答に返信すると、AIが答えます。",
 			"- メッセージに返信しながらBobertにメンションすると、そのメッセージについて聞けます。",
+			"- Bobertの返答に音声メッセージで返信すると、音声を文字にしてから答えます。チャンネルの音声メッセージも文字にしておき、ほかのメッセージと同じように探して使います。",
 			"- AIは必要なときに、このサーバーでBotが見られるチャンネルの過去のメッセージを探して答えます。年齢制限のチャンネルと非公開スレッドのメッセージは、その中での返答にだけ使います。",
 			"- ほかのチャンネルの内容を、そのチャンネルを見られない人もいるチャンネルで答えることがあります。AIに読ませたくないチャンネルは、Botの「チャンネルを見る」権限を外してください。",
 			"- メッセージの右クリックメニュー(アプリ)の「Bobertに聞く」: そのメッセージの意味を説明します",
@@ -44,12 +45,12 @@ describe("/help", () => {
 			"**コマンド**",
 		]);
 		// コマンドの一覧は、登録するスラッシュコマンドの説明から、登録する順に作る(右クリックメニューの項目は入れない)
-		expect(lines.slice(16)).toHaveLength(
+		expect(lines.slice(17)).toHaveLength(
 			COMMANDS.filter(
 				(command) => command.type === ApplicationCommandType.ChatInput,
 			).length,
 		);
-		expect(lines[16]).toBe(
+		expect(lines[17]).toBe(
 			"- `/setup`: Anthropic APIキーの登録・OpenRouterへのログイン・TypeSafe APIキーの登録(Jev用)",
 		);
 		expect(lines).toContain(

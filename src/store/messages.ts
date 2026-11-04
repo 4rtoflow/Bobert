@@ -513,6 +513,8 @@ export interface MessageToEmbed {
 	content: string;
 	mentions: UserName[];
 	embeds: EmbedInfo[];
+	/** 音声メッセージを文字にした内容(仕様: docs/spec/architecture.md「音声メッセージ」)。文字にしていなければnull */
+	transcript: string | null;
 	createdAt: number;
 	editedAt: number | null;
 }
@@ -526,9 +528,13 @@ export async function findMessagesToEmbed(
 	for (const ids of chunks(messageIds, MAX_IDS_PER_QUERY)) {
 		const { results } = await db
 			.prepare(
-				`SELECT message_id, guild_id, channel_id, author_id, content, mentions, embeds, created_at, edited_at
+				`SELECT messages.message_id, messages.guild_id, messages.channel_id, messages.author_id,
+					messages.content, messages.mentions, messages.embeds, messages.created_at, messages.edited_at,
+					voice_transcripts.text AS transcript
 				FROM messages
-				WHERE embedded_at IS NULL AND message_id IN (${ids.map(() => "?").join(", ")})`,
+				LEFT JOIN voice_transcripts ON voice_transcripts.message_id = messages.message_id
+				WHERE messages.embedded_at IS NULL
+					AND messages.message_id IN (${ids.map(() => "?").join(", ")})`,
 			)
 			.bind(...ids)
 			.all<{
@@ -541,6 +547,7 @@ export async function findMessagesToEmbed(
 				embeds: string | null;
 				created_at: number;
 				edited_at: number | null;
+				transcript: string | null;
 			}>();
 		for (const row of results) {
 			found.push({
@@ -551,6 +558,7 @@ export async function findMessagesToEmbed(
 				content: row.content,
 				mentions: row.mentions ? (JSON.parse(row.mentions) as UserName[]) : [],
 				embeds: row.embeds ? (JSON.parse(row.embeds) as EmbedInfo[]) : [],
+				transcript: row.transcript,
 				createdAt: row.created_at,
 				editedAt: row.edited_at,
 			});
@@ -597,6 +605,10 @@ export async function deleteStoredMessages(
 				)
 				.bind(messageId, now),
 			db.prepare("DELETE FROM messages WHERE message_id = ?").bind(messageId),
+			// 音声メッセージを文字にした内容も消す。保存しないチャンネル(非公開スレッドなど)の分もあるので、保存の有無によらず消す
+			db
+				.prepare("DELETE FROM voice_transcripts WHERE message_id = ?")
+				.bind(messageId),
 		]),
 		db
 			.prepare("DELETE FROM deleted_messages WHERE deleted_at < ?")
@@ -605,8 +617,8 @@ export async function deleteStoredMessages(
 }
 
 /**
- * チャンネル(スレッドを含む)の保存したメッセージを、まとめて消す。権限付きになったチャンネルや、削除されたチャンネルの分。
- * 消したメッセージのIDを返す(Vectorizeからも消すため)。
+ * チャンネル(スレッドを含む)の保存したメッセージと、音声メッセージを文字にした内容を、まとめて消す。
+ * 権限付きになったチャンネルや、削除されたチャンネルの分。消したメッセージのIDを返す(Vectorizeからも消すため)。
  * 保存の処理は、共有チャンネルかどうかを確かめてから保存するので、消したメッセージのIDは残さない
  */
 export async function deleteChannelMessages(
@@ -623,6 +635,13 @@ export async function deleteChannelMessages(
 			.bind(...ids)
 			.all<{ message_id: string }>();
 		deleted.push(...results.map((row) => row.message_id));
+		// 音声メッセージを文字にした内容も、そのチャンネルの分を消す
+		await db
+			.prepare(
+				`DELETE FROM voice_transcripts WHERE channel_id IN (${ids.map(() => "?").join(", ")})`,
+			)
+			.bind(...ids)
+			.run();
 	}
 	return deleted;
 }

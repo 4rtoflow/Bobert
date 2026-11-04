@@ -20,6 +20,7 @@ import type { AnthropicCredential } from "../llm/anthropic";
 import { logEvent } from "../log";
 import { findSkillByName } from "../store/skills";
 import { loadCredential } from "../store/users";
+import { transcribeAudio } from "../voice/voice";
 import { agentClient, deleteSession } from "./managed";
 import {
 	type AgentEvent,
@@ -436,6 +437,19 @@ export class AgentSession extends DurableObject<Env> {
 					throw new Error(`Attachment fetch failed: ${response.status}`);
 				}
 				return new Uint8Array(await response.arrayBuffer());
+			},
+			// 音声メッセージを文字にする(仕様: docs/spec/architecture.md「音声メッセージ」)。文字にした内容は残さない
+			transcribe: async (audio) => {
+				const startedAt = Date.now();
+				const result = await transcribeAudio(this.env.AI, audio);
+				logEvent("agent", "voice_transcribed", {
+					userId: state.ownerId,
+					guildId: state.guildId,
+					durationMs: Date.now() - startedAt,
+					language: result.language,
+					empty: result.text === "",
+				});
+				return result;
 			},
 			uploadLimit: () => this.uploadLimit(state.guildId),
 			readSkill: async (name) => {

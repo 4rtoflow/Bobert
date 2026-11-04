@@ -37,6 +37,16 @@ import { logEvent } from "../log";
 import { REFUSAL_TEXT } from "../respond/replies";
 import { DISCORD_MESSAGE_LIMIT, splitMessage } from "../respond/split";
 import {
+	AGENT_VOICE_FAILED,
+	AGENT_VOICE_INTRO,
+	heardNote,
+} from "../voice/texts";
+import {
+	isVoiceAttachment,
+	MAX_VOICE_BYTES,
+	type Transcription,
+} from "../voice/voice";
+import {
 	type AgentModel,
 	CREATE_PULL_REQUEST_TOOL,
 	describeAgentError,
@@ -354,6 +364,8 @@ export interface IncomingAttachment {
 	/** DiscordのCDNのURL。有効期限がある */
 	url: string;
 	contentType: string | null;
+	/** 音声メッセージの音声なら、その長さ(秒)。音声メッセージは、文字にしてからエージェントに送る */
+	voiceDurationSecs?: number;
 }
 
 /** Discordへの書き込み(チャンネルは決まっている) */
@@ -378,6 +390,8 @@ export interface RelayDeps {
 	markEnded(): Promise<void>;
 	/** 添付ファイルを、DiscordのCDNから読む */
 	fetchAttachment(url: string): Promise<Uint8Array>;
+	/** 音声を文字にする(Workers AI。仕様: docs/spec/architecture.md「音声メッセージ」) */
+	transcribe(audio: Uint8Array): Promise<Transcription>;
 	/** このサーバーで、Discordに1つ上げられるファイルの大きさ(バイト) */
 	uploadLimit(): Promise<number>;
 	/** サーバーのスキルを、名前で読む。なければnull */
@@ -1010,7 +1024,9 @@ export class SessionRelay {
 
 	/**
 	 * 発言を、エージェントに送る文にする。添付ファイルはサンドボックスに置き、置き場所を終わりに書く。
-	 * 25MBを超えるファイルは渡さず、その発言への返信で知らせる。送るものがなければnull
+	 * 25MBを超えるファイルは渡さず、その発言への返信で知らせる。
+	 * 音声メッセージは、サンドボックスに置かず、文字にした内容を送る(仕様: docs/spec/architecture.md「音声メッセージ」)。
+	 * 送るものがなければnull
 	 */
 	private async prepare(
 		client: Anthropic,
@@ -1019,7 +1035,16 @@ export class SessionRelay {
 	): Promise<string | null> {
 		const text = ownerText(message);
 		const paths: string[] = [];
+		const heard: string[] = [];
 		for (const attachment of message.attachments) {
+			// 音声メッセージの印がなくても(デプロイの後、Gatewayが前の版のコードで動いている間など)、名前と形式で見分ける
+			if (isVoiceAttachment(attachment)) {
+				const voice = await this.transcribeVoice(message, attachment);
+				if (voice !== null) {
+					heard.push(`${AGENT_VOICE_INTRO}\n${voice}`);
+				}
+				continue;
+			}
 			if (attachment.size > MAX_ATTACHMENT_BYTES) {
 				await this.deps.discord
 					.post({
@@ -1034,14 +1059,47 @@ export class SessionRelay {
 			}
 			paths.push(await this.mount(client, sessionId, message.id, attachment));
 		}
-		if (text.trim() === "" && paths.length === 0) {
+		const body = [text, ...heard]
+			.filter((part) => part.trim() !== "")
+			.join("\n\n");
+		if (body === "" && paths.length === 0) {
 			return null;
 		}
 		if (paths.length === 0) {
-			return text;
+			return body;
 		}
 		const list = paths.map((path) => `- ${path}`).join("\n");
-		return `${text}\n\n添付ファイル:\n${list}`.trim();
+		return `${body}\n\n添付ファイル:\n${list}`.trim();
+	}
+
+	/**
+	 * 音声メッセージを文字にする。文字にできたら、聞き取った内容を、その音声メッセージへの返信で示して、内容を返す。
+	 * 文字にできなかったとき(声が入っていなかったときを含む)は、エージェントに送らないことを返信で知らせて、nullを返す
+	 */
+	private async transcribeVoice(
+		message: IncomingMessage,
+		attachment: IncomingAttachment,
+	): Promise<string | null> {
+		let text = "";
+		try {
+			if (attachment.size > MAX_VOICE_BYTES) {
+				throw new Error("音声のファイルが大きすぎます");
+			}
+			const audio = await this.deps.fetchAttachment(attachment.url);
+			text = (await this.deps.transcribe(audio)).text;
+		} catch (error) {
+			log("voice_transcribe_failed", this.state, error);
+		}
+		await this.deps.discord
+			.post({
+				content: text === "" ? AGENT_VOICE_FAILED : heardNote(text),
+				message_reference: { message_id: message.id },
+				allowed_mentions: { parse: [], replied_user: false },
+			})
+			.catch((error: unknown) => {
+				log("voice_notice_failed", this.state, error);
+			});
+		return text === "" ? null : text;
 	}
 
 	/**

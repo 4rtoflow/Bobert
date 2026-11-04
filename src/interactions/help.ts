@@ -8,6 +8,7 @@ import {
 import { JEV_HELP_LINE } from "../jev/texts";
 import { MEMORY_HELP } from "../memory/texts";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
+import { VOICE_HELP } from "../voice/texts";
 import { BOBERTMD_HELP } from "./bobert-md";
 import { COMMANDS } from "./commands";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
@@ -31,6 +32,7 @@ export function helpText(): string {
 		"**Bobertの使い方**",
 		"- Bobertにメンションするか、Bobertの返答に返信すると、AIが答えます。",
 		"- メッセージに返信しながらBobertにメンションすると、そのメッセージについて聞けます。",
+		VOICE_HELP,
 		"- AIは必要なときに、このサーバーでBotが見られるチャンネルの過去のメッセージを探して答えます。年齢制限のチャンネルと非公開スレッドのメッセージは、その中での返答にだけ使います。",
 		"- ほかのチャンネルの内容を、そのチャンネルを見られない人もいるチャンネルで答えることがあります。AIに読ませたくないチャンネルは、Botの「チャンネルを見る」権限を外してください。",
 		`- メッセージの右クリックメニュー(アプリ)の「${EXPLAIN_COMMAND_NAME}」: そのメッセージの意味を説明します`,

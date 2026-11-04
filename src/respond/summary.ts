@@ -8,6 +8,8 @@ import {
 	saveSummary,
 } from "../store/summaries";
 import type { UserSettings } from "../store/users";
+import { storedVoiceTexts } from "../store/voice";
+import type { VoiceText } from "../voice/voice";
 import { messageLine } from "./conversation";
 import { type ResolvedModel, selectedCandidate } from "./model";
 
@@ -106,9 +108,14 @@ export function summaryRequest(options: {
 	messages: readonly StoredMessageInput[];
 	botUserId: string;
 	names: ReadonlyMap<string, string>;
+	/** 音声メッセージを文字にした内容(メッセージIDごと。仕様: docs/spec/architecture.md「音声メッセージ」) */
+	voice?: ReadonlyMap<string, VoiceText>;
 }): ChatRequest {
 	const lines = options.messages.map((message) =>
-		messageLine(message, options.botUserId, { names: options.names }),
+		messageLine(message, options.botUserId, {
+			names: options.names,
+			voice: options.voice,
+		}),
 	);
 	const text = [
 		...(options.previous === null
@@ -162,6 +169,8 @@ export async function summarizeOlderPart(options: {
 			messages: older,
 			botUserId: options.botUserId,
 			names: options.names,
+			// 音声メッセージは、文字にした内容を保存してあれば、それで要約する(新しく文字にはしない)
+			voice: await storedVoiceTexts(options.db, older),
 		}),
 	);
 	const text = result.text.trim();

@@ -454,6 +454,8 @@ export function fakeIngestDeps(botUserId: string) {
 	const upserted: VectorizeVector[] = [];
 	const deleted: string[] = [];
 	const embedded: string[] = [];
+	/** 前もって文字にする仕事を入れた、音声メッセージ */
+	const transcribing: { channelId: string; messageId: string }[] = [];
 	const deps: IngestDeps = {
 		db: env.DB,
 		vectors: {
@@ -481,6 +483,9 @@ export function fakeIngestDeps(botUserId: string) {
 			overwrites: [],
 		}),
 		fetchGuildRoles: async (guildId) => testGuildRoles(guildId),
+		transcribeLater: async (targets) => {
+			transcribing.push(...targets);
+		},
 	};
-	return { deps, upserted, deleted, embedded };
+	return { deps, upserted, deleted, embedded, transcribing };
 }
