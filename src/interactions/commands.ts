@@ -18,6 +18,10 @@ import {
 	MEMORY_COMMAND_NAME,
 } from "../memory/texts";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
+import {
+	BOBERTMD_COMMAND_DESCRIPTION,
+	BOBERTMD_COMMAND_NAME,
+} from "./bobert-md";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
 import {
 	REGSKILLS_COMMAND_NAME,
@@ -94,6 +98,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: SKILLS_COMMAND_NAME,
 		description: "このサーバーでAIが使うスキル(手順や知識)の一覧と編集",
+	},
+	{
+		...GUILD_ONLY,
+		name: BOBERTMD_COMMAND_NAME,
+		description: BOBERTMD_COMMAND_DESCRIPTION,
 	},
 	{
 		...GUILD_ONLY,

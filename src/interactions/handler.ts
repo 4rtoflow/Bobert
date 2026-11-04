@@ -29,6 +29,12 @@ import {
 	COMPACT_BUTTON_ID,
 	COMPACT_COMMAND_NAME,
 } from "../respond/compact-button";
+import {
+	BOBERTMD_COMMAND_NAME,
+	BOBERTMD_MODAL_PREFIX,
+	bobertmdCommand,
+	submitBobertMd,
+} from "./bobert-md";
 import { compactFromButton, compactFromMenu } from "./compact";
 import { confirmDelete, DELETE_CONFIRM_ID, deleteCommand } from "./delete";
 import {
@@ -105,8 +111,8 @@ async function route(
 	if (!user) {
 		return notReady();
 	}
-	// 寄付とスキルは、サーバーごと。
-	// 操作した人の名前は、サーバーで見えている名前(寄付した人や、スキルを登録・編集した人として見せる)
+	// 寄付とスキルとBobert.mdは、サーバーごと。
+	// 操作した人の名前は、サーバーで見えている名前(寄付した人や、スキルとBobert.mdを編集した人として見せる)
 	const guildId = interaction.guild_id;
 	const actor = {
 		id: user.id,
@@ -174,6 +180,9 @@ async function route(
 			}
 			if (interaction.data.name === SKILLS_COMMAND_NAME && guildId) {
 				return skillsCommand(env, guildId);
+			}
+			if (interaction.data.name === BOBERTMD_COMMAND_NAME && guildId) {
+				return bobertmdCommand(env, guildId);
 			}
 			if (
 				interaction.data.type === ApplicationCommandType.ChatInput &&
@@ -290,6 +299,12 @@ async function route(
 			}
 			if (interaction.data.custom_id === DONATE_MODAL_ID && guildId) {
 				return submitDonation(interaction, env, guildId, actor);
+			}
+			if (
+				interaction.data.custom_id.startsWith(BOBERTMD_MODAL_PREFIX) &&
+				guildId
+			) {
+				return submitBobertMd(interaction, env, ctx, guildId, actor);
 			}
 			if (interaction.data.custom_id.startsWith(SKILLS_ID_PREFIX) && guildId) {
 				const response = await submitSkillModal(
