@@ -54,7 +54,9 @@ import {
 	AGENT_DENY_PREFIX,
 	AGENT_END_CONFIRM_ID,
 	AGENT_END_ID,
+	AGENT_GITHUB_CANCEL_PREFIX,
 	AGENT_GITHUB_ID,
+	AGENT_GITHUB_RUN_PREFIX,
 	AGENT_PR_CANCEL_PREFIX,
 	AGENT_PR_CREATE_PREFIX,
 	AGENT_STOP_ID,
@@ -628,6 +630,21 @@ export async function agentComponent(
 			reportFailure(
 				interaction,
 				() => stub.answerPullRequest(toolUseId, createPullRequest),
+				channel.ownerId,
+			),
+		);
+		return { type: InteractionResponseType.DeferredMessageUpdate };
+	}
+	const runGitHubWrite = customId.startsWith(AGENT_GITHUB_RUN_PREFIX);
+	if (runGitHubWrite || customId.startsWith(AGENT_GITHUB_CANCEL_PREFIX)) {
+		const toolUseId = customId.slice(
+			(runGitHubWrite ? AGENT_GITHUB_RUN_PREFIX : AGENT_GITHUB_CANCEL_PREFIX)
+				.length,
+		);
+		ctx.waitUntil(
+			reportFailure(
+				interaction,
+				() => stub.answerGitHubWrite(toolUseId, runGitHubWrite),
 				channel.ownerId,
 			),
 		);

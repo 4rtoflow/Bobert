@@ -26,6 +26,7 @@ import {
 	findAllowedRepository,
 	gitHubAccessToken,
 	openPullRequest,
+	writeToGitHub,
 } from "../src/github/account";
 import {
 	createGitHubAuthLink,
@@ -657,6 +658,57 @@ describe("PRを作る", () => {
 			status: "failed",
 			reason:
 				"Validation Failed: A pull request already exists for octocat:fix.",
+		});
+	});
+});
+
+describe("GitHubへの書き込み", () => {
+	const request = {
+		repository: "octocat/hello",
+		action: { action: "pr_close" as const, number: 3 },
+		target: "#3 直す",
+		detail: "",
+	};
+
+	it("本人のトークンで書き込み、結果のURLを返す", async () => {
+		const owner = await newUser("anthropic");
+		await saveGitHubLink(env, owner.id, freshTokens());
+		const calls = mockFetch(() =>
+			Response.json({ html_url: "https://github.com/octocat/hello/pull/3" }),
+		);
+
+		const outcome = await writeToGitHub(env, owner.id, request);
+
+		expect(outcome).toEqual({
+			status: "done",
+			url: "https://github.com/octocat/hello/pull/3",
+		});
+		expect(calls[0]?.method).toBe("PATCH");
+		expect(calls[0]?.url.href).toBe(
+			"https://api.github.com/repos/octocat/hello/pulls/3",
+		);
+		expect(calls[0]?.headers.get("Authorization")).toBe("Bearer ghu_fresh");
+	});
+
+	it("GitHubに断られたら、その理由を返す", async () => {
+		const owner = await newUser("anthropic");
+		await saveGitHubLink(env, owner.id, freshTokens());
+		mockFetch(() =>
+			Response.json({ message: "Resource not accessible" }, { status: 403 }),
+		);
+
+		expect(await writeToGitHub(env, owner.id, request)).toEqual({
+			status: "failed",
+			reason: "Resource not accessible",
+		});
+	});
+
+	it("連携していなければ、連携していないと返す", async () => {
+		const owner = await newUser("anthropic");
+		mockFetch(() => Response.json({}));
+
+		expect(await writeToGitHub(env, owner.id, request)).toEqual({
+			status: "unlinked",
 		});
 	});
 });

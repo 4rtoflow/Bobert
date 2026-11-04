@@ -283,6 +283,58 @@ export const PR_NOT_CREATED = "PRを作りませんでした。";
 export const PR_CREATE_FAILED =
 	"PRを作れませんでした。理由は、エージェントに伝えました。";
 
+/** GitHubの操作(PRを作る以外)の確認の1行目 */
+export const GITHUB_WRITE_CONFIRM_INTRO =
+	"エージェントが、GitHubで操作しようとしています。";
+
+export function githubOperationLine(operation: string): string {
+	return `操作: ${operation}`;
+}
+
+export function githubTargetLine(target: string): string {
+	return `対象: ${target}`;
+}
+
+/** 「操作」の行の名前(github_writeのactionごと) */
+export const GITHUB_OPERATION_LABELS: Readonly<Record<string, string>> = {
+	issue_create: "Issueを作る",
+	issue_comment: "Issueにコメントする",
+	issue_update: "Issueを更新する",
+	issue_close: "Issueを閉じる",
+	issue_reopen: "Issueを開き直す",
+	pr_comment: "PRにコメントする",
+	pr_review: "PRにレビューを付ける",
+	pr_merge: "PRをマージする",
+	pr_close: "PRを閉じる",
+	workflow_dispatch: "ワークフローを起動する",
+	run_rerun: "実行を再実行する",
+	run_cancel: "実行をキャンセルする",
+	project_add_item: "Projectに項目を追加する",
+	project_update_item: "Projectの項目を更新する",
+	pages_build: "Pagesのビルドを始める",
+};
+
+/** Pagesのビルドの「対象」の行の値 */
+export const GITHUB_PAGES_TARGET = "設定のブランチ";
+
+export const GITHUB_RUN_BUTTON_LABEL = "実行する";
+export const GITHUB_CANCEL_BUTTON_LABEL = "実行しない";
+
+/** 操作を行ったとき(確認のボタンを外して書き換える)。URLは<>で囲み、リンクのプレビューを出さない。URLがなければ省く */
+export function githubWriteDone(url: string | null): string {
+	return url === null ? "実行しました。" : `実行しました: <${url}>`;
+}
+
+/** 「実行しない」を押したとき(確認のボタンを外して書き換える) */
+export const GITHUB_WRITE_NOT_RUN = "実行しませんでした。";
+
+/**
+ * 「実行する」を押したが、GitHubに断られたか、連携が外されていて、実行できなかったとき
+ * (確認のボタンを外して書き換える)。理由は、道具の結果としてエージェントに伝える
+ */
+export const GITHUB_WRITE_FAILED =
+	"実行できませんでした。理由は、エージェントに伝えました。";
+
 /** セッションを終えられなかった(本人にだけ見える) */
 export const END_FAILED =
 	"セッションを終えられませんでした。少し待ってから、もう一度試してください。";

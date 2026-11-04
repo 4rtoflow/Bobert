@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	type AgentEvent,
 	discordUploadLimit,
+	githubWriteConfirmation,
 	type IncomingMessage,
 	initialState,
 	ownerText,
@@ -35,6 +36,9 @@ import {
 	STOPPED_LINE,
 } from "../src/agent/texts";
 import { DiscordApiError, type MessageFile } from "../src/discord/api";
+import { ButtonStyle, ComponentType } from "../src/discord/constants";
+import { GitHubApiError } from "../src/github/api";
+import type { GitHubWriteAction } from "../src/github/operations";
 
 const MODEL = { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" };
 
@@ -95,6 +99,13 @@ function fakeGitHub(overrides: Partial<RelayGitHub> = {}): RelayGitHub {
 		findRepository: async () => ({ status: "unlinked" }),
 		hasBranch: async () => true,
 		createPullRequest: async () => ({ status: "unlinked" }),
+		readRepository: async () => "",
+		prepareWrite: async (_token, _repository, action) => ({
+			action,
+			target: "",
+			detail: "",
+		}),
+		writeRepository: async () => ({ status: "unlinked" }),
 		accessToken: async () => null,
 		...overrides,
 	};
@@ -1312,6 +1323,499 @@ describe("GitHub", () => {
 
 		expect(edits).toContainEqual({ id: "m1", body: { components: [] } });
 		expect(state.pullRequests).toEqual([]);
+	});
+
+	it("github_readで、つないだリポジトリを読み、確認なしで結果を返す", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const readRepository = vi.fn(async () => '[{"number":1}]');
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ readRepository }),
+		});
+
+		await relay.handle(
+			githubTool("github_read", {
+				repository: "octocat/hello",
+				kind: "issues",
+				state: "closed",
+				limit: 5,
+			}),
+		);
+
+		expect(readRepository).toHaveBeenCalledWith("ghu_token", "octocat/hello", {
+			kind: "issues",
+			state: "closed",
+			labels: [],
+			limit: 5,
+		});
+		expect(posts).toEqual([]);
+		expect(toolResults(send)).toEqual([
+			expect.objectContaining({
+				content: [{ type: "text", text: '[{"number":1}]' }],
+				is_error: false,
+			}),
+		]);
+	});
+
+	it("github_readで、取り込んでいないリポジトリや、正しくない入力は、GitHubを呼ばずに断る", async () => {
+		const state = connectedState();
+		const { discord } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const findRepository = vi.fn();
+		const { relay } = relayOf(state, discord, client, {
+			github: fakeGitHub({ findRepository }),
+		});
+
+		await relay.handle(
+			githubTool("github_read", {
+				repository: "octocat/other",
+				kind: "issues",
+			}),
+		);
+		await relay.handle(
+			githubTool("github_read", { repository: "octocat/hello", kind: "nope" }),
+		);
+
+		expect(findRepository).not.toHaveBeenCalled();
+		expect(
+			toolResults(send).map((result) => [
+				result.content?.[0]?.text,
+				result.is_error,
+			]),
+		).toEqual([
+			[
+				"このセッションでGitHubを操作できるのは、取り込んだリポジトリ(octocat/hello)だけです。",
+				true,
+			],
+			[expect.stringContaining("kind は、次のどれかで指定してください"), true],
+		]);
+	});
+
+	it("github_readで、GitHubに断られたら、理由をエージェントに返す", async () => {
+		const state = connectedState();
+		const { discord } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({
+				readRepository: async () => {
+					throw new GitHubApiError(403, "forbidden", "Resource not accessible");
+				},
+			}),
+		});
+
+		await relay.handle(
+			githubTool("github_read", { repository: "octocat/hello", kind: "pages" }),
+		);
+
+		expect(toolResults(send)).toEqual([
+			expect.objectContaining({
+				content: [
+					{
+						type: "text",
+						text: "GitHubに断られました(403): Resource not accessible",
+					},
+				],
+				is_error: true,
+			}),
+		]);
+	});
+
+	it("github_writeで、対象を確かめて、確認のメッセージとボタンを出し、答えは返さない", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const prepareWrite = vi.fn(
+			async (
+				_token: string,
+				_repository: unknown,
+				action: GitHubWriteAction,
+			) => ({
+				action,
+				target: "#78 /agentの返事で",
+				detail: "merge_method: squash",
+			}),
+		);
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ prepareWrite }),
+		});
+		const call = githubTool("github_write", {
+			repository: "octocat/hello",
+			action: "pr_merge",
+			number: 78,
+			merge_method: "squash",
+		});
+
+		await relay.handle(call);
+
+		expect(posts).toEqual([
+			{
+				content: [
+					"エージェントが、GitHubで操作しようとしています。",
+					"リポジトリ: octocat/hello",
+					"操作: PRをマージする",
+					"対象: #78 /agentの返事で",
+					"> merge_method: squash",
+				].join("\n"),
+				components: [
+					{
+						type: ComponentType.ActionRow,
+						components: [
+							{
+								type: ComponentType.Button,
+								style: ButtonStyle.Primary,
+								label: "実行する",
+								custom_id: `agent:gh_run:${(call as { id: string }).id}`,
+							},
+							{
+								type: ComponentType.Button,
+								style: ButtonStyle.Secondary,
+								label: "実行しない",
+								custom_id: `agent:gh_cancel:${(call as { id: string }).id}`,
+							},
+						],
+					},
+				],
+				allowed_mentions: { parse: [] },
+			},
+		]);
+		expect(toolResults(send)).toEqual([]);
+		expect(state.githubWrites).toHaveLength(1);
+	});
+
+	it("github_writeのPagesのビルドは、対象の行に「設定のブランチ」と書く", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub(),
+		});
+
+		await relay.handle(
+			githubTool("github_write", {
+				repository: "octocat/hello",
+				action: "pages_build",
+			}),
+		);
+
+		expect(posts[0]?.content).toBe(
+			[
+				"エージェントが、GitHubで操作しようとしています。",
+				"リポジトリ: octocat/hello",
+				"操作: Pagesのビルドを始める",
+				"対象: 設定のブランチ",
+			].join("\n"),
+		);
+	});
+
+	it("github_writeで、対象がなかったり、取り込んでいないリポジトリだったりしたら、確認を出さずに断る", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({
+				prepareWrite: async () => {
+					throw new GitHubApiError(404, "not found", "Not Found");
+				},
+			}),
+		});
+
+		await relay.handle(
+			githubTool("github_write", {
+				repository: "octocat/hello",
+				action: "issue_close",
+				number: 999,
+			}),
+		);
+		await relay.handle(
+			githubTool("github_write", {
+				repository: "octocat/other",
+				action: "issue_close",
+				number: 1,
+			}),
+		);
+		await relay.handle(
+			githubTool("github_write", { repository: "octocat/hello", action: "x" }),
+		);
+
+		expect(posts).toEqual([]);
+		expect(
+			toolResults(send).map((result) => [
+				result.content?.[0]?.text,
+				result.is_error,
+			]),
+		).toEqual([
+			["GitHubに断られました(404): Not Found", true],
+			[
+				"このセッションでGitHubを操作できるのは、取り込んだリポジトリ(octocat/hello)だけです。",
+				true,
+			],
+			[
+				expect.stringContaining("action は、次のどれかで指定してください"),
+				true,
+			],
+		]);
+		expect(state.githubWrites).toEqual([]);
+	});
+
+	it("「実行する」で、本人のトークンで書き込み、結果をエージェントに返して、確認を書き換え、預かった発言を送る", async () => {
+		const state = connectedState();
+		const { discord, edits, removed } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const writeRepository = vi.fn(async () => ({
+			status: "done" as const,
+			url: "https://github.com/octocat/hello/issues/3",
+		}));
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ writeRepository }),
+		});
+		const call = githubTool("github_write", {
+			repository: "octocat/hello",
+			action: "issue_create",
+			title: "バグ",
+			body: "直す",
+		});
+		await relay.handle(call);
+		state.held.push({ noticeId: "m9", message: ownerMessage("次はテスト") });
+		const id = (call as { id: string }).id;
+
+		const answered = await relay.answerGitHubWrite(id, true);
+
+		expect(answered).toEqual({ result: "ok", stream: true });
+		expect(writeRepository).toHaveBeenCalledWith({
+			repository: "octocat/hello",
+			action: {
+				action: "issue_create",
+				title: "バグ",
+				body: "直す",
+				labels: [],
+				assignees: [],
+			},
+			target: "",
+			detail: "",
+		});
+		expect(toolResults(send)).toEqual([
+			{
+				type: "user.custom_tool_result",
+				custom_tool_use_id: id,
+				content: [
+					{
+						type: "text",
+						text: "実行しました(issue_create): https://github.com/octocat/hello/issues/3",
+					},
+				],
+				is_error: false,
+			},
+		]);
+		expect(edits.at(-1)).toEqual({
+			id: "m1",
+			body: {
+				content: "実行しました: <https://github.com/octocat/hello/issues/3>",
+				components: [],
+				allowed_mentions: { parse: [] },
+			},
+		});
+		expect(removed).toEqual(["m9"]);
+		expect(state.githubWrites).toEqual([]);
+		expect(state.awaitingRun).toBe(true);
+	});
+
+	it("「実行する」でURLのない操作は、「実行しました。」と書き換える", async () => {
+		const state = connectedState();
+		const { discord, edits } = fakeDiscord();
+		const { client } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({
+				writeRepository: async () => ({ status: "done", url: null }),
+			}),
+		});
+		const call = githubTool("github_write", {
+			repository: "octocat/hello",
+			action: "pages_build",
+		});
+		await relay.handle(call);
+
+		await relay.answerGitHubWrite((call as { id: string }).id, true);
+
+		expect(edits.at(-1)?.body.content).toBe("実行しました。");
+	});
+
+	it("「実行しない」で、書き込まず、実行しなかったことをエージェントに返す", async () => {
+		const state = connectedState();
+		const { discord, edits } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const writeRepository = vi.fn();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ writeRepository }),
+		});
+		const call = githubTool("github_write", {
+			repository: "octocat/hello",
+			action: "pr_close",
+			number: 4,
+		});
+		await relay.handle(call);
+
+		await relay.answerGitHubWrite((call as { id: string }).id, false);
+
+		expect(writeRepository).not.toHaveBeenCalled();
+		expect(toolResults(send)).toEqual([
+			expect.objectContaining({
+				content: [
+					{
+						type: "text",
+						text: "利用者が、この操作を実行しないことを選びました。",
+					},
+				],
+				is_error: true,
+			}),
+		]);
+		expect(edits.at(-1)?.body.content).toBe("実行しませんでした。");
+	});
+
+	it("GitHubに断られたら、理由をエージェントに返し、確認を「実行できませんでした。」に書き換える", async () => {
+		const state = connectedState();
+		const { discord, edits } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({
+				writeRepository: async () => ({
+					status: "failed",
+					reason: "Pull Request is not mergeable",
+				}),
+			}),
+		});
+		const call = githubTool("github_write", {
+			repository: "octocat/hello",
+			action: "pr_merge",
+			number: 4,
+		});
+		await relay.handle(call);
+
+		await relay.answerGitHubWrite((call as { id: string }).id, true);
+
+		expect(toolResults(send)).toEqual([
+			expect.objectContaining({
+				content: [
+					{
+						type: "text",
+						text: "GitHubに断られて、操作を実行できませんでした: Pull Request is not mergeable",
+					},
+				],
+				is_error: true,
+			}),
+		]);
+		expect(edits.at(-1)?.body.content).toBe(
+			"実行できませんでした。理由は、エージェントに伝えました。",
+		);
+	});
+
+	it("連携が外されていたら、連携のボタンを付けて知らせ、操作を実行しない", async () => {
+		const state = connectedState();
+		const { discord, posts } = fakeDiscord();
+		const { client } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({
+				writeRepository: async () => ({ status: "unlinked" }),
+			}),
+		});
+		const call = githubTool("github_write", {
+			repository: "octocat/hello",
+			action: "pr_close",
+			number: 4,
+		});
+		await relay.handle(call);
+
+		await relay.answerGitHubWrite((call as { id: string }).id, true);
+
+		expect(posts.at(-1)?.content).toBe(GITHUB_NOT_LINKED);
+	});
+
+	it("結果を伝えられなかったときの押し直しでは、同じ操作を繰り返さない", async () => {
+		const state = connectedState();
+		const { discord } = fakeDiscord();
+		const { client, send } = fakeRepositoryClient();
+		const writeRepository = vi.fn(async () => ({
+			status: "done" as const,
+			url: null,
+		}));
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub({ writeRepository }),
+		});
+		const call = githubTool("github_write", {
+			repository: "octocat/hello",
+			action: "pages_build",
+		});
+		await relay.handle(call);
+		const id = (call as { id: string }).id;
+		send.mockRejectedValueOnce(new Error("network"));
+
+		expect(await relay.answerGitHubWrite(id, true)).toEqual({
+			result: "failed",
+			stream: false,
+		});
+		expect(await relay.answerGitHubWrite(id, false)).toEqual({
+			result: "ok",
+			stream: true,
+		});
+
+		expect(writeRepository).toHaveBeenCalledTimes(1);
+		expect(toolResults(send).at(-1)).toEqual(
+			expect.objectContaining({ is_error: false }),
+		);
+	});
+
+	it("確認のボタンが外れた後や、知らない確認には、答えない", async () => {
+		const state = connectedState();
+		const { discord } = fakeDiscord();
+		const { client } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub(),
+		});
+
+		expect(await relay.answerGitHubWrite("unknown", true)).toEqual({
+			result: "stale",
+			stream: false,
+		});
+	});
+
+	it("確認を待つ間は、発言を預かり、セッションを終えたら、確認のボタンも外す", async () => {
+		const state = connectedState();
+		const { discord, edits } = fakeDiscord();
+		const { client } = fakeRepositoryClient();
+		const { relay } = relayOf(state, discord, client, {
+			github: foundGitHub(),
+		});
+		await relay.handle(
+			githubTool("github_write", {
+				repository: "octocat/hello",
+				action: "pr_close",
+				number: 4,
+			}),
+		);
+
+		await relay.closeAfterEnd();
+
+		expect(edits).toContainEqual({ id: "m1", body: { components: [] } });
+		expect(state.githubWrites).toEqual([]);
+	});
+
+	it("長い内容は、先頭の500文字までを引用する", () => {
+		const text = githubWriteConfirmation({
+			repository: "octocat/hello",
+			action: { action: "issue_comment", number: 1, body: "" },
+			target: "#1 題",
+			detail: `${"あ".repeat(600)}\n2行目`,
+		});
+
+		expect(text).toBe(
+			[
+				"エージェントが、GitHubで操作しようとしています。",
+				"リポジトリ: octocat/hello",
+				"操作: Issueにコメントする",
+				"対象: #1 題",
+				`> ${"あ".repeat(500)}…`,
+			].join("\n"),
+		);
 	});
 
 	it("保存したトークンが入れ替わっていたら、発言を送る前に、つないだリポジトリのトークンも入れ替える", async () => {
