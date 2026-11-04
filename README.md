@@ -78,19 +78,46 @@ pnpm exec wrangler secret put DISCORD_BOT_TOKEN --env=""
 pnpm db:migrate:dev
 ```
 
-本番のシークレットは、Gitに入らない`.env.production`(書式は`.env.example`と同じ)に書き、デプロイのときにまとめて入れる。本番の環境は2026-10-29に作成済み。
+本番のシークレットは、Gitに入らない`.env.production`(書式は`.env.example`と同じ)に書き、環境を作ったときの最初のデプロイで、まとめて入れる。本番の環境は2026-10-29に作成済み。その後のデプロイは、mainへのpushで自動で行う(次の「本番へのデプロイ」)。
 
 ```sh
 pnpm db:migrate:production
 pnpm exec wrangler deploy --env production --secrets-file .env.production
 ```
 
+## 本番へのデプロイ
+
+mainにpushすると(PRのマージを含む)、GitHub Actions(`.github/workflows/deploy.yml`)が、次の順に本番へデプロイする。途中の手順が失敗したら、そこで止まる。
+1. リント、型チェック、テストを実行する(PRのときと同じ`ci.yml`)。
+2. D1のマイグレーションを反映する(`pnpm db:migrate:production`)。新しいコードが新しいテーブルや列を使うことがあるため、デプロイより先に行う。
+3. Workerをデプロイする(`pnpm deploy:production`)。
+4. スラッシュコマンドを登録する(`src/interactions/commands.ts`の一覧で丸ごと置き換える)。デプロイの直後は、前の版が応答して、前の一覧のまま登録することがある。そのため、デプロイした版が応答するまでやり直す。
+
+デプロイが重ならないよう、実行は1つずつ、pushした順に進む。待っている間に新しいpushが来たら、待っていた方の実行は取り消され、新しい方だけがデプロイされる(新しい方に、取り消された方の変更も含まれている)。失敗した実行をやり直す(Re-run)ときは、そのコミットがmainの最新かを確かめる。最新でなければ、古い版で上書きしないよう、デプロイせずに失敗にする。
+
+### 最初に1回だけ: GitHubのシークレット
+
+リポジトリの「Settings → Secrets and variables → Actions」か、`gh secret set 名前`で入れる。
+
+| 名前                    | 中身                                                                                                                                                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN`  | CloudflareのAPIトークン。ダッシュボードの「Account API Tokens」で、テンプレート「Edit Cloudflare Workers」から作る。権限に「D1」「Queues」「Vectorize」の「Edit」がなければ足し、対象のアカウントはBobertのアカウントだけにする |
+| `CLOUDFLARE_ACCOUNT_ID` | CloudflareのアカウントID(`pnpm exec wrangler whoami`で表示される)                                                                                                                                                               |
+| `ADMIN_TOKEN`           | 本番の管理用エンドポイントのトークン(`.env.production`の値)。スラッシュコマンドの登録に使う                                                                                                                                     |
+
+### 自動ではしないこと
+
+- **Workerのシークレット:** 自動デプロイでは入れず、Cloudflareに入っている値をそのまま使う。シークレットを足す変更は、マージの前に本番へ入れておく。1つなら`pnpm exec wrangler secret put 名前 --env production`、`.env.production`からまとめてなら`pnpm exec wrangler secret bulk .env.production --env production`で入れる。`wrangler.jsonc`の`secrets.required`にあるものが入っていないと、デプロイは止まる。
+- **Cloudflareのリソース:** QueueやVectorizeの索引などは作らない。リソースを足す変更は、マージの前に作っておく(上の「Cloudflareのリソースを作る」)。
+- **Gatewayの始め直し:** Gatewayのコードやインテントを変えたときは、デプロイの後に手で始め直す(次の「Gatewayとコマンドを準備する」)。
+- **開発用の環境:** 自動でデプロイするのは本番だけ。開発用の環境には、今までどおり手元からデプロイする。
+
 ## Gatewayとコマンドを準備する
 
-デプロイしたあと、管理用エンドポイントから次の操作をする。`ADMIN_TOKEN`は`.env`の値。
+デプロイしたあと、管理用エンドポイントから次の操作をする。`ADMIN_TOKEN`は`.env`(本番では`.env.production`)の値。
 - **Gateway:** 環境ごとに最初の1回だけ、接続を始める。以降はアラームで動き続け、デプロイで切れてもResumeでつなぎ直す。
-- **スラッシュコマンド:** コマンドを追加・変更したら、登録し直す(`src/interactions/commands.ts`の一覧で丸ごと置き換える)。デプロイの直後は、古い版が応答することがある。登録の結果に新しいコマンドがなければ、少し待ってからやり直す。
-- **D1のスキーマ:** `migrations/`にファイルが増えたら、デプロイの前に`pnpm db:migrate:dev`で反映する。
+- **スラッシュコマンド:** 本番では、自動デプロイが毎回登録する。開発用の環境では、コマンドを追加・変更したら、登録し直す(`src/interactions/commands.ts`の一覧で丸ごと置き換える)。デプロイの直後は、古い版が応答することがある。登録の結果に新しいコマンドがなければ、少し待ってからやり直す。
+- **D1のスキーマ:** 本番では、自動デプロイが反映する。開発用の環境では、`migrations/`にファイルが増えたら、デプロイの前に`pnpm db:migrate:dev`で反映する。
 - **Gatewayのコードやインテントを変えたとき:** デプロイの後に、Gatewayを止め、4分ほど待ってから始め直す。Gatewayを持つDurable Objectは、アラームとWebSocketで動き続けるので、デプロイしても前の版のコードのまま残ることがある(2026-10-28に、開発用の環境で起きた)。止めてしばらくたつと片付けられ、次に始めたときに新しい版で動く。インテントは、Resumeでは反映されないので、始め直しが要る。新しい版で動いているかは、`wrangler tail`のGatewayのイベントの版で確かめられる。
 - **ベクトルの入れ直し:** ベクトルのメタデータを足したら(サーバーIDを足したときなど)、メタデータ索引を作ってから、保存したメッセージのベクトルを入れ直す。
 
@@ -105,13 +132,13 @@ curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/vectors/reindex 
 
 ## よく使うコマンド
 
-| コマンド                 | 内容                                                     |
-| ------------------------ | -------------------------------------------------------- |
-| `pnpm dev`               | 手元で起動する                                           |
-| `pnpm test`              | テストを実行する                                         |
-| `pnpm lint`              | リントと整形のチェック                                   |
-| `pnpm format`            | 整形して、直せるものを直す                               |
-| `pnpm typecheck`         | 型チェック                                               |
-| `pnpm cf-typegen`        | `wrangler.jsonc`から型を作り直す(設定を変えたら実行する) |
-| `pnpm deploy:dev`        | 開発用の環境にデプロイする                               |
-| `pnpm deploy:production` | 本番用の環境にデプロイする                               |
+| コマンド                 | 内容                                                             |
+| ------------------------ | ---------------------------------------------------------------- |
+| `pnpm dev`               | 手元で起動する                                                   |
+| `pnpm test`              | テストを実行する                                                 |
+| `pnpm lint`              | リントと整形のチェック                                           |
+| `pnpm format`            | 整形して、直せるものを直す                                       |
+| `pnpm typecheck`         | 型チェック                                                       |
+| `pnpm cf-typegen`        | `wrangler.jsonc`から型を作り直す(設定を変えたら実行する)         |
+| `pnpm deploy:dev`        | 開発用の環境にデプロイする                                       |
+| `pnpm deploy:production` | 本番用の環境に、手元からデプロイする(ふだんはmainへのpushで自動) |

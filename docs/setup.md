@@ -1,6 +1,6 @@
 # 開発環境とアカウントの準備
 
-最終更新: 2026-10-31
+最終更新: 2026-11-04
 
 仕様は[docs/spec/](spec/)を参照。ここでは、開発を始めるために用意するアカウント、サービス、手元の環境をまとめる。
 
@@ -37,12 +37,12 @@
   - 管理用エンドポイントのトークン
   - 障害通知用のWebhook URL
 - **URL:** `workers.dev`のURLで足りる。独自ドメインは不要。
-- **GitHub Actions用:** APIトークン(Workers、D1、Queues、Vectorizeを編集できる権限)と、アカウントID。
+- **GitHub Actions用:** APIトークン(Workers、D1、Queues、Vectorizeを編集できる権限)と、アカウントID。作り方はREADMEの「本番へのデプロイ」を参照。
 
 ### GitHub
 
 - **リポジトリ:** [4rtoflow/Bobert](https://github.com/4rtoflow/Bobert)。作成済みで、まだ空。
-- **Actionsのシークレット:** CloudflareのAPIトークンと、アカウントID。
+- **Actionsのシークレット:** CloudflareのAPIトークン、アカウントID、本番の管理用エンドポイントのトークン(`ADMIN_TOKEN`)。mainへのpushで本番にデプロイし、スラッシュコマンドを登録するのに使う(READMEの「本番へのデプロイ」)。
 
 ### GitHub App(エージェントのGitHubとの連携)
 

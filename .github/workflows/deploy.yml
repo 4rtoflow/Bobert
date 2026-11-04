@@ -1,0 +1,101 @@
+# mainへのpushで、チェックを実行し、通ったら本番にデプロイする。
+# 順番: チェック(ci.yml)→ D1のマイグレーション → Workerのデプロイ → スラッシュコマンドの登録
+# 使うシークレット: CLOUDFLARE_API_TOKEN、CLOUDFLARE_ACCOUNT_ID、ADMIN_TOKEN(準備はREADME「本番へのデプロイ」)
+# (仕様: docs/spec/architecture.md「開発と運用」)。
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# デプロイが重ならないよう、実行を1つずつ、pushした順に進める。
+# 待っている間に新しいpushが来たら、待っていた方の実行は取り消され、新しい方だけが実行される
+# (新しい方のコミットに、取り消された方の変更も含まれている)
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  WORKER_URL: https://bobert.4rna-y.workers.dev
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+      url: ${{ env.WORKER_URL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # 失敗した実行をやり直す(Re-run)と、その実行のコミットがデプロイされる。
+      # その後のコミットがもうデプロイされていると、古い版で上書きしてしまうので、
+      # やり直しのときは、このコミットがまだmainの最新かを確かめる
+      - name: Check that this commit is still the latest on main
+        if: github.run_attempt != '1'
+        run: |
+          latest=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$latest" != "$GITHUB_SHA" ]; then
+            echo "::error::このコミットは、mainの最新(${latest})ではないため、デプロイしません。最新のコミットの実行をやり直してください。"
+            exit 1
+          fi
+      # package.json の packageManager に書いたバージョンのpnpmを使う
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # 新しいコードが、新しいテーブルや列を使うことがあるので、マイグレーションを先に反映する。
+      # 適用してよいかの確認には、CIでは自動で「はい」が選ばれる
+      - name: Apply D1 migrations
+        run: pnpm run db:migrate:production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # Workerのシークレットは、ここでは入れず、Cloudflareに入っている値をそのまま使う。
+      # wrangler.jsonc の secrets.required にあるものが入っていないと、wranglerがデプロイを止める
+      - name: Deploy the Worker
+        run: pnpm run deploy:production
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # デプロイした版のIDを次の手順で読むため、wranglerの結果をファイルに書き出す
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+      # スラッシュコマンドを、src/interactions/commands.ts の一覧で丸ごと置き換える(変わっていなくても毎回行う)。
+      # デプロイの直後は、前の版が応答して、前の一覧のまま登録することがある。
+      # そこで、返事に入っている版のIDが、デプロイした版と同じになるまでやり直す
+      - name: Register slash commands
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-output.ndjson
+        run: |
+          deployed=$(jq -r 'select(.type == "deploy") | .version_id // empty' "$WRANGLER_OUTPUT_FILE_PATH")
+          if [ -z "$deployed" ]; then
+            echo "::error::デプロイした版のIDが、wranglerの結果に見つかりません。"
+            exit 1
+          fi
+          for attempt in $(seq 1 12); do
+            if response=$(curl --silent --show-error --fail-with-body -X POST \
+              -H "Authorization: Bearer $ADMIN_TOKEN" "$WORKER_URL/admin/commands/register"); then
+              version=$(jq -r '.version // empty' <<<"$response" 2>/dev/null || true)
+              if [ "$version" = "$deployed" ]; then
+                echo "登録しました: $(jq -r '.commands | join(", ")' <<<"$response")"
+                exit 0
+              fi
+              echo "前の版が応答しました(${attempt}回目)。10秒後にやり直します。"
+            else
+              echo "登録に失敗しました(${attempt}回目): ${response}"
+            fi
+            sleep 10
+          done
+          echo "::error::デプロイした版(${deployed})で登録できたことを、2分のうちに確かめられませんでした。"
+          exit 1

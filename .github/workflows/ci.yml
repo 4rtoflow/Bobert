@@ -1,12 +1,11 @@
-# プルリクエストとmainへのpushで、リント、型チェック、テストを実行する。
-# 本番への自動デプロイは、Cloudflareのリソースを作った後に別のワークフローとして追加する
+# プルリクエストで、リント、型チェック、テストを実行する。
+# mainへのpushでは、本番へのデプロイ(deploy.yml)が、デプロイの前にこのワークフローを呼び出す
 # (仕様: docs/spec/architecture.md「開発と運用」)。
 name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 jobs:
   check:
