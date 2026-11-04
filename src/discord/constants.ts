@@ -90,6 +90,7 @@ export const ComponentType = {
 	Button: 2 as DiscordComponentType.Button,
 	StringSelect: 3 as DiscordComponentType.StringSelect,
 	TextInput: 4 as DiscordComponentType.TextInput,
+	TextDisplay: 10 as DiscordComponentType.TextDisplay,
 	Label: 18 as DiscordComponentType.Label,
 	FileUpload: 19 as DiscordComponentType.FileUpload,
 } as const;

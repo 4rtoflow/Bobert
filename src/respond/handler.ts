@@ -27,6 +27,7 @@ import type {
 	RespondJob,
 	StoredMessageInput,
 } from "../queue/messages";
+import { getBobertMd } from "../store/bobert-md";
 import { workersAiEmbedder } from "../store/embedding";
 import { loadMemory } from "../store/memory";
 import { claimMessage, releaseMessage } from "../store/messages";
@@ -483,6 +484,11 @@ export async function answer(
 	// 道具の定義は、毎回同じ並びにする(キャッシュのため)
 	const root = chain[0];
 	const guildId = history.guildId;
+	// このサーバーのBobert.mdを、共通の指示の次に入れる。道具を使えないモデルにも渡す(仕様: docs/spec/behavior.md「Bobert.md」)
+	const bobertMd =
+		guildId === null
+			? null
+			: ((await getBobertMd(env.DB, guildId))?.content ?? null);
 	const skills =
 		usesTools && guildId !== null ? await listSkills(env.DB, guildId) : [];
 	const skillReads: SkillReads = { calls: 0, names: [] };
@@ -536,7 +542,12 @@ export async function answer(
 		: [];
 	const result = await context.callModel({
 		model: model.modelId,
-		system: buildSystemPrompt(settings.customPrompt, skills, memoryBlock),
+		system: buildSystemPrompt({
+			bobertMd,
+			skills,
+			customPrompt: settings.customPrompt,
+			memory: memoryBlock,
+		}),
 		messages: messages.messages,
 		effort: context.effort,
 		webSearch: webSearch === true,
@@ -553,6 +564,8 @@ export async function answer(
 		stopReason: result.stopReason,
 		durationMs: Date.now() - startedAt,
 		toolCalls: result.toolCalls,
+		// Bobert.mdは、使ったかだけを残す(中身は残さない)
+		bobertMd: Boolean(bobertMd),
 		skills: skillReads.names,
 		// 記憶は、使ったかと、直した回数だけを残す(中身は残さない)
 		memory: memoryBlock !== null,
