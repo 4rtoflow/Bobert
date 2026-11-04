@@ -1,5 +1,6 @@
 import type { APIInteractionResponse } from "discord-api-types/v10";
 import { DEFAULT_EFFORT } from "../config/models";
+import { memorySettingLine } from "../memory/texts";
 import { availableEfforts, effectiveEffort } from "../respond/effort";
 import {
 	type ModelResolution,
@@ -7,6 +8,7 @@ import {
 	resolveModel,
 	selectedCandidate,
 } from "../respond/model";
+import { loadMemory } from "../store/memory";
 import {
 	getRegisteredProviders,
 	getUserSettings,
@@ -20,19 +22,21 @@ const PROMPT_PREVIEW_LENGTH = 50;
 /**
  * /settings: 今の設定を、本人にだけ見せる(仕様: docs/spec/behavior.md「スラッシュコマンド」)。
  * 思考の深さは、モデル情報を見て実際に使う段階を出すので、保留の応答を返してから出す。
+ * 記憶は、サーバーごとの設定なので、使ったサーバーの分を出す
  */
 export function settingsCommand(
 	interaction: { application_id: string; token: string },
 	env: Env,
 	ctx: ExecutionContext,
 	userId: string,
+	guildId: string | undefined,
 ): APIInteractionResponse {
 	return respondLater(
 		ctx,
 		interaction,
 		userId,
 		"reply",
-		() => settingsMessage(env, userId),
+		() => settingsMessage(env, userId, guildId),
 		{
 			content:
 				"モデルの情報を取得できませんでした。少し待ってから、もう一度試してください。",
@@ -41,10 +45,15 @@ export function settingsCommand(
 	);
 }
 
-async function settingsMessage(env: Env, userId: string): Promise<MessageEdit> {
-	const [providers, settings] = await Promise.all([
+async function settingsMessage(
+	env: Env,
+	userId: string,
+	guildId: string | undefined,
+): Promise<MessageEdit> {
+	const [providers, settings, memory] = await Promise.all([
 		getRegisteredProviders(env.DB, userId),
 		getUserSettings(env.DB, userId),
+		guildId === undefined ? null : loadMemory(env.DB, userId, guildId),
 	]);
 	const resolution = resolveModel(settings, providers);
 	const lines = [
@@ -59,6 +68,9 @@ async function settingsMessage(env: Env, userId: string): Promise<MessageEdit> {
 		`- Web検索: ${onOff(settings.featWebSearch)}`,
 		`- 利用量の表示: ${onOff(settings.featUsageDisplay)}`,
 		`- 自分用の指示: ${promptPreview(settings.customPrompt)}`,
+		...(guildId === undefined
+			? []
+			: [memorySettingLine(memory?.enabled === true)]),
 	];
 	return { content: lines.join("\n"), components: [] };
 }

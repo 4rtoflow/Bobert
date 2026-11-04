@@ -1,4 +1,5 @@
 import type { ChatResult, LlmError } from "../llm/types";
+import { MEMORY_UPDATED_NOTE } from "../memory/texts";
 import type { Provider } from "../store/users";
 import { stripReplyHeader } from "./conversation";
 import type { ModelResolution, ResolvedModel } from "./model";
@@ -84,6 +85,8 @@ export interface ReplyNotes {
 	webSearchSkipped: boolean;
 	/** AIが読んだスキルの名前(読んだ順) */
 	skills?: readonly string[];
+	/** 会話で頼まれて、記憶を直した */
+	memoryUpdated?: boolean;
 	/** 利用量の表示の行。表示しないならnull */
 	usage: string | null;
 	/** 寄付で答えたときの行。寄付で答えなかったらnull */
@@ -102,6 +105,7 @@ export function formatReply(
 		imagesSkipped,
 		webSearchSkipped,
 		skills = [],
+		memoryUpdated = false,
 		usage,
 		donation = null,
 		compaction = null,
@@ -125,6 +129,10 @@ export function formatReply(
 		notes.push(
 			`-# スキル${skills.map((name) => `「${name}」`).join("")}を使いました`,
 		);
+	}
+	// 会話で頼まれて、記憶を直した(仕様: docs/spec/behavior.md「記憶」)
+	if (memoryUpdated) {
+		notes.push(MEMORY_UPDATED_NOTE);
 	}
 	if (imagesSkipped) {
 		notes.push("-# このモデルは画像を読めません");

@@ -23,6 +23,8 @@ import {
 	MessageFlags,
 } from "../discord/constants";
 import { IMPORT_COMMAND_NAME } from "../import/progress";
+import { MEMORY_EDIT_MODAL_ID, MEMORY_ID_PREFIX } from "../memory/screen";
+import { MEMORY_COMMAND_NAME } from "../memory/texts";
 import {
 	COMPACT_BUTTON_ID,
 	COMPACT_COMMAND_NAME,
@@ -43,6 +45,7 @@ import { EXPLAIN_COMMAND_NAME, explainFromMenu } from "./explain";
 import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
 import { helpCommand } from "./help";
 import { importCommand } from "./import";
+import { memoryCommand, memoryComponent, submitMemoryEdit } from "./memory";
 import {
 	MODEL_CUSTOM_ID,
 	MODEL_SELECT_ID,
@@ -166,6 +169,9 @@ async function route(
 			if (interaction.data.name === "prompt") {
 				return promptCommand(env, user.id);
 			}
+			if (interaction.data.name === MEMORY_COMMAND_NAME && guildId) {
+				return memoryCommand(env, user.id, guildId);
+			}
 			if (interaction.data.name === SKILLS_COMMAND_NAME && guildId) {
 				return skillsCommand(env, guildId);
 			}
@@ -183,7 +189,7 @@ async function route(
 				);
 			}
 			if (interaction.data.name === "settings") {
-				return settingsCommand(interaction, env, ctx, user.id);
+				return settingsCommand(interaction, env, ctx, user.id, guildId);
 			}
 			if (interaction.data.name === "donate" && guildId) {
 				return donateCommand(env, guildId, actor);
@@ -223,6 +229,18 @@ async function route(
 				);
 				if (toggled) {
 					return toggled;
+				}
+			}
+			if (interaction.data.custom_id.startsWith(MEMORY_ID_PREFIX) && guildId) {
+				const response = await memoryComponent(
+					interaction,
+					env,
+					user.id,
+					guildId,
+					interaction.data.custom_id,
+				);
+				if (response) {
+					return response;
 				}
 			}
 			if (interaction.data.custom_id.startsWith(SKILLS_ID_PREFIX) && guildId) {
@@ -266,6 +284,9 @@ async function route(
 			}
 			if (interaction.data.custom_id === PROMPT_MODAL_ID) {
 				return submitPrompt(interaction, env, user.id);
+			}
+			if (interaction.data.custom_id === MEMORY_EDIT_MODAL_ID && guildId) {
+				return submitMemoryEdit(interaction, env, user.id, guildId);
 			}
 			if (interaction.data.custom_id === DONATE_MODAL_ID && guildId) {
 				return submitDonation(interaction, env, guildId, actor);

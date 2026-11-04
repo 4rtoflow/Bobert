@@ -292,6 +292,78 @@ export async function loadMessagesByIds(
 }
 
 /**
+ * ある人が、そのサーバーで書いた発言(記憶の更新に使う。仕様: docs/spec/architecture.md「記憶」)。
+ * afterを渡すと、その時刻より後の発言を古い方からlimit件。nullなら、新しい方からlimit件(最初の一覧)。
+ * どちらも古い順に返す。保存しているのは共有チャンネルの発言だけなので、ほかのチャンネルの発言は入らない
+ */
+export async function loadAuthorMessages(
+	db: D1Database,
+	guildId: string,
+	authorId: string,
+	after: number | null,
+	limit: number,
+): Promise<StoredMessageInput[]> {
+	const { results } =
+		after === null
+			? await db
+					.prepare(
+						`SELECT * FROM messages WHERE guild_id = ? AND author_id = ?
+						ORDER BY created_at DESC LIMIT ?`,
+					)
+					.bind(guildId, authorId, limit)
+					.all<MessageRow>()
+			: await db
+					.prepare(
+						`SELECT * FROM messages WHERE guild_id = ? AND author_id = ? AND created_at > ?
+						ORDER BY created_at LIMIT ?`,
+					)
+					.bind(guildId, authorId, after, limit)
+					.all<MessageRow>();
+	const messages = results.map(fromRow);
+	return after === null ? messages.reverse() : messages;
+}
+
+/** 渡したIDのうち、保存しているもの(消されていないもの) */
+export async function existingMessageIds(
+	db: D1Database,
+	messageIds: readonly string[],
+): Promise<Set<string>> {
+	const found = new Set<string>();
+	for (const ids of chunks(messageIds, MAX_IDS_PER_QUERY)) {
+		const { results } = await db
+			.prepare(
+				`SELECT message_id FROM messages WHERE message_id IN (${ids.map(() => "?").join(", ")})`,
+			)
+			.bind(...ids)
+			.all<{ message_id: string }>();
+		for (const row of results) {
+			found.add(row.message_id);
+		}
+	}
+	return found;
+}
+
+/** 発言への、ある人(Bobert)の返信(記憶の更新で、本人への答えを読むのに使う) */
+export async function loadRepliesFrom(
+	db: D1Database,
+	authorId: string,
+	replyToIds: readonly string[],
+): Promise<StoredMessageInput[]> {
+	const found: StoredMessageInput[] = [];
+	for (const ids of chunks(replyToIds, MAX_IDS_PER_QUERY)) {
+		const { results } = await db
+			.prepare(
+				`SELECT * FROM messages WHERE author_id = ?
+				AND reply_to_id IN (${ids.map(() => "?").join(", ")})`,
+			)
+			.bind(authorId, ...ids)
+			.all<MessageRow>();
+		found.push(...results.map(fromRow));
+	}
+	return found;
+}
+
+/**
  * メッセージの前後windowMs以内にある、添付ファイル付きのメッセージ(意味で検索の結果に入れる。
  * 仕様: docs/spec/architecture.md「添付ファイルの読み取り」)。
  * 同じチャンネルで、前後それぞれ近い順にperSide件まで。元のメッセージは含まない。

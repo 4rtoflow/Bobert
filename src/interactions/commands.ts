@@ -13,6 +13,10 @@ import {
 	PermissionFlags,
 } from "../discord/constants";
 import { IMPORT_COMMAND_NAME } from "../import/progress";
+import {
+	MEMORY_COMMAND_DESCRIPTION,
+	MEMORY_COMMAND_NAME,
+} from "../memory/texts";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
 import {
@@ -65,6 +69,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: "prompt",
 		description: "自分用のAIへの指示の設定",
+	},
+	{
+		...GUILD_ONLY,
+		name: MEMORY_COMMAND_NAME,
+		description: MEMORY_COMMAND_DESCRIPTION,
 	},
 	{
 		...GUILD_ONLY,

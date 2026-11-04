@@ -7,6 +7,7 @@ import {
 	MessageFlags,
 } from "../src/discord/constants";
 import { clearModelInfoCache } from "../src/llm/model-info";
+import { setMemoryEnabled } from "../src/store/memory";
 import { updateUserSettings } from "../src/store/users";
 import {
 	editedMessage,
@@ -60,6 +61,7 @@ describe("/settings", () => {
 				"- Web検索: OFF",
 				"- 利用量の表示: OFF",
 				"- 自分用の指示: なし",
+				"- 記憶: OFF",
 			].join("\n"),
 			components: [],
 		});
@@ -92,7 +94,20 @@ describe("/settings", () => {
 			"- 利用量の表示: ON",
 			// 改行は空白にする
 			`- 自分用の指示: ${"あ".repeat(30)} ${"い".repeat(19)}…`,
+			"- 記憶: OFF",
 		]);
+	});
+
+	it("記憶は、コマンドを使ったサーバーでの設定を書く", async () => {
+		const user = await userWith("anthropic");
+		// コマンドを使ったサーバー(900)ではON、ほかのサーバーではOFF
+		await setMemoryEnabled(env.DB, user.id, "900", true);
+		await setMemoryEnabled(env.DB, user.id, "901", false);
+		const calls = mockModelApis([]);
+
+		await sendInteraction(settingsCommand(user));
+
+		expect(lines(calls).at(-1)).toBe("- 記憶: ON");
 	});
 
 	it("lowを選べないモデルでは、代わりに使う段階に「(既定)」を付ける", async () => {

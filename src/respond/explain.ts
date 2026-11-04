@@ -1,5 +1,6 @@
 import { createMessage, editOriginalInteractionResponse } from "../discord/api";
 import { logEvent } from "../log";
+import { scheduleMemoryUpdate } from "../memory/update";
 import type { ExplainJob, StoredMessageInput } from "../queue/messages";
 import { saveExplainTarget } from "../store/explain";
 import { claimMessage, releaseMessage } from "../store/messages";
@@ -84,6 +85,8 @@ async function explain(job: ExplainJob, env: Env): Promise<void> {
 	}
 	if (reply.inputTokens !== null) {
 		await recordConversationSize(env, posted, reply.inputTokens);
+		// AIが答えたら、選んだ人の記憶の更新を予約する(1日1回まで。仕様: docs/spec/architecture.md「記憶」)
+		await scheduleMemoryUpdate(env, job.userId, job.guildId);
 	}
 }
 

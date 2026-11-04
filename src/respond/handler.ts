@@ -19,12 +19,16 @@ import {
 	type TokenUsage,
 } from "../llm/types";
 import { logEvent } from "../log";
+import { memoryPromptBlock } from "../memory/prompts";
+import { type MemoryEdits, updateMemoryTool } from "../memory/tool";
+import { scheduleMemoryUpdate } from "../memory/update";
 import type {
 	QueueMessage,
 	RespondJob,
 	StoredMessageInput,
 } from "../queue/messages";
 import { workersAiEmbedder } from "../store/embedding";
+import { loadMemory } from "../store/memory";
 import { claimMessage, releaseMessage } from "../store/messages";
 import { searchSimilarMessages } from "../store/search";
 import { listSkills } from "../store/skills";
@@ -87,6 +91,7 @@ import {
 	channelHistoryTool,
 	channelListTool,
 	type FileReads,
+	isShared,
 	pinnedMessagesTool,
 	readFileTool,
 	readSkillTool,
@@ -163,6 +168,8 @@ async function respond(job: RespondJob, env: Env): Promise<void> {
 		);
 		if (reply.inputTokens !== null) {
 			await recordConversationSize(env, posted, reply.inputTokens);
+			// AIが答えたら、話しかけた人の記憶の更新を予約する(1日1回まで。仕様: docs/spec/architecture.md「記憶」)
+			await scheduleMemoryUpdate(env, job.authorId, job.guildId);
 		}
 	} finally {
 		stopTyping();
@@ -480,6 +487,23 @@ export async function answer(
 		usesTools && guildId !== null ? await listSkills(env.DB, guildId) : [];
 	const skillReads: SkillReads = { calls: 0, names: [] };
 	const fileReads: FileReads = { calls: 0, kinds: [] };
+	// 返答を頼んだ人の記憶を、本人の指示の後ろに入れる(仕様: docs/spec/architecture.md「記憶」)。
+	// 記憶を直す道具は、共有チャンネルでだけ渡す。年齢制限のチャンネルと非公開スレッドでの話を、ほかに持ち出さないため
+	const memory =
+		guildId === null ? null : await loadMemory(env.DB, userId, guildId);
+	const memoryEdits: MemoryEdits = { calls: 0, updated: false };
+	const memoryTool =
+		files !== undefined &&
+		memory?.enabled === true &&
+		(await isShared(history, history.channelId));
+	const memoryBlock =
+		memory?.enabled === true && (memory.items.length > 0 || memoryTool)
+			? memoryPromptBlock(
+					requesterName(chain, annotations.names, userId),
+					memory.items,
+					memoryTool,
+				)
+			: null;
 	const tools = files
 		? [
 				channelHistoryTool(history, botUserId, files),
@@ -502,6 +526,9 @@ export async function answer(
 				...(guildId !== null && skills.length > 0
 					? [readSkillTool(env.DB, guildId, skills, skillReads)]
 					: []),
+				...(memoryTool && guildId !== null
+					? [updateMemoryTool(env.DB, userId, guildId, memoryEdits)]
+					: []),
 				...(summary === null && startsWithReply(root)
 					? [replyChainTool(root, history, botUserId, files)]
 					: []),
@@ -509,7 +536,7 @@ export async function answer(
 		: [];
 	const result = await context.callModel({
 		model: model.modelId,
-		system: buildSystemPrompt(settings.customPrompt, skills),
+		system: buildSystemPrompt(settings.customPrompt, skills, memoryBlock),
 		messages: messages.messages,
 		effort: context.effort,
 		webSearch: webSearch === true,
@@ -527,6 +554,9 @@ export async function answer(
 		durationMs: Date.now() - startedAt,
 		toolCalls: result.toolCalls,
 		skills: skillReads.names,
+		// 記憶は、使ったかと、直した回数だけを残す(中身は残さない)
+		memory: memoryBlock !== null,
+		memoryEdits: memoryEdits.calls,
 		// 読んだファイルは、種類だけを残す(名前と中身は残さない)
 		fileReads: fileReads.calls,
 		fileKinds: fileReads.kinds,
@@ -549,6 +579,7 @@ export async function answer(
 			imagesSkipped: messages.imagesSkipped,
 			webSearchSkipped: settings.featWebSearch && webSearch === false,
 			skills: skillReads.names,
+			memoryUpdated: memoryEdits.updated,
 			// 要約を作ったときは、その費用も含める
 			usage: settings.featUsageDisplay
 				? await usageNote(
@@ -565,6 +596,20 @@ export async function answer(
 		inputTokens: result.requestUsages[0]?.inputTokens ?? null,
 		offerCompaction,
 	};
+}
+
+/** 返答を頼んだ人の、サーバーで見えている名前(記憶の指示に書く)。分からなければ、最後の発言の名前 */
+function requesterName(
+	chain: readonly StoredMessageInput[],
+	names: ReadonlyMap<string, string>,
+	userId: string,
+): string {
+	return (
+		names.get(userId) ??
+		[...chain].reverse().find((message) => message.authorId === userId)
+			?.authorName ??
+		""
+	);
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { ChannelInfo, RoleInfo } from "../discord/channels";
 
 /**
- * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとCompactJobとImportCommandJob、
+ * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとCompactJobとImportCommandJobとMemoryJob、
  * INGEST_QUEUEはそれ以外を運ぶ。
  */
 export type QueueMessage =
@@ -9,6 +9,7 @@ export type QueueMessage =
 	| ExplainJob
 	| CompactJob
 	| ImportCommandJob
+	| MemoryJob
 	| IngestJob
 	| DeleteJob
 	| ImportJob
@@ -70,6 +71,18 @@ export interface CompactJob {
 	start: StoredMessageInput;
 	/** 案内のボタンから要約したときは、そのボタンを消すメッセージ */
 	buttonMessageId: string | null;
+}
+
+/**
+ * 記憶の更新(仕様: docs/spec/architecture.md「記憶」)。本人の発言から、覚えておくことの一覧を、本人のキーでまとめ直す。
+ * 返答の後(1日1回まで)と、/memory でONにしたとき(最初の一覧)に入れる
+ */
+export interface MemoryJob {
+	kind: "memory";
+	userId: string;
+	guildId: string;
+	/** /memory でONにしたときの、ボタンのInteractionのトークン。まとめ終わったら、その画面を一覧に書き換える */
+	interactionToken: string | null;
 }
 
 /** 受け取ったメッセージの保存とベクトル化。 */

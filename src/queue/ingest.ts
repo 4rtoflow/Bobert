@@ -1,6 +1,7 @@
 import { IMPORT_COMMAND_NAME } from "../import/progress";
 import { logEvent } from "../log";
 import { type Embedder, embeddingText } from "../store/embedding";
+import { forgetMemorySources } from "../store/memory";
 import {
 	clearEmbedded,
 	deleteStoredMessages,
@@ -137,6 +138,8 @@ export async function deleteMessages(
 	const ids = [...new Set(messageIds)];
 	await deleteStoredMessages(deps.db, ids);
 	await deleteMessageReactions(deps.db, ids);
+	// 消された発言から覚えた、記憶の項目も消す(仕様: docs/spec/architecture.md「記憶」)
+	await forgetMemorySources(deps.db, ids);
 	await deps.vectors.deleteByIds(ids);
 	logEvent("queue", "deleted", { messages: ids.length });
 }
