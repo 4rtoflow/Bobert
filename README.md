@@ -92,6 +92,7 @@ mainにpushすると(PRのマージを含む)、GitHub Actions(`.github/workflow
 2. D1のマイグレーションを反映する(`pnpm db:migrate:production`)。新しいコードが新しいテーブルや列を使うことがあるため、デプロイより先に行う。
 3. Workerをデプロイする(`pnpm deploy:production`)。
 4. スラッシュコマンドを登録する(`src/interactions/commands.ts`の一覧で丸ごと置き換える)。デプロイの直後は、前の版が応答して、前の一覧のまま登録することがある。そのため、デプロイした版が応答するまでやり直す。
+5. What's NewをDiscordに送り、版のタグを付ける(下の「版とWhat's New」)。
 
 デプロイが重ならないよう、実行は1つずつ、pushした順に進む。待っている間に新しいpushが来たら、待っていた方の実行は取り消され、新しい方だけがデプロイされる(新しい方に、取り消された方の変更も含まれている)。失敗した実行をやり直す(Re-run)ときは、そのコミットがmainの最新かを確かめる。最新でなければ、古い版で上書きしないよう、デプロイせずに失敗にする。
 
@@ -104,6 +105,7 @@ mainにpushすると(PRのマージを含む)、GitHub Actions(`.github/workflow
 | `CLOUDFLARE_API_TOKEN`  | CloudflareのAPIトークン。ダッシュボードの「Account API Tokens」で、テンプレート「Edit Cloudflare Workers」から作る。権限に「D1」「Queues」「Vectorize」の「Edit」がなければ足し、対象のアカウントはBobertのアカウントだけにする |
 | `CLOUDFLARE_ACCOUNT_ID` | CloudflareのアカウントID(`pnpm exec wrangler whoami`で表示される)                                                                                                                                                               |
 | `ADMIN_TOKEN`           | 本番の管理用エンドポイントのトークン(`.env.production`の値)。スラッシュコマンドの登録に使う                                                                                                                                     |
+| `WHATS_NEW_WEBHOOK_URL` | What's Newを送るDiscordのWebhookのURL。送り先のチャンネルの設定の「連携サービス」で、ウェブフックを作ってURLをコピーする。送ったメッセージには、ウェブフックに付けた名前とアイコンが出る                                        |
 
 ### 自動ではしないこと
 
@@ -111,6 +113,45 @@ mainにpushすると(PRのマージを含む)、GitHub Actions(`.github/workflow
 - **Cloudflareのリソース:** QueueやVectorizeの索引などは作らない。リソースを足す変更は、マージの前に作っておく(上の「Cloudflareのリソースを作る」)。
 - **Gatewayの始め直し:** Gatewayのコードやインテントを変えたときは、デプロイの後に手で始め直す(次の「Gatewayとコマンドを準備する」)。
 - **開発用の環境:** 自動でデプロイするのは本番だけ。開発用の環境には、今までどおり手元からデプロイする。
+
+### 版とWhat's New
+
+版の番号は`1.{major}.{minor}`の形で、GitHubのタグ(`v1.3.0`など)で記録する。最初の`1`は変えない。
+デプロイが済むと、前の版のタグを付けたコミットの後にmainへ入ったPRを調べ、PRのラベルで次のように扱う。
+
+| PRのラベル   | What's Newでの扱い                               | 版の上げ方                                              |
+| ------------ | ------------------------------------------------ | ------------------------------------------------------- |
+| `機能追加`   | 「機能追加」の箇条書きに、PRのタイトルを載せる   | majorを1つ上げ、minorを0に戻す(1.2.3 → 1.3.0)           |
+| `軽微な修正` | 「軽微な修正」の箇条書きに、PRのタイトルを載せる | 機能追加のPRがなければ、minorを1つ上げる(1.2.3 → 1.2.4) |
+| どちらもない | 載せない(文書、CI、テストだけの変更など)         | 上げない                                                |
+- 両方のラベルがあるPRは、機能追加として扱う。
+- 続けてマージしたPRが1回のデプロイにまとまっても、版は1つだけ上げる。
+- 載せるPRが1つもなければ、版を上げず、Discordにも送らない。
+- ラベルは、マージの時ではなく、デプロイの後に読む。付け忘れたPRも、次の版が出る前にラベルを付ければ、その版に載る。
+- PRを通さずにmainへpushしたコミットは、載せない。
+
+Discordには、`WHATS_NEW_WEBHOOK_URL`のウェブフックで、次の形の埋め込みを送る。PRがない方の項目は出さない。
+
+```text
+What's New v1.3.0
+
+機能追加
+• クレジットの寄付を実装
+• 右クリックメニューの「Bobertに聞く」を実装
+
+軽微な修正
+• AIの返答の先頭に付いた「[時刻] Bobert: 」を外す
+
+(送った日時)
+```
+
+- **最初の1回:** 版のタグがまだなければ、そのコミットを`v1.0.0`として記録するだけで、Discordには送らない。
+- **送れなかったとき:** タグを付けずに、What's Newのジョブを失敗にする(デプロイはそのまま)。シークレットなどを直してから、失敗したジョブをやり直す(Re-run failed jobs)と、同じ内容を送り直す。
+- **送る内容を前もって見る:** 次のコマンドで、次の版と送る内容を表示する。Discordへの送信と、タグの作成はしない。
+
+```sh
+GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=4rtoflow/Bobert GITHUB_SHA=$(git rev-parse origin/main) node scripts/whats-new.ts --dry-run
+```
 
 ## Gatewayとコマンドを準備する
 
