@@ -74,6 +74,10 @@ export const FIRST_MESSAGE_FIELDS = [
 		value: "ファイルを添付して送信することでAgentへ送信されます。",
 	},
 	{
+		name: "音声メッセージ",
+		value: "音声メッセージは文字に変換してからAgentへ送信されます。",
+	},
+	{
 		name: "使い方",
 		value:
 			"このチャンネルではBobertへのメンションをせず、直接Agentと会話することができます。",

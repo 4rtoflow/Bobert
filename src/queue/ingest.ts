@@ -12,6 +12,8 @@ import {
 	saveMessages,
 } from "../store/messages";
 import { deleteMessageReactions } from "../store/reactions";
+import { loadVoiceTranscripts } from "../store/voice";
+import { isVoiceAttachment } from "../voice/voice";
 import { type ChannelDeps, resolveSharedChannels } from "./channels";
 import type { ReindexJob, StoredMessageInput } from "./messages";
 
@@ -19,6 +21,12 @@ import type { ReindexJob, StoredMessageInput } from "./messages";
 const EMBED_BATCH_SIZE = 50;
 /** ベクトルの入れ直しで、1回に入れ直すメッセージの数 */
 const REINDEX_PAGE_SIZE = 100;
+/**
+ * 保存したときに、投稿からこの時間以内なら、届いたばかりの音声メッセージとして、前もって文字にする
+ * (仕様: docs/spec/architecture.md「音声メッセージ」)。この仕組みを入れる前の音声メッセージや、
+ * `/import`で取り込む過去の音声メッセージは、前もって文字にしない
+ */
+export const EAGER_TRANSCRIPTION_WINDOW_MS = 60 * 60 * 1000;
 
 /** 保存とベクトル化に使うもの。テストでは偽物に差し替える */
 export interface IngestDeps extends ChannelDeps {
@@ -31,6 +39,10 @@ export interface IngestDeps extends ChannelDeps {
 		deleteByIds(ids: string[]): Promise<unknown>;
 	};
 	embed: Embedder;
+	/** 保存した音声メッセージを、後で文字にする仕事を入れる(文字にするのに時間がかかることがあるため、別の仕事にする) */
+	transcribeLater: (
+		targets: readonly { channelId: string; messageId: string }[],
+	) => Promise<void>;
 }
 
 /**
@@ -65,13 +77,48 @@ export async function ingestMessages(
 		kept.map((message) => message.messageId),
 		deps,
 	);
+	const transcribing = await transcribeFreshVoice(kept, deps);
 	logEvent("queue", "ingested", {
 		messages: latest.size,
 		saved: kept.length,
 		embedded,
 		emptied,
+		transcribing,
 	});
 	return kept.length;
+}
+
+/**
+ * 保存したメッセージのうち、届いたばかりの音声メッセージを、前もって文字にする仕事を入れる
+ * (仕様: docs/spec/architecture.md「音声メッセージ」)。文字にした内容を保存してあるものは除く。入れた数を返す
+ */
+async function transcribeFreshVoice(
+	messages: readonly StoredMessageInput[],
+	deps: IngestDeps,
+): Promise<number> {
+	const now = Date.now();
+	const fresh = messages.filter(
+		(message) =>
+			now - message.createdAt <= EAGER_TRANSCRIPTION_WINDOW_MS &&
+			message.attachments.some(isVoiceAttachment),
+	);
+	if (fresh.length === 0) {
+		return 0;
+	}
+	const done = await loadVoiceTranscripts(
+		deps.db,
+		fresh.map((message) => message.messageId),
+	);
+	const targets = fresh
+		.filter((message) => !done.has(message.messageId))
+		.map((message) => ({
+			channelId: message.channelId,
+			messageId: message.messageId,
+		}));
+	if (targets.length > 0) {
+		await deps.transcribeLater(targets);
+	}
+	return targets.length;
 }
 
 /** `/import`の進み具合のメッセージ(Bobertの、`/import`への返答)か */
@@ -87,9 +134,10 @@ export function isImportProgress(
 
 /**
  * 保存したメッセージのうち、まだベクトルを入れていないものに、ベクトルを入れる。
- * 本文が空になったもの(編集で空になったもの)は、前のベクトルを消す
+ * 本文が空になったもの(編集で空になったもの)は、前のベクトルを消す。
+ * 音声メッセージは、文字にした内容でベクトルにする(文字にするまでは、本文が空なのでベクトルにしない)
  */
-async function embedMessages(
+export async function embedMessages(
 	messageIds: readonly string[],
 	deps: IngestDeps,
 ): Promise<{ embedded: number; emptied: number }> {

@@ -2,6 +2,7 @@ import type { IncomingMessage } from "../agent/relay";
 import { allAgentChannels } from "../agent/store";
 import { agentSessionStub } from "../agent/stubs";
 import { MessageType } from "../discord/constants";
+import { isVoiceMessageFlags, voiceDurationOf } from "../voice/voice";
 import type { GatewayMessage } from "./messages";
 
 /** エージェントのチャンネルの、サーバーと本人 */
@@ -123,6 +124,7 @@ export class AgentRouter {
 
 /** Gatewayのメッセージを、エージェントのチャンネルのDurable Objectに渡す形にする */
 export function toIncomingMessage(message: GatewayMessage): IncomingMessage {
+	const voice = isVoiceMessageFlags(message.flags);
 	return {
 		id: message.id,
 		authorId: message.author.id,
@@ -137,6 +139,8 @@ export function toIncomingMessage(message: GatewayMessage): IncomingMessage {
 			size: attachment.size,
 			url: attachment.url,
 			contentType: attachment.content_type ?? null,
+			// 音声メッセージは、文字にしてからエージェントに送る(仕様: docs/spec/architecture.md「エージェント(Bobert Agent)」)
+			...(voice ? { voiceDurationSecs: voiceDurationOf(attachment) } : {}),
 		})),
 	};
 }

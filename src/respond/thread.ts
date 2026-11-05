@@ -48,13 +48,14 @@ export async function threadPreface(
 		return intro;
 	}
 	// このスレッドを始めたメッセージなので、スレッドの名前は書き添えない(1行目に書いてある)
-	const { names, reactions } = await annotationsFor([starter], history);
+	const { names, reactions, voice } = await annotationsFor([starter], history);
 	return [
 		intro,
 		forum ? "投稿の最初のメッセージです:" : "スレッドを始めたメッセージです:",
 		messageLine(starter, botUserId, {
 			names,
 			reactions,
+			voice,
 			place: forum || parent === undefined ? null : `#${parent.name}`,
 			files,
 		}),

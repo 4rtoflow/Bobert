@@ -1,11 +1,12 @@
 # LLM利用コスト
 
-最終更新: 2026-11-04
+最終更新: 2026-11-05
 
 ## 方針
 
 - LLMの利用料は、使ったユーザー本人が自分の分を負担する。Botの運営者は負担しない。
 - 例外として、会話の検索(RAG)のための埋め込みの費用は運営者が負担する。Cloudflare Workers AIを使い、少額で済む(bge-m3なら100万トークンあたり約$0.012)。
+- 音声メッセージを文字にする費用も、運営者が負担する。埋め込みと同じくWorkers AIを使い、少額で済む(1分あたり約$0.0005。「音声メッセージの費用」を参照)。
 - もう1つの例外として、ユーザーは、サーバーの全員が使えるクレジットを寄付できる。寄付された額までは、寄付した人が、ほかの人の分を負担する(「クレジットの寄付」を参照)。
 - 各ユーザーは自分の資格情報をBotに登録する。Botはそれを、登録したユーザー本人のリクエストに使う。寄付した人の資格情報は、寄付された額まで、同じサーバーのほかの人のリクエストにも使う。それ以外で、他人の資格情報で応答することはない。
 - 資格情報を登録していないユーザーのために、運営者の資格情報でLLMを呼び出すことはしない。
@@ -167,6 +168,20 @@
 - **送る内容:** 対象のメッセージ(発言者の名前と本文)と、AIがまとめたメッセージの意味と文脈を、TypeSafeに送る。TypeSafeは、APIで受け取った入力を学習に使わないとしている(2026-11-04時点のプライバシーポリシー)。
 - **OpenRouter経由にしない理由:** JevはOpenRouterでも同じ単価で呼べるが、各自がTypeSafeのキーを登録して直接呼ぶ形にした(2026-11-04、ユーザーの判断)。
 
+## 音声メッセージの費用
+
+音声メッセージを文字にする費用(Workers AIのWhisper。[アーキテクチャ](architecture.md)「音声メッセージ」を参照)は、運営者のCloudflareのアカウントにかかる。埋め込みと同じく、運営者が負担する例外にする(2026-11-05、[issue #91](https://github.com/4rtoflow/Bobert/issues/91)で決定)。
+- **単価:** `@cf/openai/whisper-large-v3-turbo`は、音声1分あたり46.63ニューロン(約$0.0005)。1,000分で約$0.51(2026-10時点のCloudflareの資料)。
+- **無料枠:** Workers AIは、1日1万ニューロンまで無料(UTCの0時に戻る)。この音声認識だけなら約214分にあたる。無料枠は、検索用の埋め込みと共用。
+- **かかる場面:**
+  - 共有チャンネルに届いた音声メッセージは、前もって文字にするので、Bobertに話しかけていない音声メッセージの分もかかる。
+  - 前もって文字にしていないもの(この仕組みを入れる前のものや、年齢制限のチャンネルと非公開スレッドのもの)は、返答の中で必要になったときにかかる。1回の返答で新しく文字にするのは、合わせて20分まで。
+  - 文字にした内容は保存して使い回すので、同じ音声メッセージの分は、1回だけかかる。
+  - エージェントのチャンネルの音声メッセージも、運営者が負担する(エージェントの費用は本人の負担だが、文字にするのはBobertの側のため)。
+- **かからない場面:** キーも使える寄付もない人の音声メッセージには、返答しないので、文字にもしない。
+- **AIの費用:** 文字にした内容は、ほかの発言と同じく会話に入るので、その分の入力の費用は、返答の費用を払う人(本人か、寄付した人)の負担。
+- **送る内容:** 音声は、CloudflareのWorkers AIに送る。Cloudflareは、このモデルを、送ったデータを保存しない(ゼロデータ保持)ものとしている(2026-10時点のモデルの一覧)。
+
 ## 採用しない方式と理由
 
 | 方式                                    | 理由                                                                                                                                                                                           |
@@ -189,6 +204,7 @@
 - OpenAI: [Sign in with ChatGPT: Request a client ID](https://developers.openai.com/siwc/request-client-id) / [ChatGPT plan usage](https://developers.openai.com/siwc/token-sharing-open-source) / [Services Agreement](https://openai.com/policies/services-agreement/)
 - Google: [Gemini Code Assist release notes](https://docs.cloud.google.com/gemini/docs/codeassist/release-notes) / [Antigravity terms](https://antigravity.google/terms) / [Google APIs Terms of Service](https://developers.google.com/terms) / [Gemini API Additional Terms](https://ai.google.dev/gemini-api/terms)
 - GitHub: [Copilot SDK: GitHub OAuth](https://docs.github.com/en/copilot/how-tos/copilot-sdk/set-up-copilot-sdk/github-oauth)
+- Cloudflare(2026-11時点): [Workers AIの料金](https://developers.cloudflare.com/workers-ai/platform/pricing/) / [whisper-large-v3-turbo](https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/)
 - TypeSafe(2026-11時点): [Models(単価、文脈の長さ、言語)](https://docs.typesafe.ai/models) / [Request rules and errors](https://docs.typesafe.ai/api/errors) / [Privacy Policy](https://typesafe.ai/legal/privacy-policy) / [OpenRouterのJev](https://openrouter.ai/docs/guides/community/jev)
 
 各社の規約は2026年に何度も変わっているので、実装前と定期的に再確認する。

@@ -6,6 +6,7 @@ import { handleCompactJob } from "../respond/compact";
 import { handleExplainJob } from "../respond/explain";
 import { handleRespondJob } from "../respond/handler";
 import { handleJevJob } from "../respond/jev";
+import { handleTranscribeJob } from "../voice/job";
 import { applyChannelSync } from "./channels";
 import { ingestDeps } from "./deps";
 import { IMPORT_PAGE_SIZE, importChannelPage } from "./import";
@@ -25,6 +26,7 @@ import type {
 	ReindexJob,
 	RespondJob,
 	StoredMessageInput,
+	TranscribeJob,
 } from "./messages";
 import { applyReactions } from "./reactions";
 
@@ -45,6 +47,7 @@ export async function handleQueueBatch(
 		compact: (job) => handleCompactJob(job, env),
 		importCommand: (job) => handleImportCommandJob(job, env),
 		memory: (job) => handleMemoryJob(job, env),
+		transcribe: (job) => handleTranscribeJob(job, env),
 		ingest: async (messages) => {
 			await ingestMessages(messages, deps);
 		},
@@ -87,6 +90,7 @@ export interface JobHandlers {
 	compact: (job: CompactJob) => Promise<void>;
 	importCommand: (job: ImportCommandJob) => Promise<void>;
 	memory: (job: MemoryJob) => Promise<void>;
+	transcribe: (job: TranscribeJob) => Promise<void>;
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
 	delete: (jobs: DeleteJob[]) => Promise<void>;
 	import: (job: ImportJob) => Promise<void>;
@@ -130,6 +134,10 @@ export async function processBatch(
 	const memory = messages.filter(
 		(message): message is Message<MemoryJob> => message.body.kind === "memory",
 	);
+	const transcribe = messages.filter(
+		(message): message is Message<TranscribeJob> =>
+			message.body.kind === "transcribe",
+	);
 	const ingest = messages.filter(
 		(message): message is Message<IngestJob> => message.body.kind === "ingest",
 	);
@@ -155,6 +163,7 @@ export async function processBatch(
 	await eachOne(compact, handlers.compact);
 	await eachOne(importCommands, handlers.importCommand);
 	await eachOne(memory, handlers.memory);
+	await eachOne(transcribe, handlers.transcribe);
 	await settle(ingest, (jobs) => handlers.ingest(jobs.map(withDefaults)));
 	await settle(deletion, (jobs) => handlers.delete(jobs));
 	await eachOne(imports, handlers.import);

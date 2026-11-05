@@ -15,25 +15,26 @@ Discord上でAIと会話できるBot。Botへのメンションや返信で話�
 
 Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のものをまとめている。
 
-| ファイル               | 役割                                                                                                                                |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `src/index.ts`         | エントリポイント(HTTPの受付とQueueの処理)                                                                                           |
-| `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)                                                                 |
-| `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                                                                                           |
-| `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)                                                                     |
-| `src/import/`          | `/import`(Botが見られるチャンネルの過去ログの取り込みの始め方と、進み具合を見張るDurable Object)                                    |
-| `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認                                                                          |
-| `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                                                                                |
-| `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                                                               |
-| `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)                                                                          |
-| `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                                                                 |
-| `src/jev/`             | 右クリックメニューの「Jevに聞く」(TypeSafeのJevの呼び出し、AIに渡す道具と指示、回答の整形)                                          |
-| `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ、リアクション、寄付、スキル、Bobert.md)と、検索用のデータ化 |
-| `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                                                                    |
-| `src/config/models.ts` | `/model`で選べるモデルの候補                                                                                                        |
-| `src/discord/`         | Discord APIの定数と呼び出し                                                                                                         |
-| `migrations/`          | D1のスキーマ                                                                                                                        |
-| `test/`                | テスト(Workersの実行環境で動かす)                                                                                                   |
+| ファイル               | 役割                                                                                                                                                                |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`         | エントリポイント(HTTPの受付とQueueの処理)                                                                                                                           |
+| `src/admin.ts`         | 管理用エンドポイント(Gatewayの起動、停止、状態確認、コマンドの登録)                                                                                                 |
+| `src/alert.ts`         | 開発者用のDiscordチャンネルへの障害の通知                                                                                                                           |
+| `src/gateway/`         | Discord Gatewayへの常時接続を持つDurable Object(自作の接続処理)                                                                                                     |
+| `src/import/`          | `/import`(Botが見られるチャンネルの過去ログの取り込みの始め方と、進み具合を見張るDurable Object)                                                                    |
+| `src/interactions/`    | スラッシュコマンドなどのInteractionsの受け口と、署名の確認                                                                                                          |
+| `src/oauth/`           | OpenRouterとの連携(OAuth PKCE)のリンクとコールバック                                                                                                                |
+| `src/queue/`           | Queueで受け渡す仕事(応答の生成、メッセージの保存、過去ログの取り込み)                                                                                               |
+| `src/respond/`         | メンションや返信への応答(会話の組み立て、返答の分割と投稿)                                                                                                          |
+| `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                                                                                                 |
+| `src/jev/`             | 右クリックメニューの「Jevに聞く」(TypeSafeのJevの呼び出し、AIに渡す道具と指示、回答の整形)                                                                          |
+| `src/voice/`           | 音声メッセージの文字起こし(Workers AIのWhisperの呼び出し、1回の返答の長さの上限、前もって文字にする仕事、表示する文言)                                              |
+| `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ、リアクション、寄付、スキル、Bobert.md、音声メッセージを文字にした内容)と、検索用のデータ化 |
+| `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                                                                                                    |
+| `src/config/models.ts` | `/model`で選べるモデルの候補                                                                                                                                        |
+| `src/discord/`         | Discord APIの定数と呼び出し                                                                                                                                         |
+| `migrations/`          | D1のスキーマ                                                                                                                                                        |
+| `test/`                | テスト(Workersの実行環境で動かす)                                                                                                                                   |
 
 ## 必要なもの
 

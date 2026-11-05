@@ -1,8 +1,8 @@
 import type { ChannelInfo, RoleInfo } from "../discord/channels";
 
 /**
- * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとJevJobとCompactJobとImportCommandJobとMemoryJob、
- * INGEST_QUEUEはそれ以外を運ぶ。
+ * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとJevJobとCompactJobとImportCommandJobとMemoryJobと
+ * TranscribeJob、INGEST_QUEUEはそれ以外を運ぶ。
  */
 export type QueueMessage =
 	| RespondJob
@@ -11,6 +11,7 @@ export type QueueMessage =
 	| CompactJob
 	| ImportCommandJob
 	| MemoryJob
+	| TranscribeJob
 	| IngestJob
 	| DeleteJob
 	| ImportJob
@@ -94,6 +95,17 @@ export interface CompactJob {
 	start: StoredMessageInput;
 	/** 案内のボタンから要約したときは、そのボタンを消すメッセージ */
 	buttonMessageId: string | null;
+}
+
+/**
+ * 保存した音声メッセージを文字にして、ベクトルを入れる(仕様: docs/spec/architecture.md「音声メッセージ」)。
+ * 届いたばかりの音声メッセージを保存したとき(前もって文字にする)と、返答の中で文字にしたとき(ベクトルを入れるだけ)に入れる。
+ * 文字にするのに時間がかかることがあるので、1件ずつ処理するRESPOND_QUEUEで運ぶ
+ */
+export interface TranscribeJob {
+	kind: "transcribe";
+	channelId: string;
+	messageId: string;
 }
 
 /**
@@ -269,4 +281,9 @@ export interface AttachmentInfo {
 	url: string;
 	contentType: string | null;
 	size: number;
+	/**
+	 * 音声メッセージの音声なら、その長さ(秒)。音声メッセージでなければ入れない。
+	 * この項目を足す前に保存したものにはないので、音声メッセージかは名前でも見分ける(src/voice/voice.ts)
+	 */
+	voiceDurationSecs?: number;
 }

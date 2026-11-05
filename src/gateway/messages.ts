@@ -1,11 +1,13 @@
 import type { APIEmbed, APIMessage, APIUser } from "discord-api-types/v10";
 import { MessageType } from "../discord/constants";
 import type {
+	AttachmentInfo,
 	CommandInfo,
 	EmbedInfo,
 	StoredMessageInput,
 	UserName,
 } from "../queue/messages";
+import { isVoiceMessageFlags, voiceDurationOf } from "../voice/voice";
 
 /** サーバーでの情報のうち、Bobertが使う部分 */
 interface GatewayMember {
@@ -27,6 +29,7 @@ export type GatewayMessage = Pick<
 	| "referenced_message"
 	| "interaction_metadata"
 	| "webhook_id"
+	| "flags"
 > & {
 	guild_id?: string;
 	/** 発言者のサーバーでの情報。サーバーの中のメッセージで、Gatewayで届いたときだけ付く */
@@ -114,12 +117,7 @@ export function toStoredMessage(message: GatewayMessage): StoredMessageInput {
 			id: user.id,
 			name: memberName(user, user.member),
 		})),
-		attachments: message.attachments.map((attachment) => ({
-			filename: attachment.filename,
-			url: attachment.url,
-			contentType: attachment.content_type ?? null,
-			size: attachment.size,
-		})),
+		attachments: toAttachmentInfos(message),
 		embeds: (message.embeds ?? []).flatMap((embed) => {
 			const info = toEmbedInfo(embed);
 			return info ? [info] : [];
@@ -131,6 +129,18 @@ export function toStoredMessage(message: GatewayMessage): StoredMessageInput {
 			? Date.parse(message.edited_timestamp)
 			: null,
 	};
+}
+
+/** 添付ファイルの情報。音声メッセージ(仕様: docs/spec/architecture.md「音声メッセージ」)なら、音声の長さも入れる */
+function toAttachmentInfos(message: GatewayMessage): AttachmentInfo[] {
+	const voice = isVoiceMessageFlags(message.flags);
+	return message.attachments.map((attachment) => ({
+		filename: attachment.filename,
+		url: attachment.url,
+		contentType: attachment.content_type ?? null,
+		size: attachment.size,
+		...(voice ? { voiceDurationSecs: voiceDurationOf(attachment) } : {}),
+	}));
 }
 
 /** Embedの中身のうち、文字の部分を取り出す。文字のないEmbed(画像だけなど)は外す */

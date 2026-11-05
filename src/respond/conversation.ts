@@ -5,6 +5,7 @@ import type {
 	StoredMessageInput,
 } from "../queue/messages";
 import type { MessageReaction } from "../store/reactions";
+import { isVoiceAttachment, type VoiceText, voiceLabel } from "../voice/voice";
 import { type FileCatalog, isImage, isReadableImage } from "./attachments";
 import { formatJst } from "./time";
 
@@ -32,6 +33,8 @@ export interface ConversationOptions {
 	threads?: ReadonlyMap<string, string>;
 	/** メッセージに付いているリアクション(メッセージIDごと)。Bobert以外の発言に書き添える */
 	reactions?: ReadonlyMap<string, readonly MessageReaction[]>;
+	/** 音声メッセージを文字にした結果(メッセージIDごと)。音声メッセージの本文として書く */
+	voice?: ReadonlyMap<string, VoiceText>;
 	/** 会話の最初に書く前置き(スレッドの中での会話なら、スレッドと親のチャンネルの説明) */
 	preface?: string | null;
 }
@@ -48,6 +51,8 @@ export interface LineOptions {
 	threads?: ReadonlyMap<string, string>;
 	/** メッセージに付いているリアクション(メッセージIDごと) */
 	reactions?: ReadonlyMap<string, readonly MessageReaction[]>;
+	/** 音声メッセージを文字にした結果(メッセージIDごと)。なければ、番号(filesがあるとき)か、音声メッセージであることだけを書く */
+	voice?: ReadonlyMap<string, VoiceText>;
 }
 
 /** 編集されたメッセージ(Bobert以外)の本文の後に書き添える。Discordの画面の表示と同じ */
@@ -94,7 +99,7 @@ export function toConversation(
 			...message.attachments
 				.filter((attachment) => !passed.includes(attachment))
 				.map((attachment) =>
-					attachmentNote(message, attachment, options.files),
+					attachmentNote(message, attachment, options.files, options.voice),
 				),
 			...threadNote(message, options.threads),
 			...reactionNote(message, options.reactions, options.names),
@@ -188,7 +193,7 @@ export function messageLine(
 	botUserId: string,
 	options: LineOptions,
 ): string {
-	const { names, place = null, files, threads, reactions } = options;
+	const { names, place = null, files, threads, reactions, voice } = options;
 	const where = place === null ? "" : `${place} `;
 	if (message.authorId === botUserId) {
 		return [
@@ -201,7 +206,7 @@ export function messageLine(
 		names,
 		[
 			...message.attachments.map((attachment) =>
-				attachmentNote(message, attachment, files),
+				attachmentNote(message, attachment, files, voice),
 			),
 			...threadNote(message, threads),
 			...reactionNote(message, reactions, names),
@@ -389,17 +394,51 @@ export function resolveMentions(
 
 /**
  * 添付ファイルに書き添える文。filesがあれば、番号(読めるとき)か、読めない理由を書く。
- * なければ(ファイルを読む道具を渡さないとき)、ファイル名だけを書く
+ * なければ(ファイルを読む道具を渡さないとき)、ファイル名だけを書く。
+ * 音声メッセージは、文字にした結果があれば、それを書く(仕様: docs/spec/architecture.md「音声メッセージ」)
  */
 function attachmentNote(
 	message: StoredMessageInput,
 	attachment: AttachmentInfo,
 	files: FileCatalog | undefined,
+	voice: ReadonlyMap<string, VoiceText> | undefined,
 ): string {
+	if (isVoiceAttachment(attachment)) {
+		const note = voiceNote(attachment, voice?.get(message.messageId));
+		if (note !== null) {
+			return note;
+		}
+	}
 	if (files) {
 		return files.note(message, attachment);
+	}
+	if (isVoiceAttachment(attachment)) {
+		return `[${voiceLabel(attachment)}]`;
 	}
 	return isImage(attachment)
 		? `[画像: ${attachment.filename}]`
 		: `[添付ファイル: ${attachment.filename}]`;
+}
+
+/**
+ * 音声メッセージの本文。文字にした内容(例: 「[音声メッセージ(0:12)] 明日の午後3時から…」)か、文字にしていない理由。
+ * 結果がなければ(文字にしていない)null
+ */
+function voiceNote(
+	attachment: AttachmentInfo,
+	text: VoiceText | undefined,
+): string | null {
+	const label = voiceLabel(attachment);
+	switch (text?.kind) {
+		case "text":
+			return text.text === ""
+				? `[${label}](声が入っていませんでした)`
+				: `[${label}] ${text.text}`;
+		case "failed":
+			return `[${label}](文字にできませんでした)`;
+		case "over_budget":
+			return `[${label}](長いため、この返答では文字にしていません)`;
+		case undefined:
+			return null;
+	}
 }

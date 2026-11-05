@@ -16,6 +16,7 @@ import type { JevJob, StoredMessageInput } from "../queue/messages";
 import { saveExplainTarget } from "../store/explain";
 import { claimMessage, releaseMessage } from "../store/messages";
 import { loadTypeSafeKey } from "../store/typesafe";
+import { voiceReaderFor } from "../voice/reader";
 import { FileCatalog } from "./attachments";
 import { toConversation } from "./conversation";
 import {
@@ -134,6 +135,9 @@ async function askJevWith(
 	const chain = includeImages
 		? await refreshImageUrls([job.target, request], history, botUserId)
 		: [job.target, request];
+	// 対象のメッセージが音声メッセージなら、文字にして渡す(仕様: docs/spec/architecture.md「音声メッセージ」)
+	const voice = voiceReaderFor(env, history);
+	const voiceTexts = await voice.prepare(chain);
 	const files = new FileCatalog(support);
 	const preface = await threadPreface(history, chain, botUserId, files);
 	const annotations = await annotationsFor(chain, history);
@@ -141,6 +145,7 @@ async function askJevWith(
 		botUserId,
 		includeImages,
 		...annotations,
+		voice: new Map([...annotations.voice, ...voiceTexts]),
 		summary: null,
 		files,
 		preface,
@@ -159,7 +164,7 @@ async function askJevWith(
 			pinListerFor(env.DISCORD_BOT_TOKEN),
 			files,
 		),
-		readFileTool(files, history, fileReads),
+		readFileTool(files, history, fileReads, voice),
 		...(startsWithReply(job.target)
 			? [replyChainTool(job.target, history, botUserId, files)]
 			: []),

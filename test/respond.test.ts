@@ -1017,3 +1017,126 @@ describe("過去ログの取り込み", () => {
 		expect(imports).toEqual([]);
 	});
 });
+
+describe("音声メッセージ", () => {
+	const VOICE_URL =
+		"https://cdn.discordapp.com/attachments/800/77/voice-message.ogg";
+	const VOICE: APIAttachment = {
+		id: "77",
+		filename: "voice-message.ogg",
+		size: 48_000,
+		url: VOICE_URL,
+		proxy_url: VOICE_URL,
+		content_type: "audio/ogg",
+		duration_secs: 12,
+	};
+
+	/** Workers AIの偽物(文字にした内容を返す)と、ベクトルを入れる仕事を受けるQueue */
+	function voiceEnv(text: string) {
+		const run = vi.fn(async () => ({
+			text,
+			transcription_info: { language: "ja" },
+		}));
+		const jobs: QueueMessage[] = [];
+		return {
+			env: {
+				...testEnv,
+				AI: { run } as unknown as Ai,
+				RESPOND_QUEUE: {
+					send: async (body: QueueMessage) => {
+						jobs.push(body);
+					},
+				} as unknown as Queue,
+			} as Env,
+			run,
+			jobs,
+		};
+	}
+
+	/** DiscordのCDNには音声を、それ以外にはAnthropicの返答を返す */
+	function audioOr(response: () => Response) {
+		return (call: FetchCall) =>
+			call.url.hostname === "cdn.discordapp.com"
+				? new Response(new Uint8Array([1, 2, 3]))
+				: response();
+	}
+
+	it("Bobertの返答への音声メッセージの返信を、文字にしてAIに渡し、聞き取った内容を返答の末尾に添える", async () => {
+		const user = { ...ALICE, id: "190" };
+		await saveCredential(env, user.id, "anthropic", {
+			apiKey: "sk-ant-test",
+			workspaceId: null,
+		});
+		const first = discordMessage("5900", user, `<@${BOT.id}> やあ`, {
+			mentions: [BOT],
+		});
+		const answer = discordReply("5901", BOT, "やあ!", first);
+		const trigger = discordReply("5902", user, "", answer, {
+			referenced_message: answer,
+			flags: 1 << 13,
+			attachments: [VOICE],
+		});
+		const calls = mockApis(
+			[first, answer, trigger],
+			audioOr(() => anthropicStream("了解!")),
+		);
+		const voice = voiceEnv("明日の午後3時から部室で集まろう");
+
+		await handleRespondJob(respondJob(trigger), voice.env);
+
+		expect(voice.run).toHaveBeenCalledTimes(1);
+		const request = calls.find(
+			(call) => call.url.hostname === "api.anthropic.com",
+		);
+		expect(request?.body).toMatchObject({
+			messages: [
+				{
+					role: "user",
+					content: [{ type: "text", text: at("Alice: @Bobert やあ") }],
+				},
+				{ role: "assistant", content: [{ type: "text", text: "やあ!" }] },
+				{
+					role: "user",
+					content: [
+						{
+							type: "text",
+							text: at(
+								"Alice: [音声メッセージ(0:12)] 明日の午後3時から部室で集まろう",
+							),
+						},
+					],
+				},
+			],
+		});
+		expect(posted(calls).map((reply) => reply.content)).toEqual([
+			"了解!\n-# 聞き取った内容: 「明日の午後3時から部室で集まろう」",
+		]);
+		// 文字にした内容は保存し、ベクトルは別の仕事で入れる
+		expect(voice.jobs).toEqual([
+			{ kind: "transcribe", channelId: CHANNEL_ID, messageId: trigger.id },
+		]);
+		expect(
+			await env.DB.prepare(
+				"SELECT text FROM voice_transcripts WHERE message_id = ?",
+			)
+				.bind(trigger.id)
+				.first("text"),
+		).toBe("明日の午後3時から部室で集まろう");
+	});
+
+	it("キーも使える寄付もない人の音声メッセージは、文字にせず、登録方法を返信する", async () => {
+		const answer = discordMessage("5910", BOT, "やあ!");
+		const trigger = discordReply("5911", BOB, "", answer, {
+			referenced_message: answer,
+			flags: 1 << 13,
+			attachments: [VOICE],
+		});
+		const calls = mockApis([answer, trigger]);
+		const voice = voiceEnv("使われない");
+
+		await handleRespondJob(respondJob(trigger), voice.env);
+
+		expect(voice.run).not.toHaveBeenCalled();
+		expect(posted(calls)[0]?.content).toContain("`/setup`");
+	});
+});

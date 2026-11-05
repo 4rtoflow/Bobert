@@ -43,6 +43,8 @@ import {
 	getUserSettings,
 	type UserSettings,
 } from "../store/users";
+import { voiceReaderFor } from "../voice/reader";
+import { heardNote } from "../voice/texts";
 import { FileCatalog, type FileSupport } from "./attachments";
 import { compactButtonRow } from "./compact-button";
 import { toConversation } from "./conversation";
@@ -417,6 +419,7 @@ async function composeAnswer(
 		summary,
 		summaryUsages,
 		parentDeleted,
+		heardFrom: trigger.messageId,
 	});
 }
 
@@ -434,6 +437,11 @@ export async function answer(
 		summaryUsages: TokenUsage[];
 		/** いちばん古い発言の返信先が削除されていた */
 		parentDeleted?: boolean;
+		/**
+		 * 聞き取った内容を返答の末尾に添える、音声メッセージ(話しかけたメッセージか、「Bobertに聞く」で選んだメッセージ)。
+		 * 音声メッセージでなければ、添えない(仕様: docs/spec/behavior.md「音声メッセージ」)
+		 */
+		heardFrom?: string;
 	},
 ): Promise<ComposedReply> {
 	const { userId, settings, model } = context;
@@ -454,6 +462,11 @@ export async function answer(
 	const chain = includeImages
 		? await refreshImageUrls(conversation.messages, history, botUserId)
 		: conversation.messages;
+	// 会話の音声メッセージを、新しいものから文字にする。保存した内容があれば、それを使う。
+	// ファイルを読む道具でも、同じ上限(1回の返答で、新しく文字にする長さは合わせて20分まで)の中で文字にする
+	// (仕様: docs/spec/architecture.md「音声メッセージ」)
+	const voice = voiceReaderFor(env, history);
+	const voiceTexts = await voice.prepare(chain);
 	// 道具を使えるモデルでは、AIに見せる添付ファイルに番号を付け、ファイルを読む道具で読めるようにする
 	// (仕様: docs/spec/architecture.md「添付ファイルの読み取り」)。会話を先に書くので、会話の番号は毎回同じになる
 	const files = usesTools ? new FileCatalog(support) : undefined;
@@ -466,6 +479,7 @@ export async function answer(
 		botUserId,
 		includeImages,
 		...annotations,
+		voice: new Map([...annotations.voice, ...voiceTexts]),
 		summary: summary?.summary ?? null,
 		files,
 		// 画像のURLを取り直すときに、いちばん古い発言が消えていて外れたら、書き添える先がない
@@ -528,7 +542,7 @@ export async function answer(
 							),
 						]
 					: []),
-				readFileTool(files, history, fileReads),
+				readFileTool(files, history, fileReads, voice),
 				...(guildId !== null && skills.length > 0
 					? [readSkillTool(env.DB, guildId, skills, skillReads)]
 					: []),
@@ -573,6 +587,8 @@ export async function answer(
 		// 読んだファイルは、種類だけを残す(名前と中身は残さない)
 		fileReads: fileReads.calls,
 		fileKinds: fileReads.kinds,
+		// 会話の音声メッセージの数(文字にした内容は残さない)
+		voiceMessages: voiceTexts.size,
 		...result.usage,
 	});
 	// 料金が上がる境目を超えたら(1回の呼び出しごとの入力で見る)、その会話・その人・そのモデルで1回だけ、要約を勧める
@@ -587,8 +603,18 @@ export async function answer(
 			userId,
 			modelKey: model.modelId,
 		}));
+	// 話しかけた音声メッセージの、聞き取った内容(仕様: docs/spec/behavior.md「音声メッセージ」)。
+	// 文字にできなかったときと、声が入っていなかったときは添えない(AIが返答で伝える)
+	const heard =
+		conversation.heardFrom === undefined
+			? undefined
+			: voiceTexts.get(conversation.heardFrom);
 	return {
 		text: formatReply(result, {
+			heard:
+				heard?.kind === "text" && heard.text !== ""
+					? heardNote(heard.text)
+					: null,
 			imagesSkipped: messages.imagesSkipped,
 			webSearchSkipped: settings.featWebSearch && webSearch === false,
 			skills: skillReads.names,

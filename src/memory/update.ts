@@ -35,6 +35,7 @@ import {
 	getRegisteredProviders,
 	loadCredential,
 } from "../store/users";
+import { storedVoiceTexts } from "../store/voice";
 import {
 	applyOperations,
 	messageText,
@@ -119,12 +120,15 @@ export async function handleMemoryJob(
 		return;
 	}
 	const first = state.readUntil === null;
-	const messages = await loadAuthorMessages(
+	const messages = await withVoiceText(
 		env.DB,
-		guildId,
-		userId,
-		state.readUntil,
-		messagesPerJob,
+		await loadAuthorMessages(
+			env.DB,
+			guildId,
+			userId,
+			state.readUntil,
+			messagesPerJob,
+		),
 	);
 	const last = messages.at(-1);
 	if (last === undefined) {
@@ -356,4 +360,24 @@ async function showScreen(env: Env, job: MemoryJob): Promise<void> {
 
 function log(event: string, detail: Record<string, unknown>): void {
 	logEvent("memory", event, detail);
+}
+
+/**
+ * 音声メッセージを、文字にした内容を本文にした発言にする(仕様: docs/spec/architecture.md「音声メッセージ」)。
+ * 文字にしていない音声メッセージと、声が入っていなかったものは、本文が空のまま(まとめるときに飛ばす)
+ */
+export async function withVoiceText(
+	db: D1Database,
+	messages: StoredMessageInput[],
+): Promise<StoredMessageInput[]> {
+	const voice = await storedVoiceTexts(db, messages);
+	if (voice.size === 0) {
+		return messages;
+	}
+	return messages.map((message) => {
+		const text = voice.get(message.messageId);
+		return text?.kind === "text" && text.text !== "" && message.content === ""
+			? { ...message, content: `[音声メッセージ] ${text.text}` }
+			: message;
+	});
 }

@@ -123,6 +123,7 @@ function relayOf(
 		client: async () => client,
 		markEnded,
 		fetchAttachment: async () => new Uint8Array([1, 2, 3]),
+		transcribe: async () => ({ text: "", language: null }),
 		uploadLimit: async () => 10 * 1024 * 1024,
 		readSkill: async () => null,
 		github: fakeGitHub(),
@@ -1904,5 +1905,134 @@ describe("GitHub", () => {
 			repositoryTokenVersion: null,
 			pullRequests: [],
 		});
+	});
+});
+
+describe("音声メッセージ", () => {
+	/** 本人の音声メッセージの音声(12秒) */
+	const voiceAttachment = {
+		filename: "voice-message.ogg",
+		size: 3,
+		url: "https://cdn.discordapp.com/voice-message.ogg",
+		contentType: "audio/ogg",
+		voiceDurationSecs: 12,
+	};
+	const noticeTo = (content: string) => ({
+		content,
+		message_reference: { message_id: "1" },
+		allowed_mentions: { parse: [], replied_user: false },
+	});
+
+	it("文字にして送り、聞き取った内容を、その音声メッセージへの返信で示す。サンドボックスには置かない", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send, upload } = fakeFileClient();
+		const transcribe = vi.fn(async () => ({
+			text: "READMEの誤字を直してPRを作って",
+			language: "ja",
+		}));
+		const { relay } = relayOf(state, discord, client, { transcribe });
+
+		const stream = await relay.receiveOwner(
+			ownerMessage("", [voiceAttachment]),
+		);
+
+		expect(stream).toBe(true);
+		expect(transcribe).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
+		expect(upload).not.toHaveBeenCalled();
+		expect(posts).toEqual([
+			noticeTo("-# 聞き取った内容: 「READMEの誤字を直してPRを作って」"),
+		]);
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				{
+					type: "user.message",
+					content: [
+						{
+							type: "text",
+							text: "(音声メッセージを自動で文字にしたものです。聞き間違いがあるかもしれません)\nREADMEの誤字を直してPRを作って",
+						},
+					],
+				},
+			],
+		});
+	});
+
+	it("文字にできなければ、エージェントに送らず、その音声メッセージへの返信で知らせる", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeFileClient();
+		const { relay } = relayOf(state, discord, client, {
+			transcribe: async () => {
+				throw new Error("3030: Failed to decode audio file");
+			},
+		});
+
+		const stream = await relay.receiveOwner(
+			ownerMessage("", [voiceAttachment]),
+		);
+
+		expect(stream).toBe(false);
+		expect(send).not.toHaveBeenCalled();
+		expect(posts).toEqual([
+			noticeTo(
+				"-# 音声メッセージを文字にできなかったので、エージェントに送っていません。もう一度送るか、文字で送ってください。",
+			),
+		]);
+	});
+
+	it("声が入っていなければ、文字にできなかったときと同じく、送らずに知らせる", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send } = fakeFileClient();
+		const { relay } = relayOf(state, discord, client, {
+			transcribe: async () => ({ text: "", language: "en" }),
+		});
+
+		await relay.receiveOwner(ownerMessage("", [voiceAttachment]));
+
+		expect(send).not.toHaveBeenCalled();
+		expect(posts).toEqual([
+			noticeTo(
+				"-# 音声メッセージを文字にできなかったので、エージェントに送っていません。もう一度送るか、文字で送ってください。",
+			),
+		]);
+	});
+
+	it("音声メッセージの印がなくても(Gatewayが前の版のコードで動いている間など)、名前と形式で見分けて文字にする", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, send, upload } = fakeFileClient();
+		const transcribe = vi.fn(async () => ({ text: "了解", language: "ja" }));
+		const { relay } = relayOf(state, discord, client, { transcribe });
+		const { voiceDurationSecs: _, ...unmarked } = voiceAttachment;
+
+		await relay.receiveOwner(ownerMessage("", [unmarked]));
+
+		expect(transcribe).toHaveBeenCalledTimes(1);
+		expect(upload).not.toHaveBeenCalled();
+		expect(send).toHaveBeenCalledTimes(1);
+	});
+
+	it("音声メッセージでない音声ファイルは、ほかのファイルと同じくサンドボックスに置く", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, upload } = fakeFileClient();
+		const transcribe = vi.fn(async () => ({ text: "x", language: "ja" }));
+		const { relay } = relayOf(state, discord, client, { transcribe });
+
+		await relay.receiveOwner(
+			ownerMessage("この音声を編集して", [
+				{
+					filename: "song.mp3",
+					size: 3,
+					url: "https://cdn.discordapp.com/song.mp3",
+					contentType: "audio/mpeg",
+				},
+			]),
+		);
+
+		expect(transcribe).not.toHaveBeenCalled();
+		expect(upload).toHaveBeenCalledTimes(1);
 	});
 });

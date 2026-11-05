@@ -31,11 +31,14 @@ export function workersAiEmbedder(ai: Ai): Embedder {
 }
 
 /**
- * ベクトルにする文。本文の後に、Embedの中身を続ける。メンションは名前に置き換える(会話の組み立てと同じ)。
- * Bobertの返答は、末尾に添えた注記を外す。空なら、ベクトルにしない。
+ * ベクトルにする文。本文の後に、音声メッセージを文字にした内容と、Embedの中身を続ける。
+ * メンションは名前に置き換える(会話の組み立てと同じ)。Bobertの返答は、末尾に添えた注記を外す。空なら、ベクトルにしない。
  */
 export function embeddingText(
-	message: Pick<MessageToEmbed, "authorId" | "content" | "mentions" | "embeds">,
+	message: Pick<
+		MessageToEmbed,
+		"authorId" | "content" | "mentions" | "embeds" | "transcript"
+	>,
 	botUserId: string,
 ): string {
 	const content =
@@ -44,6 +47,7 @@ export function embeddingText(
 			: message.content;
 	const text = [
 		content,
+		message.transcript ?? "",
 		...message.embeds.map((embed) => embedLines(embed).join("\n")),
 	]
 		.filter((part) => part.trim() !== "")

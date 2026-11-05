@@ -1,12 +1,20 @@
 import type { AttachmentInfo, StoredMessageInput } from "../queue/messages";
+import {
+	formatVoiceDuration,
+	isVoiceAttachment,
+	MAX_VOICE_BYTES,
+} from "../voice/voice";
 
 /**
  * 添付ファイルの読み取り(仕様: docs/spec/architecture.md「添付ファイルの読み取り」)。
  * AIに見せたメッセージの添付ファイルに、1回の返答の中での通し番号を付け、AIがファイルを読む道具で番号を指定して読む。
  */
 
-/** AIが読めるファイルの種類 */
-export type FileKind = "image" | "pdf" | "text";
+/**
+ * AIが読めるファイルの種類。voiceは音声メッセージで、文字にして渡す
+ * (仕様: docs/spec/architecture.md「音声メッセージ」)
+ */
+export type FileKind = "image" | "pdf" | "text" | "voice";
 
 /** AIに渡せる画像の形式(Anthropicが読める形式) */
 const IMAGE_TYPES: ReadonlySet<string> = new Set([
@@ -149,6 +157,9 @@ const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
 
 /** ファイルの種類。読めない形式ならnull */
 export function fileKind(attachment: AttachmentInfo): FileKind | null {
+	if (isVoiceAttachment(attachment)) {
+		return "voice";
+	}
 	const type = mediaType(attachment);
 	const name = attachment.filename.toLowerCase();
 	const extension = name.includes(".") ? (name.split(".").pop() ?? "") : name;
@@ -207,6 +218,7 @@ const KIND_LABELS: Record<FileKind, string> = {
 	image: "画像",
 	pdf: "PDF",
 	text: "テキスト",
+	voice: "音声メッセージ",
 };
 
 /**
@@ -230,7 +242,7 @@ export class FileCatalog {
 			return `[${label}: ${attachment.filename}(${reason})]`;
 		}
 		const entry = this.register(message, attachment, kind);
-		return `[ファイル${entry.number}: ${attachment.filename}(${KIND_LABELS[kind]}、${formatBytes(attachment.size)})]`;
+		return `[ファイル${entry.number}: ${attachment.filename}(${KIND_LABELS[kind]}、${fileSize(attachment, kind)})]`;
 	}
 
 	/** 番号のファイル。AIに見せていない番号ならundefined */
@@ -280,8 +292,20 @@ function unreadableReason(
 	if (kind === "pdf" && !support.pdfs) {
 		return "このモデルはPDFを読めない";
 	}
-	const limit = kind === "image" ? MAX_IMAGE_BYTES : MAX_FILE_BYTES;
+	const limit =
+		kind === "image"
+			? MAX_IMAGE_BYTES
+			: kind === "voice"
+				? MAX_VOICE_BYTES
+				: MAX_FILE_BYTES;
 	return attachment.size > limit ? "大きすぎて読めない" : null;
+}
+
+/** ファイルの大きさの書き方。音声メッセージは、長さが分かれば長さにする(例: 0:12) */
+function fileSize(attachment: AttachmentInfo, kind: FileKind): string {
+	return kind === "voice" && attachment.voiceDurationSecs !== undefined
+		? formatVoiceDuration(attachment.voiceDurationSecs)
+		: formatBytes(attachment.size);
 }
 
 /**

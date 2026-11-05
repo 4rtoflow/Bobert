@@ -83,6 +83,8 @@ export function invalidKeyMessage(provider: Provider): string {
 
 /** 返答に添える注記 */
 export interface ReplyNotes {
+	/** 話しかけた音声メッセージの、聞き取った内容の行(仕様: docs/spec/behavior.md「音声メッセージ」)。添えないならnull */
+	heard?: string | null;
 	/** 話しかけたメッセージに画像があったのに、AIに渡さなかった */
 	imagesSkipped: boolean;
 	/** Web検索をONにしているのに、このモデルでは使えなかった */
@@ -106,6 +108,7 @@ export interface ReplyNotes {
 export function formatReply(
 	result: ChatResult,
 	{
+		heard = null,
 		imagesSkipped,
 		webSearchSkipped,
 		skills = [],
@@ -115,15 +118,17 @@ export function formatReply(
 		compaction = null,
 	}: ReplyNotes,
 ): string {
-	// 利用量の行の下に、寄付で答えたことを書く
+	// 利用量の行の下に、寄付で答えたことを書く。聞き取った内容は、それより上に書く
 	const costLines = [usage, donation].filter((line) => line !== null);
+	const heardLines = heard === null ? [] : [heard];
 	if (result.stopReason === "refusal") {
-		return [REFUSAL_TEXT, ...costLines].join("\n");
+		return [REFUSAL_TEXT, ...heardLines, ...costLines].join("\n");
 	}
 	const notes: string[] = [];
 	if (result.stopReason === "max_tokens") {
 		notes.push("-# 返答が長すぎるため、途中で切れました");
 	}
+	notes.push(...heardLines);
 	const sources = sourcesNote(result.sources);
 	if (sources !== null) {
 		notes.push(sources);

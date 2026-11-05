@@ -75,6 +75,8 @@ async function explain(job: ExplainJob, env: Env): Promise<void> {
 				messages: [job.target, request],
 				summary: null,
 				summaryUsages: [],
+				// 選んだメッセージが音声メッセージなら、聞き取った内容を添える(仕様: docs/spec/behavior.md「音声メッセージ」)
+				heardFrom: job.target.messageId,
 			}),
 		notAnswer,
 	);

@@ -1,6 +1,10 @@
 import type { APIMessage } from "discord-api-types/v10";
 import { shouldStore, toStoredMessage } from "../gateway/messages";
-import type { StoredMessageInput, UserName } from "../queue/messages";
+import type {
+	AttachmentInfo,
+	StoredMessageInput,
+	UserName,
+} from "../queue/messages";
 import { loadChannels } from "../store/channels";
 import { findExplainTarget } from "../store/explain";
 import { getChannelImport } from "../store/imports";
@@ -16,6 +20,9 @@ import {
 	type ConversationSummary,
 	findSummaryEndingAt,
 } from "../store/summaries";
+import { storedVoiceTexts } from "../store/voice";
+import type { VoiceText } from "../voice/voice";
+import { attachmentKey, isDiscordFileUrl } from "./attachments";
 import { selectImages } from "./conversation";
 
 /** 添付のURLの期限まで、これより短ければ取り直す。AIが画像を読みに行くまでの余裕 */
@@ -277,6 +284,33 @@ export async function refreshImageUrls(
 	return result;
 }
 
+/**
+ * 添付ファイルの、いま使えるURLの情報。保存したURLは約24時間で切れるので、期限が近ければ、そのメッセージを、
+ * それがあるチャンネルから読み直して取り直す。読み直したメッセージは、保存にも回す(保存したURLも新しくする)。
+ * 消えていたり、ファイルが外されていたり、DiscordのURLでなかったりしたらnull
+ */
+export async function freshAttachment(
+	location: { channelId: string; messageId: string },
+	attachment: AttachmentInfo,
+	deps: Pick<HistoryDeps, "fetchMessage" | "ingest" | "guildId">,
+	now = Date.now(),
+): Promise<AttachmentInfo | null> {
+	if (!expiresSoon(attachment.url, now)) {
+		return isDiscordFileUrl(attachment.url) ? attachment : null;
+	}
+	const fresh = await deps.fetchMessage(location.channelId, location.messageId);
+	if (fresh === null) {
+		return null;
+	}
+	const message = fromDiscord(fresh, deps.guildId);
+	await deps.ingest([message]);
+	const key = attachmentKey(attachment);
+	const found = message.attachments.find(
+		(candidate) => attachmentKey(candidate) === key,
+	);
+	return found !== undefined && isDiscordFileUrl(found.url) ? found : null;
+}
+
 /** 添付のURLの期限が近いか。DiscordのURLは、期限をexに16進数のUNIX時間(秒)で持つ。期限がなければ、取り直さない */
 export function expiresSoon(url: string, now: number): boolean {
 	let expires: string | null;
@@ -348,7 +382,8 @@ export function snowflakeTime(id: string): number {
 
 /**
  * メッセージを文にするときに書き添える情報をまとめて読む。発言者・メンションされた人・リアクションを付けた人の名前と、
- * スレッドが作られたメッセージのスレッドの名前と、リアクション(仕様: docs/spec/architecture.md「スレッド」「リアクション」)
+ * スレッドが作られたメッセージのスレッドの名前と、リアクション(仕様: docs/spec/architecture.md「スレッド」「リアクション」)と、
+ * 音声メッセージを文字にした内容(保存してあるものだけ。仕様: docs/spec/architecture.md「音声メッセージ」)
  */
 export async function annotationsFor(
 	messages: readonly StoredMessageInput[],
@@ -357,6 +392,7 @@ export async function annotationsFor(
 	names: Map<string, string>;
 	threads: Map<string, string>;
 	reactions: Map<string, MessageReaction[]>;
+	voice: Map<string, VoiceText>;
 }> {
 	const reactions = await loadReactions(
 		deps.db,
@@ -369,6 +405,7 @@ export async function annotationsFor(
 		names: await namesFor(messages, deps, reactors),
 		threads: await threadNamesFor(messages, deps),
 		reactions,
+		voice: await storedVoiceTexts(deps.db, messages),
 	};
 }
 
