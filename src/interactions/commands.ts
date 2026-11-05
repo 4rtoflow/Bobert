@@ -13,7 +13,14 @@ import {
 	PermissionFlags,
 } from "../discord/constants";
 import { IMPORT_COMMAND_NAME } from "../import/progress";
-import { JEV_COMMAND_NAME } from "../jev/texts";
+import {
+	JEV_COMMAND_NAME,
+	JEV_QUESTION_MAX_LENGTH,
+	JEV_QUESTION_OPTION,
+	JEV_QUESTION_OPTION_DESCRIPTION,
+	JEV_SLASH_COMMAND_DESCRIPTION,
+	JEV_SLASH_COMMAND_NAME,
+} from "../jev/texts";
 import {
 	MEMORY_COMMAND_DESCRIPTION,
 	MEMORY_COMMAND_NAME,
@@ -105,6 +112,21 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: BOBERTMD_COMMAND_NAME,
 		description: BOBERTMD_COMMAND_DESCRIPTION,
+	},
+	{
+		...GUILD_ONLY,
+		name: JEV_SLASH_COMMAND_NAME,
+		description: JEV_SLASH_COMMAND_DESCRIPTION,
+		options: [
+			{
+				type: ApplicationCommandOptionType.String,
+				name: JEV_QUESTION_OPTION,
+				description: JEV_QUESTION_OPTION_DESCRIPTION,
+				required: true,
+				min_length: 1,
+				max_length: JEV_QUESTION_MAX_LENGTH,
+			},
+		],
 	},
 	{
 		...GUILD_ONLY,

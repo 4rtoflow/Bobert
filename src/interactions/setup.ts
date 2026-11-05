@@ -12,7 +12,7 @@ import {
 	TextInputStyle,
 } from "../discord/constants";
 import { checkTypeSafeKey } from "../jev/api";
-import { JEV_COMMAND_NAME } from "../jev/texts";
+import { TYPESAFE_KEY_NOTE, TYPESAFE_KEY_REGISTERED } from "../jev/texts";
 import { type AnthropicCredential, checkAnthropicKey } from "../llm/anthropic";
 import type { KeyCheckResult } from "../llm/types";
 import { logEvent } from "../log";
@@ -68,7 +68,7 @@ export async function setupCommand(
 				`- TypeSafe: ${typeSafe ? "登録済み" : "未登録"}`,
 				"",
 				"-# OpenRouterとの連携のリンクは10分間有効です。",
-				`-# TypeSafeのキーは、右クリックメニューの「${JEV_COMMAND_NAME}」で使います。`,
+				TYPESAFE_KEY_NOTE,
 			].join("\n"),
 			components: [
 				{
@@ -346,7 +346,7 @@ async function verifyAndSaveTypeSafeKey(
 		case "valid":
 			await saveTypeSafeKey(env, userId, apiKey);
 			log("typesafe_key_registered", { userId });
-			return `TypeSafeのAPIキーを登録しました。メッセージの右クリックメニュー(アプリ)の「${JEV_COMMAND_NAME}」で使えます。`;
+			return TYPESAFE_KEY_REGISTERED;
 		case "invalid":
 			log("typesafe_key_rejected", { userId, length: apiKey.length });
 			return KEY_REJECTED;

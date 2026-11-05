@@ -11,6 +11,8 @@ import { COMMANDS } from "../src/interactions/commands";
 import { helpText } from "../src/interactions/help";
 import { JEV_SYSTEM_PROMPT } from "../src/jev/prompt";
 import {
+	JEV_COMMAND_NO_TOOLS,
+	JEV_COMMAND_TYPESAFE_KEY_REQUIRED,
 	JEV_ERROR,
 	JEV_NO_QUESTION,
 	TYPESAFE_KEY_INVALID,
@@ -18,7 +20,11 @@ import {
 } from "../src/jev/texts";
 import { parseAsk } from "../src/jev/tool";
 import { clearModelInfoCache } from "../src/llm/model-info";
-import type { JevJob, QueueMessage } from "../src/queue/messages";
+import type {
+	JevJob,
+	QueueMessage,
+	StoredMessageInput,
+} from "../src/queue/messages";
 import { fromDiscord } from "../src/respond/history";
 import { handleJevJob } from "../src/respond/jev";
 import { RATE_LIMITED_TEXT } from "../src/respond/replies";
@@ -31,6 +37,7 @@ import {
 	deleteUserData,
 	type Provider,
 	saveCredential,
+	updateUserSettings,
 } from "../src/store/users";
 import {
 	ALICE,
@@ -217,6 +224,57 @@ function jevJob(
 	};
 }
 
+/** `/jev`を使ったInteraction */
+function commandInteraction(user: { id: string }, question: string) {
+	return guildInteraction(
+		InteractionType.ApplicationCommand,
+		{
+			id: "20",
+			name: "jev",
+			type: 1,
+			options: [{ type: 3, name: "question", value: question }],
+		},
+		{ ...BOB, id: user.id },
+	);
+}
+
+/** `/jev`の仕事。対象は、入力された「聞くこと」を、使った人の発言にしたもの */
+function commandJob(
+	user: { id: string },
+	question: string,
+	interactionId: string,
+): JevJob {
+	const target: StoredMessageInput = {
+		messageId: `jev-command:${interactionId}`,
+		guildId: GUILD_ID,
+		channelId: CHANNEL_ID,
+		authorId: user.id,
+		authorName: "ぼぶ",
+		authorIsBot: false,
+		content: question,
+		replyToId: null,
+		mentions: [],
+		attachments: [],
+		embeds: [],
+		command: null,
+		members: [],
+		createdAt: REQUESTED_AT,
+		editedAt: null,
+	};
+	return {
+		kind: "jev",
+		source: "command",
+		interactionId,
+		interactionToken: "interaction-token",
+		userId: user.id,
+		userName: "ぼぶ",
+		channelId: CHANNEL_ID,
+		guildId: GUILD_ID,
+		target,
+		requestedAt: REQUESTED_AT,
+	};
+}
+
 /** 右クリックメニューで「Jevに聞く」を選んだInteraction */
 function menuInteraction(user: { id: string }, target: APIMessage) {
 	return guildInteraction(
@@ -257,6 +315,7 @@ describe("右クリックメニューの「Jevに聞く」", () => {
 		expect(sent).toEqual([
 			{
 				kind: "jev",
+				source: "menu",
 				interactionId: "1",
 				interactionToken: "interaction-token",
 				userId: user.id,
@@ -614,7 +673,8 @@ describe("「Jevに聞く」の仕事", () => {
 		{ status: 429, text: RATE_LIMITED_TEXT, userId: "65022" },
 		{ status: 529, text: JEV_ERROR, userId: "65023" },
 	])(
-		"Jevの呼び出しが$statusで失敗したら、AIに続きを頼まずに理由を投稿する",
+		// $statusの直後に日本語を続けると、名前の一部として読まれるので、かぎ括弧で区切る
+		"Jevの呼び出しが「$status」で失敗したら、AIに続きを頼まずに理由を投稿する",
 		async ({ status, text, userId }) => {
 			const { environment } = fakeQueues();
 			const user = await registered(userId, ["anthropic"], true);
@@ -750,6 +810,176 @@ describe("「Jevに聞く」の仕事", () => {
 	});
 });
 
+describe("/jev", () => {
+	it("聞くことの入力欄を付けて登録し、/helpのコマンドの一覧にも出す", () => {
+		const description =
+			"Jev(TypeSafeの判定モデル)に聞く。AIが会話を読んで質問を作り、Jevが確率で答える(TypeSafeのキーが必要)";
+		expect(COMMANDS).toContainEqual(
+			expect.objectContaining({
+				type: 1,
+				name: "jev",
+				description,
+				options: [
+					{
+						type: 3,
+						name: "question",
+						description: "Jevに聞くこと(例: 明日の集まりは雨で中止になりそう?)",
+						required: true,
+						min_length: 1,
+						max_length: 1000,
+					},
+				],
+			}),
+		);
+		expect(helpText()).toContain(`- \`/jev\`: ${description}`);
+	});
+
+	it("AIのキーとTypeSafeのキーがあれば、チャンネルに見える保留の応答を返し、入力を対象のメッセージにした仕事を入れる", async () => {
+		const { environment, sent } = fakeQueues();
+		const user = await registered("65060", ["anthropic"], true);
+
+		const body = await sendInteraction(
+			commandInteraction(user, "  明日の集まりは雨で中止になりそう?  "),
+			environment,
+		);
+
+		// 右クリックメニューと同じく、チャンネルに見える保留の応答にする(flagsを付けない)
+		expect(body).toEqual({ type: 5 });
+		expect(sent).toEqual([
+			{
+				kind: "jev",
+				source: "command",
+				interactionId: "1",
+				interactionToken: "interaction-token",
+				userId: user.id,
+				userName: "bob",
+				channelId: CHANNEL_ID,
+				guildId: GUILD_ID,
+				target: {
+					// Discordにはないメッセージなので、ほかと重ならないIDにする。前後の空白は除く
+					messageId: "jev-command:1",
+					guildId: GUILD_ID,
+					channelId: CHANNEL_ID,
+					authorId: user.id,
+					authorName: "bob",
+					authorIsBot: false,
+					content: "明日の集まりは雨で中止になりそう?",
+					replyToId: null,
+					mentions: [],
+					attachments: [],
+					embeds: [],
+					command: null,
+					members: [],
+					createdAt: expect.any(Number),
+					editedAt: null,
+				},
+				requestedAt: expect.any(Number),
+			},
+		]);
+	});
+
+	it("TypeSafeのキーを登録していなければ、/jevの登録方法を本人にだけ見せ、仕事は入れない", async () => {
+		const { environment, sent } = fakeQueues();
+		const user = await registered("65061", ["anthropic"], false);
+
+		const body = await sendInteraction(
+			commandInteraction(user, "本当?"),
+			environment,
+		);
+
+		expect(body).toEqual({
+			type: 4,
+			data: { content: JEV_COMMAND_TYPESAFE_KEY_REQUIRED, flags: 64 },
+		});
+		expect(sent).toEqual([]);
+	});
+
+	it("入力された聞くことを対象のメッセージにして、右クリックメニューと同じ渡し方でJevに聞く", async () => {
+		const { environment } = fakeQueues();
+		const user = await registered("65062", ["anthropic"], true);
+		const calls = mockApis([], {
+			ai: () => askJev(NOUL_INPUT),
+			jev: () => jevAnswered({ q1: { type: "noul", noul: 0.03 } }),
+		});
+
+		await handleJevJob(
+			commandJob(user, "日本の首都って大阪?", "65300"),
+			environment,
+		);
+
+		const requests = anthropicRequests(calls);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.system.map((block) => block.text)).toEqual([
+			JEV_SYSTEM_PROMPT,
+		]);
+		expect(
+			requests[0]?.messages.map((message) => message.content[0]?.text),
+		).toEqual([
+			"[2026-10-28(水) 10:00] ぼぶ: 日本の首都って大阪?",
+			"[2026-10-28(水) 10:00] ぼぶ: 上のメッセージについて、Jevに聞いて",
+		]);
+		expect(requests[0]?.tools?.map((tool) => tool.name)).toEqual([
+			"read_channel_history",
+			"search_channel_messages",
+			"list_channels",
+			"read_pinned_messages",
+			"read_file",
+			"ask_jev",
+		]);
+		expect(jevCalls(calls)[0]?.body).toMatchObject({
+			state: { message: { author: "ぼぶ", text: "日本の首都って大阪?" } },
+		});
+		expect(postedResult(calls)).toEqual({
+			content: "**Jevの回答**: 日本の首都は大阪である\nはい 3%・**いいえ 97%**",
+			allowed_mentions: { parse: [] },
+		});
+		// 対象はDiscordにはないメッセージなので、結果との対応は残さない
+		const saved = await env.DB.prepare(
+			"SELECT COUNT(*) AS count FROM explain_targets WHERE target_message_id = ?",
+		)
+			.bind("jev-command:65300")
+			.first<number>("count");
+		expect(saved).toBe(0);
+	});
+
+	it("使った後にTypeSafeのキーが消されていたら、AIを呼ばずに/jevの登録方法を投稿する", async () => {
+		const { environment } = fakeQueues();
+		const user = await registered("65063", ["anthropic"], false);
+		const calls = mockApis([], { ai: () => askJev(NOUL_INPUT) });
+
+		await handleJevJob(commandJob(user, "本当?", "65301"), environment);
+
+		expect(anthropicRequests(calls)).toHaveLength(0);
+		expect(postedResult(calls)?.content).toBe(
+			JEV_COMMAND_TYPESAFE_KEY_REQUIRED,
+		);
+	});
+
+	it("道具を使えないモデルでは、/jevを使えないと投稿する", async () => {
+		const { environment } = fakeQueues();
+		const user = await registered("65064", ["openrouter"], true);
+		await updateUserSettings(env.DB, user.id, {
+			modelKey: "custom",
+			customModelId: "x-ai/old-model",
+		});
+		const calls = mockApis([], {
+			ai: (call) =>
+				call.url.pathname === "/api/v1/models"
+					? Response.json({
+							data: [
+								{ id: "x-ai/old-model", supported_parameters: ["max_tokens"] },
+							],
+						})
+					: new Response(null, { status: 500 }),
+		});
+
+		await handleJevJob(commandJob(user, "本当?", "65302"), environment);
+
+		expect(jevCalls(calls)).toHaveLength(0);
+		expect(postedResult(calls)?.content).toBe(JEV_COMMAND_NO_TOOLS);
+	});
+});
+
 describe("「Jevに聞く」の道具の入力", () => {
 	it("表示する文の改行は空白にし、Markdownの記号はそのまま表示する", async () => {
 		const { environment } = fakeQueues();
@@ -855,7 +1085,7 @@ describe("/setup のTypeSafeのキー", () => {
 				"- TypeSafe: 未登録",
 				"",
 				"-# OpenRouterとの連携のリンクは10分間有効です。",
-				"-# TypeSafeのキーは、右クリックメニューの「Jevに聞く」で使います。",
+				"-# TypeSafeのキーは、右クリックメニューの「Jevに聞く」と `/jev` で使います。",
 			].join("\n"),
 		);
 		expect(body.data.components[0].components[2]).toMatchObject({
@@ -911,7 +1141,7 @@ describe("/setup のTypeSafeのキー", () => {
 		const edit = calls.find((call) => call.url.hostname === "discord.com");
 		expect(edit?.body).toEqual({
 			content:
-				"TypeSafeのAPIキーを登録しました。メッセージの右クリックメニュー(アプリ)の「Jevに聞く」で使えます。",
+				"TypeSafeのAPIキーを登録しました。メッセージの右クリックメニュー(アプリ)の「Jevに聞く」と `/jev` で使えます。",
 		});
 	});
 
