@@ -23,7 +23,7 @@ import {
 	MessageFlags,
 } from "../discord/constants";
 import { IMPORT_COMMAND_NAME } from "../import/progress";
-import { JEV_COMMAND_NAME } from "../jev/texts";
+import { JEV_COMMAND_NAME, JEV_SLASH_COMMAND_NAME } from "../jev/texts";
 import { MEMORY_EDIT_MODAL_ID, MEMORY_ID_PREFIX } from "../memory/screen";
 import { MEMORY_COMMAND_NAME } from "../memory/texts";
 import {
@@ -52,7 +52,7 @@ import { EXPLAIN_COMMAND_NAME, explainFromMenu } from "./explain";
 import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
 import { helpCommand } from "./help";
 import { importCommand } from "./import";
-import { jevFromMenu } from "./jev";
+import { jevFromCommand, jevFromMenu } from "./jev";
 import { memoryCommand, memoryComponent, submitMemoryEdit } from "./memory";
 import {
 	MODEL_CUSTOM_ID,
@@ -170,6 +170,16 @@ async function route(
 					ctx,
 					user,
 					guildId,
+				);
+			}
+			if (
+				interaction.data.type === ApplicationCommandType.ChatInput &&
+				interaction.data.name === JEV_SLASH_COMMAND_NAME
+			) {
+				return jevFromCommand(
+					interaction as APIChatInputApplicationCommandInteraction,
+					env,
+					user,
 				);
 			}
 			if (interaction.data.name === ENDAGENT_COMMAND_NAME) {

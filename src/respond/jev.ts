@@ -5,9 +5,9 @@ import { JEV_REQUEST, JEV_SYSTEM_PROMPT } from "../jev/prompt";
 import {
 	JEV_ERROR,
 	JEV_NO_QUESTION,
-	JEV_NO_TOOLS,
+	jevNoTools,
 	TYPESAFE_KEY_INVALID,
-	TYPESAFE_KEY_REQUIRED,
+	typeSafeKeyRequired,
 } from "../jev/texts";
 import { askJevTool, emptyJevOutcome, type JevOutcome } from "../jev/tool";
 import type { ChatResult } from "../llm/types";
@@ -50,8 +50,8 @@ import { usageNote } from "./usage";
 const MAX_OUTPUT_TOKENS = 16_000;
 
 /**
- * 右クリックメニューの「Jevに聞く」の仕事(仕様: docs/spec/architecture.md「Jevに聞く」)。
- * 選んだ人のキーと設定のモデルに、Jevへの質問を作ってもらい、選んだ人のTypeSafeのキーでJevに聞く。
+ * 右クリックメニューの「Jevに聞く」と`/jev`の仕事(仕様: docs/spec/architecture.md「Jevに聞く」)。
+ * 使った人のキーと設定のモデルに、Jevへの質問を作ってもらい、使った人のTypeSafeのキーでJevに聞く。
  * 保留にした応答(チャンネルに見える)を、Jevの回答に書き換えて投稿する。
  * 予期しない失敗は例外のままにして、Queueにやり直させる。
  */
@@ -71,11 +71,12 @@ export async function handleJevJob(job: JevJob, env: Env): Promise<void> {
 }
 
 async function askAndPost(job: JevJob, env: Env): Promise<void> {
+	const source = job.source ?? "menu";
 	const apiKey = await loadTypeSafeKey(env, job.userId);
-	// 右クリックメニューで選んだ後に、/delete でキーを消した
+	// 右クリックメニューか`/jev`を使った後に、/delete でキーを消した
 	const text =
 		apiKey === null
-			? TYPESAFE_KEY_REQUIRED
+			? typeSafeKeyRequired(source)
 			: await withReplyModel(
 					env,
 					{ userId: job.userId, guildId: job.guildId },
@@ -83,7 +84,8 @@ async function askAndPost(job: JevJob, env: Env): Promise<void> {
 					(guidance) => guidance,
 				);
 	const [first] = await postResult(env, job, text);
-	if (first !== undefined) {
+	// `/jev`の対象は、Discordにはないメッセージなので、結果との対応は残さない
+	if (first !== undefined && source === "menu") {
 		await recordTarget(env, first, job.target.messageId);
 	}
 }
@@ -103,7 +105,7 @@ async function askJevWith(
 	// 文脈を調べる道具と、Jevに聞く道具が要る
 	if (!(await toolsAvailable(settings, model))) {
 		log("no_tools", { userId, provider: model.provider, model: model.modelId });
-		return JEV_NO_TOOLS;
+		return jevNoTools(job.source ?? "menu");
 	}
 	const botUserId = env.DISCORD_APPLICATION_ID;
 	const history = historyFor(env, {
@@ -182,6 +184,7 @@ async function askJevWith(
 	});
 	log(outcome.answered !== null ? "answered" : "not_answered", {
 		userId,
+		source: job.source ?? "menu",
 		provider: model.provider,
 		model: model.modelId,
 		payer: context.payer.kind,

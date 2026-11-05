@@ -1,4 +1,5 @@
 import type { ChannelInfo, RoleInfo } from "../discord/channels";
+import type { JevSource } from "../jev/texts";
 
 /**
  * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとJevJobとCompactJobとImportCommandJobとMemoryJobと
@@ -58,22 +59,30 @@ export interface ExplainJob {
 }
 
 /**
- * 右クリックメニューの「Jevに聞く」。選んだ人のキーと設定で、AIにJevへの質問を作ってもらい、
- * 選んだ人のTypeSafeのキーでJevに聞いて、保留にした応答(チャンネルに見える)を、Jevの回答に書き換える。
+ * 右クリックメニューの「Jevに聞く」と`/jev`。使った人のキーと設定で、AIにJevへの質問を作ってもらい、
+ * 使った人のTypeSafeのキーでJevに聞いて、保留にした応答(チャンネルに見える)を、Jevの回答に書き換える。
  */
 export interface JevJob {
 	kind: "jev";
+	/**
+	 * 使った方法。右クリックメニュー(menu)か、`/jev`(command)。案内の文と、対象のメッセージの扱いが違う。
+	 * `/jev`を足す前に入った仕事にはないので、省けば右クリックメニューとして扱う
+	 */
+	source?: JevSource;
 	/** InteractionのID。同じInteractionで2回投稿しないために使う */
 	interactionId: string;
 	/** Interactionのトークン。保留にした応答を書き換えるのに使う(15分で切れる) */
 	interactionToken: string;
-	/** 選んだ人。この人の資格情報と設定とTypeSafeのキーを使う */
+	/** 使った人。この人の資格情報と設定とTypeSafeのキーを使う */
 	userId: string;
-	/** 選んだ人の、サーバーで見えている名前 */
+	/** 使った人の、サーバーで見えている名前 */
 	userName: string;
 	channelId: string;
 	guildId: string | null;
-	/** Jevに聞く対象のメッセージ(Interactionに含まれていたもの) */
+	/**
+	 * Jevに聞く対象のメッセージ。右クリックメニューでは、Interactionに含まれていたメッセージ。
+	 * `/jev`では、入力された「聞くこと」を、使った人の発言にしたもの(Discordにはないメッセージ)
+	 */
 	target: StoredMessageInput;
 	/** 頼まれた時刻(UNIX時間のミリ秒)。今の日時として、AIに伝える */
 	requestedAt: number;
