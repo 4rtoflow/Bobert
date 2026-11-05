@@ -58,7 +58,8 @@
    - **Enable Device Flow:** OFF
    - **Redirect on update:** OFF(Setup URLが空なので効かない)
    - **Webhook**の**Active:** OFF
-   - **Repository permissions:** Contents(Read and write)と、Pull requests(Read and write)。Metadata(Read-only)は自動で付く。エージェントからIssue、Actions、Pages、Projectsも扱うために([issue #76](https://github.com/4rtoflow/Bobert/issues/76))、Actions、Issues、Pages、Repository projects、Workflowsも読み書きにしてある。後から権限を足すと、アプリを入れた人がそれぞれ承認し直す必要があるため。Projects v2を扱うには、組織やユーザーの「Projects」の権限が要る場合がある。Workflowsがあると、エージェントは`.github/workflows`の中のファイルを変えたコミットもpushできる
+   - **Repository permissions:** Contents(Read and write)と、Pull requests(Read and write)。Metadata(Read-only)は自動で付く。エージェントからIssue、Actions、Pages、Projectsも扱うために([issue #76](https://github.com/4rtoflow/Bobert/issues/76))、Actions、Issues、Pages、Repository projects、Workflowsも読み書きにしてある。後から権限を足すと、アプリを入れた人がそれぞれ承認し直す必要があるため。Workflowsがあると、エージェントは`.github/workflows`の中のファイルを変えたコミットもpushできる
+   - **Organization permissions:** Projects(Read and write)。エージェントからProjects v2を扱うために要る。リポジトリの権限の「Repository projects」とは別の権限。`bobert-agent-app`には、2026-11-05に足した
    - **Where can this GitHub App be installed?:** Any account(利用者がそれぞれ、自分のGitHubで連携するため)
 3. 作った後の画面で「Client ID」を控え、「Generate a new client secret」でシークレットを作って控える(その画面でしか見られない)。アプリの公開ページのURL(`https://github.com/apps/〇〇`)の「〇〇」が、アプリのURL上の名前。App IDと秘密鍵(Private key)は使わない。
 4. 3つの値を、本番のシークレット(`.env.production`)に書く: `GITHUB_APP_CLIENT_ID`、`GITHUB_APP_CLIENT_SECRET`、`GITHUB_APP_SLUG`。デプロイのときに、`--secrets-file .env.production`で入れる(README「Cloudflareのリソースを作る」)。
