@@ -71,6 +71,11 @@ export interface ToolResult {
 	text: string;
 	/** AIに渡すファイル。labelは、どのファイルかを示す名前(例: 「ファイル3「photo.png」」) */
 	files: { label: string; file: ChatFile }[];
+	/**
+	 * trueなら、この結果をAIに返さずに、AIとのやり取りを終える(「Jevに聞く」の道具で、Jevが答えたとき)。
+	 * 同じ回にほかの道具も呼ばれていれば、それも実行してから終える
+	 */
+	endsTurn?: boolean;
 }
 
 export interface ChatResult {

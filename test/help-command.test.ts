@@ -25,7 +25,7 @@ describe("/help", () => {
 		expect(body.type).toBe(InteractionResponseType.ChannelMessageWithSource);
 		expect(body.data.flags).toBe(MessageFlags.Ephemeral);
 		const lines: string[] = body.data.content.split("\n");
-		expect(lines.slice(0, 15)).toEqual([
+		expect(lines.slice(0, 16)).toEqual([
 			"**Bobertの使い方**",
 			"- Bobertにメンションするか、Bobertの返答に返信すると、AIが答えます。",
 			"- メッセージに返信しながらBobertにメンションすると、そのメッセージについて聞けます。",
@@ -33,6 +33,7 @@ describe("/help", () => {
 			"- ほかのチャンネルの内容を、そのチャンネルを見られない人もいるチャンネルで答えることがあります。AIに読ませたくないチャンネルは、Botの「チャンネルを見る」権限を外してください。",
 			"- メッセージの右クリックメニュー(アプリ)の「Bobertに聞く」: そのメッセージの意味を説明します",
 			"- メッセージの右クリックメニュー(アプリ)の「会話を要約」: そのメッセージまでの会話を要約します。長い会話の費用を抑えられます",
+			"- メッセージの右クリックメニュー(アプリ)の「Jevに聞く」: AIがメッセージと前後の会話を読んで質問を作り、Jevが確率で答えます。TypeSafeのAPIキーの登録が必要です",
 			"- 費用は、登録した本人のアカウントに請求されます。まず `/setup` でキーを登録してください。",
 			"- サーバーに寄付されたクレジット(`/donate`)があれば、先にそれを使います。キーがなくても使えます。",
 			"- `/regskills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。一覧と編集は `/skills` で行います。",
@@ -43,13 +44,13 @@ describe("/help", () => {
 			"**コマンド**",
 		]);
 		// コマンドの一覧は、登録するスラッシュコマンドの説明から、登録する順に作る(右クリックメニューの項目は入れない)
-		expect(lines.slice(15)).toHaveLength(
+		expect(lines.slice(16)).toHaveLength(
 			COMMANDS.filter(
 				(command) => command.type === ApplicationCommandType.ChatInput,
 			).length,
 		);
-		expect(lines[15]).toBe(
-			"- `/setup`: Anthropic APIキーの登録・OpenRouterへのログイン",
+		expect(lines[16]).toBe(
+			"- `/setup`: Anthropic APIキーの登録・OpenRouterへのログイン・TypeSafe APIキーの登録(Jev用)",
 		);
 		expect(lines).toContain(
 			"- `/donate`: サーバーの全員が使えるクレジットの寄付と、残りの確認",

@@ -13,6 +13,7 @@ import {
 	PermissionFlags,
 } from "../discord/constants";
 import { IMPORT_COMMAND_NAME } from "../import/progress";
+import { JEV_COMMAND_NAME } from "../jev/texts";
 import {
 	MEMORY_COMMAND_DESCRIPTION,
 	MEMORY_COMMAND_NAME,
@@ -52,7 +53,8 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	{
 		...GUILD_ONLY,
 		name: "setup",
-		description: "Anthropic APIキーの登録・OpenRouterへのログイン",
+		description:
+			"Anthropic APIキーの登録・OpenRouterへのログイン・TypeSafe APIキーの登録(Jev用)",
 	},
 	{
 		...GUILD_ONLY,
@@ -150,5 +152,9 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	{
 		...MESSAGE_MENU,
 		name: COMPACT_COMMAND_NAME,
+	},
+	{
+		...MESSAGE_MENU,
+		name: JEV_COMMAND_NAME,
 	},
 ];

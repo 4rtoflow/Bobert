@@ -959,7 +959,7 @@ describe("ほかの機能との関係", () => {
 		);
 
 		expect(response.data.content).toBe(
-			`登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${DELETE_AGENTS_NOTE}よろしいですか?`,
+			`登録したAPIキー(Anthropic、OpenRouter、TypeSafe)と設定を、すべて削除します。${DELETE_AGENTS_NOTE}よろしいですか?`,
 		);
 	});
 

@@ -5,6 +5,7 @@ import { handleMemoryJob } from "../memory/update";
 import { handleCompactJob } from "../respond/compact";
 import { handleExplainJob } from "../respond/explain";
 import { handleRespondJob } from "../respond/handler";
+import { handleJevJob } from "../respond/jev";
 import { applyChannelSync } from "./channels";
 import { ingestDeps } from "./deps";
 import { IMPORT_PAGE_SIZE, importChannelPage } from "./import";
@@ -17,6 +18,7 @@ import type {
 	ImportCommandJob,
 	ImportJob,
 	IngestJob,
+	JevJob,
 	MemoryJob,
 	QueueMessage,
 	ReactionJob,
@@ -39,6 +41,7 @@ export async function handleQueueBatch(
 		channels: (job) => applyChannelSync(job, deps),
 		respond: (job) => handleRespondJob(job, env),
 		explain: (job) => handleExplainJob(job, env),
+		jev: (job) => handleJevJob(job, env),
 		compact: (job) => handleCompactJob(job, env),
 		importCommand: (job) => handleImportCommandJob(job, env),
 		memory: (job) => handleMemoryJob(job, env),
@@ -80,6 +83,7 @@ export interface JobHandlers {
 	channels: (job: ChannelSyncJob) => Promise<void>;
 	respond: (job: RespondJob) => Promise<void>;
 	explain: (job: ExplainJob) => Promise<void>;
+	jev: (job: JevJob) => Promise<void>;
 	compact: (job: CompactJob) => Promise<void>;
 	importCommand: (job: ImportCommandJob) => Promise<void>;
 	memory: (job: MemoryJob) => Promise<void>;
@@ -111,6 +115,9 @@ export async function processBatch(
 	const explain = messages.filter(
 		(message): message is Message<ExplainJob> =>
 			message.body.kind === "explain",
+	);
+	const jev = messages.filter(
+		(message): message is Message<JevJob> => message.body.kind === "jev",
 	);
 	const compact = messages.filter(
 		(message): message is Message<CompactJob> =>
@@ -144,6 +151,7 @@ export async function processBatch(
 	await eachOne(channels, handlers.channels);
 	await eachOne(respond, handlers.respond);
 	await eachOne(explain, handlers.explain);
+	await eachOne(jev, handlers.jev);
 	await eachOne(compact, handlers.compact);
 	await eachOne(importCommands, handlers.importCommand);
 	await eachOne(memory, handlers.memory);

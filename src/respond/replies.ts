@@ -39,6 +39,10 @@ export const REFUSAL_TEXT = "この内容には答えられません。";
 export const LLM_ERROR_TEXT =
 	"AIの呼び出しでエラーが起きました。少し待ってから、もう一度試してください。";
 
+/** 利用の上限(レート制限)に達したときの返答。AIのほか、Jevの呼び出しでも使う */
+export const RATE_LIMITED_TEXT =
+	"利用の上限(レート制限)に達しました。少し待ってから、もう一度話しかけてください。";
+
 /** AIの呼び出しに失敗したときの、短い理由(仕様: docs/spec/behavior.md「エラー時の表示」) */
 export function describeLlmError(
 	error: LlmError,
@@ -59,7 +63,7 @@ export function describeLlmError(
 		case "no_provider":
 			return `モデル「${model.label}」は、データを学習に使わない提供元では使えません。別のモデルを選んでください。`;
 		case "rate_limited":
-			return "利用の上限(レート制限)に達しました。少し待ってから、もう一度話しかけてください。";
+			return RATE_LIMITED_TEXT;
 		case "unavailable":
 			return "AIのサーバーが混み合っているか、つながりません。少し待ってから、もう一度話しかけてください。";
 		case "too_large":

@@ -8,6 +8,8 @@ export interface ToolOutcome {
 	files: ToolResult["files"];
 	/** 失敗や、実行しなかったことを伝える結果か */
 	isError: boolean;
+	/** trueなら、この結果をAIに返さずに、AIとのやり取りを終える(ToolResultのendsTurn) */
+	endsTurn?: boolean;
 }
 
 /** 呼び出しの上限を超えて呼ばれた道具の結果 */
@@ -58,7 +60,12 @@ export async function runChatTool(
 		const result = await tool.run(record);
 		return typeof result === "string"
 			? { content: result, files: [], isError: false }
-			: { content: result.text, files: result.files, isError: false };
+			: {
+					content: result.text,
+					files: result.files,
+					isError: false,
+					...(result.endsTurn === true ? { endsTurn: true } : {}),
+				};
 	} catch (error) {
 		// 結果の本文は残さない
 		logEvent("llm", "tool_failed", {

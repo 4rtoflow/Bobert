@@ -1068,7 +1068,7 @@ describe("/delete", () => {
 		);
 
 		expect(confirm.data.content).toBe(
-			`登録したAPIキー(AnthropicとOpenRouter)と設定を、すべて削除します。${DELETE_MEMORY_NOTE}よろしいですか?`,
+			`登録したAPIキー(Anthropic、OpenRouter、TypeSafe)と設定を、すべて削除します。${DELETE_MEMORY_NOTE}よろしいですか?`,
 		);
 
 		await sendInteraction(pressButton(user, "delete:confirm"));

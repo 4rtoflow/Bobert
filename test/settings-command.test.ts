@@ -56,6 +56,7 @@ describe("/settings", () => {
 			content: [
 				"- Anthropic: 登録済み",
 				"- OpenRouter: 未連携",
+				"- TypeSafe: 未登録",
 				"- モデル: Claude Haiku 5.5(Anthropicで直接呼ぶ)",
 				"- 思考の深さ: low(既定)",
 				"- Web検索: OFF",
@@ -88,6 +89,7 @@ describe("/settings", () => {
 		expect(lines(calls)).toEqual([
 			"- Anthropic: 登録済み",
 			"- OpenRouter: 連携済み",
+			"- TypeSafe: 未登録",
 			"- モデル: GPT-6 Luna(OpenRouter経由)",
 			"- 思考の深さ: high",
 			"- Web検索: ON",
@@ -141,6 +143,7 @@ describe("/settings", () => {
 			expect.arrayContaining([
 				"- Anthropic: 未登録",
 				"- OpenRouter: 未連携",
+				"- TypeSafe: 未登録",
 				"- モデル: Claude Haiku 5.5(`/setup`で登録が必要)",
 				"- 思考の深さ: low(既定)",
 			]),

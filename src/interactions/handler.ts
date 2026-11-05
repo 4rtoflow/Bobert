@@ -23,6 +23,7 @@ import {
 	MessageFlags,
 } from "../discord/constants";
 import { IMPORT_COMMAND_NAME } from "../import/progress";
+import { JEV_COMMAND_NAME } from "../jev/texts";
 import { MEMORY_EDIT_MODAL_ID, MEMORY_ID_PREFIX } from "../memory/screen";
 import { MEMORY_COMMAND_NAME } from "../memory/texts";
 import {
@@ -51,6 +52,7 @@ import { EXPLAIN_COMMAND_NAME, explainFromMenu } from "./explain";
 import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
 import { helpCommand } from "./help";
 import { importCommand } from "./import";
+import { jevFromMenu } from "./jev";
 import { memoryCommand, memoryComponent, submitMemoryEdit } from "./memory";
 import {
 	MODEL_CUSTOM_ID,
@@ -64,8 +66,11 @@ import { settingsCommand } from "./settings";
 import {
 	anthropicKeyModal,
 	SETUP_ANTHROPIC_ID,
+	SETUP_TYPESAFE_ID,
 	setupCommand,
 	submitAnthropicKey,
+	submitTypeSafeKey,
+	typeSafeKeyModal,
 } from "./setup";
 import {
 	REGSKILLS_COMMAND_NAME,
@@ -125,6 +130,16 @@ async function route(
 				interaction.data.name === EXPLAIN_COMMAND_NAME
 			) {
 				return explainFromMenu(
+					interaction as APIMessageApplicationCommandInteraction,
+					env,
+					user,
+				);
+			}
+			if (
+				interaction.data.type === ApplicationCommandType.Message &&
+				interaction.data.name === JEV_COMMAND_NAME
+			) {
+				return jevFromMenu(
 					interaction as APIMessageApplicationCommandInteraction,
 					env,
 					user,
@@ -230,6 +245,9 @@ async function route(
 			if (interaction.data.custom_id === SETUP_ANTHROPIC_ID) {
 				return anthropicKeyModal();
 			}
+			if (interaction.data.custom_id === SETUP_TYPESAFE_ID) {
+				return typeSafeKeyModal();
+			}
 			if (interaction.data.custom_id.startsWith(FEAT_BUTTON_PREFIX)) {
 				const toggled = await toggleFeature(
 					env,
@@ -287,6 +305,9 @@ async function route(
 		case InteractionType.ModalSubmit:
 			if (interaction.data.custom_id === SETUP_ANTHROPIC_ID) {
 				return submitAnthropicKey(interaction, env, ctx, user.id);
+			}
+			if (interaction.data.custom_id === SETUP_TYPESAFE_ID) {
+				return submitTypeSafeKey(interaction, env, ctx, user.id);
 			}
 			if (interaction.data.custom_id === MODEL_CUSTOM_ID) {
 				return submitCustomModel(interaction, env, ctx, user.id);

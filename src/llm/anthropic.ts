@@ -139,6 +139,7 @@ export async function chatWithAnthropic(
 			}
 			messages.push({ role: "assistant", content: message.content });
 			const results: Anthropic.ToolResultBlockParam[] = [];
+			let endsTurn = false;
 			for (const use of uses) {
 				// スキルを読む道具とファイルを読む道具は、上限に数えない(道具が自分で回数を数える)
 				const counted = countsTowardLimit(request.tools, use.name);
@@ -149,11 +150,16 @@ export async function chatWithAnthropic(
 				if (counted) {
 					toolCalls++;
 				}
+				endsTurn ||= outcome.endsTurn === true;
 				results.push(toolResultBlock(use.id, outcome));
+			}
+			answerFrom = responses.length;
+			// 道具が、やり取りを終えるよう求めた(「Jevに聞く」で、Jevが答えた)。結果はAIに返さない
+			if (endsTurn) {
+				break;
 			}
 			// 道具の結果は、まとめて1つのメッセージで返す
 			messages.push({ role: "user", content: results });
-			answerFrom = responses.length;
 		}
 	} catch (error) {
 		throw toLlmError(error);

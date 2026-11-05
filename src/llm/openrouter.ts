@@ -198,6 +198,7 @@ export async function chatWithOpenRouter(
 			tool_calls: calls,
 		});
 		const files: ToolOutcome["files"] = [];
+		let endsTurn = false;
 		for (const call of calls) {
 			// スキルを読む道具とファイルを読む道具は、上限に数えない(道具が自分で回数を数える)
 			const name = call.function?.name ?? "";
@@ -213,6 +214,7 @@ export async function chatWithOpenRouter(
 			if (counted) {
 				toolCalls++;
 			}
+			endsTurn ||= outcome.endsTurn === true;
 			const message: OpenRouterToolMessage = {
 				role: "tool",
 				tool_call_id: call.id,
@@ -226,6 +228,11 @@ export async function chatWithOpenRouter(
 				files.push(...outcome.files);
 				withFiles.push({ message, text: outcome.content });
 			}
+		}
+		// 道具が、やり取りを終えるよう求めた(「Jevに聞く」で、Jevが答えた)。結果はAIに返さない
+		if (endsTurn) {
+			answerFrom = responses.length;
+			break;
 		}
 		// 道具の結果(role: "tool")には文しか入れられないので、画像とPDFは、すぐ後の人の発言で渡す
 		if (files.length > 0) {

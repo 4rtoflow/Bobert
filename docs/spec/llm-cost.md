@@ -1,6 +1,6 @@
 # LLM利用コスト
 
-最終更新: 2026-11-01
+最終更新: 2026-11-04
 
 ## 方針
 
@@ -13,6 +13,7 @@
 - 例: AさんとBotの会話にBさんが返信した場合、その返信への応答にはBさんの資格情報を使う(サーバーに寄付があれば、寄付した人の資格情報を先に使う)。
 - 会話の履歴や検索結果に他の人の発言が含まれる場合も、そのまま文脈として、返信した人のプロバイダに送る。寄付で答えるときは、寄付した人のプロバイダに送る。個別の告知はしない。上の例では、Aさんの発言もBさんのプロバイダに送られる。
 - Bot側では使用量の上限を設けない。使いすぎの防止は各ユーザーがプロバイダ側で行う(Anthropicはワークスペースごとに支出上限を設定できる)。寄付だけは、寄付された額を上限として、Botが使った額を数える。
+- 右クリックメニューの「Jevに聞く」で呼ぶJev(TypeSafeの判定モデル)の費用も、使った本人が、本人のTypeSafeのキーで払う(「Jevの費用」を参照)。
 
 ## 対応する資格情報
 
@@ -20,6 +21,7 @@
 | ----------------- | ---------------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------- |
 | Anthropic APIキー | ユーザーがClaude Consoleで発行したキーを登録する                             | ユーザーのClaude Console組織   | Claudeの各モデル                                            |
 | OpenRouter        | OAuth(PKCE)でユーザーがOpenRouter上でBotを承認し、本人のキーを発行してもらう | ユーザーのOpenRouterクレジット | OpenRouterで提供される各社のモデル(GPT、Gemini、Claudeなど) |
+| TypeSafe APIキー  | ユーザーがTypeSafeのコンソールで発行したキーを登録する                       | ユーザーのTypeSafeの組織       | Jevだけ(「Jevに聞く」で使う。AIの返答には使わない)          |
 - Anthropicに直接対応する理由: Claude Max/Teamの契約者は、プラン付属の月額APIクレジットを、紐付けたConsole組織のAPIキーで使える。月額はMax 5xが$100、Max 20xが$200、Teamが最大$500。
 - OpenRouterのモデル単価は各社と同額。クレジット購入時に手数料がかかる(約5.5%、最低$0.80。2026-10時点の第三者による解説)。
 - OpenRouterへのリクエストには、データを保存・学習しないプロバイダだけを使う指定(`provider.data_collection: "deny"`)を付ける。会話には他の人の発言も含まれるため。この指定により、使えなくなるモデルもある。
@@ -35,13 +37,19 @@
   - リンクに付ける`state`で、どのDiscordユーザーのキーとして保存するかを決める。
   - OpenRouterに作られるキーの名前に、Discordのユーザー名を入れる(例: `Bobert (Discord: alice)`)。承認の画面で、どのアカウントと連携するのかを確かめられるようにするため。
   - 連携が済んだら、`/setup`への追加の返信で、本人にメンションして「OpenRouterとの連携が完了しました。」と知らせる。`/setup`の返信と同じく、本人にだけ見える形にする。そのために、`/setup`のInteractionのトークン(15分有効)を`state`と一緒に保存しておく。
+- **TypeSafe(「Jevに聞く」):** `/setup`の「TypeSafeのキーを登録」ボタンでモーダルを開き、APIキーを入力してもらう。キーは[TypeSafeのコンソール](https://console.typesafe.ai/keys)で発行する。
+  - `/setup`の画面では、OpenRouterの行の次に「- TypeSafe: 未登録」(または「登録済み」)と書き、最後に「-# TypeSafeのキーは、右クリックメニューの「Jevに聞く」で使います。」と添える。ボタンは「TypeSafeのキーを登録」(登録済みなら「TypeSafeのキーを登録し直す」)。
+  - モーダルは、タイトル「TypeSafeのAPIキーの登録」、入力欄「APIキー」、説明「TypeSafeのコンソール(console.typesafe.ai)で発行したキー」。
+  - 登録したら「TypeSafeのAPIキーを登録しました。メッセージの右クリックメニュー(アプリ)の「Jevに聞く」で使えます。」と知らせる。使えない文字が入っていれば「キーに使えない文字が含まれています。TypeSafeのコンソールでコピーし直して、もう一度登録してください。」。キーが使えないとき、確かめられないとき、登録中のエラーのときは、Anthropicのキーと同じ文を使う。
+  - 入力は、Anthropicのキーと同じく、全角の英数字を半角にし、空白と見えない文字を取り除いてから使う。
+  - AIのキーとは別の表(`typesafe_credentials`)に保存する。AIのキーの表は、プロバイダの値を制約(CHECK)で決めていて、変えるには表を作り直し、本番のキーを移し替えることになるため。TypeSafeのキーは、AIの呼び出しにも寄付にも使わない。
 - **GitHub(エージェント):** エージェントのGitHubとの連携で受け取るトークン(本人に代わって操作するトークンと、更新用のトークン)は、`/setup`ではなく、エージェントの「GitHubと連携」のボタンから連携して受け取る(仕組みは[アーキテクチャ](architecture.md)「エージェント(Bobert Agent)」の「GitHub」を参照)。GitHubのトークンにはLLMの費用がかからないので、寄付とは関係しない。
-- **有効性の確認:** 登録時に、料金のかからないAPI(Anthropicのモデル一覧API)を呼び、キーが有効か確かめる。OpenRouterのキーは、OpenRouterから受け取ったものをそのまま使う。
+- **有効性の確認:** 登録時に、料金のかからないAPI(Anthropicのモデル一覧API)を呼び、キーが有効か確かめる。OpenRouterのキーは、OpenRouterから受け取ったものをそのまま使う。TypeSafeのキーは、料金のかからないモデル一覧のAPI(`GET https://api.typesafe.ai/v1/models`)で確かめる。
 - **保存:** Workerのシークレットにある鍵で暗号化して(AES-256-GCM)、D1に保存する。ログには出さない。GitHubのトークンも、同じ鍵で暗号化して保存する。
   - 暗号文は持ち主(ユーザーIDとプロバイダ)に結び付ける。ほかの人の行に移しても復号できない。
 - **暗号鍵の入れ替え:** 暗号化したデータに鍵の番号を付けて、鍵を入れ替えられるようにする。
 - **バックアップ:** D1標準の復元機能(Time Travel)に任せる。過去30日の任意の時点に戻せて、追加料金はかからない。
-- **削除:** 本人がスラッシュコマンド(`/delete`)で、いつでも削除できる。確認のボタンを押すと、キーと設定を消す。キーがなくなるので、寄付も消す。自動では削除しない。キーや設定は個人に紐づくので、Botがサーバーから外されても残す。OpenRouterで発行されたキーは、OpenRouterのサイトでも削除できることを案内する。
+- **削除:** 本人がスラッシュコマンド(`/delete`)で、いつでも削除できる。確認のボタンを押すと、キーと設定を消す(TypeSafeのキーも消す)。キーがなくなるので、寄付も消す。自動では削除しない。キーや設定は個人に紐づくので、Botがサーバーから外されても残す。OpenRouterで発行されたキーは、OpenRouterのサイトでも削除できることを案内する。
   - エージェントのセッションは、本人のキーでないと消せない。そのため、キーを読んでおき、記録を消した後に、エージェントのチャンネルとセッションを消す。本人のアカウントに作った環境は削除し、エージェントの設定はアーカイブする(削除できないため)。
   - GitHubと連携していれば、連携の記録を消し、GitHubへの承認も取り消す。確認の文に「GitHubとの連携も外します。」を足す。
   - 記憶も、すべてのサーバーの分を消す。記憶を使ったことがある人には、確認の文に「記憶も、すべてのサーバーの分を消します。」を足す。
@@ -149,6 +157,16 @@
 - **ファイル:** 本人が添付したファイルは、本人のアカウントのFiles APIに上げてからサンドボックスに置く。上げた元のファイルは、置いた後に消す。サンドボックスに置いた写しと、エージェントが作ったファイルは、セッションと一緒に消える。
 - **運営者の費用:** チャンネルごとのDurable Objectは、エージェントが動いている間だけイベントの流れを受けるので、待っている間のセッションは、運営者の費用を増やさない。
 
+## Jevの費用
+
+右クリックメニューの「Jevに聞く」([Botの振る舞い](behavior.md)を参照)では、AIが作った質問を、TypeSafeの判定モデルJevに聞く。Jevの費用は、選んだ本人のTypeSafeのアカウントにかかる。運営者は負担しない。
+- **単価:** 入力100万トークンあたり$0.042で、出力は無料(2026-11-04時点、TypeSafeの資料)。1回の質問は数百〜数千トークンなので、$0.0001ほど。
+- **AIの費用:** 質問を作るAIの費用は、メンションへの返答と同じく、本人(サーバーに寄付があれば、寄付した人)のAIのキーにかかる。
+- **寄付は使わない:** 寄付は、寄付した人のAIのキー(AnthropicかOpenRouter)で答える仕組みで、TypeSafeのキーは寄付の対象ではない。このため、Jevは、寄付で答えるときも本人のTypeSafeのキーで呼ぶ。
+- **利用量の表示:** Jevの分は入れない。TypeSafeのアカウントは、AIの費用を払うアカウントと別のため。
+- **送る内容:** 対象のメッセージ(発言者の名前と本文)と、AIがまとめたメッセージの意味と文脈を、TypeSafeに送る。TypeSafeは、APIで受け取った入力を学習に使わないとしている(2026-11-04時点のプライバシーポリシー)。
+- **OpenRouter経由にしない理由:** JevはOpenRouterでも同じ単価で呼べるが、各自がTypeSafeのキーを登録して直接呼ぶ形にした(2026-11-04、ユーザーの判断)。
+
 ## 採用しない方式と理由
 
 | 方式                                    | 理由                                                                                                                                                                                           |
@@ -171,5 +189,6 @@
 - OpenAI: [Sign in with ChatGPT: Request a client ID](https://developers.openai.com/siwc/request-client-id) / [ChatGPT plan usage](https://developers.openai.com/siwc/token-sharing-open-source) / [Services Agreement](https://openai.com/policies/services-agreement/)
 - Google: [Gemini Code Assist release notes](https://docs.cloud.google.com/gemini/docs/codeassist/release-notes) / [Antigravity terms](https://antigravity.google/terms) / [Google APIs Terms of Service](https://developers.google.com/terms) / [Gemini API Additional Terms](https://ai.google.dev/gemini-api/terms)
 - GitHub: [Copilot SDK: GitHub OAuth](https://docs.github.com/en/copilot/how-tos/copilot-sdk/set-up-copilot-sdk/github-oauth)
+- TypeSafe(2026-11時点): [Models(単価、文脈の長さ、言語)](https://docs.typesafe.ai/models) / [Request rules and errors](https://docs.typesafe.ai/api/errors) / [Privacy Policy](https://typesafe.ai/legal/privacy-policy) / [OpenRouterのJev](https://openrouter.ai/docs/guides/community/jev)
 
 各社の規約は2026年に何度も変わっているので、実装前と定期的に再確認する。
