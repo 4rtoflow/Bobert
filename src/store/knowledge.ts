@@ -15,8 +15,15 @@ export const KNOWLEDGE_TEXT_PART_LENGTH = 30_000;
 /** 文字にした内容を入れるときに、1回のまとめた書き込みに入れる区切りの数 */
 const PARTS_PER_BATCH = 10;
 
-/** 知識のファイルの形式。csvとtextは、文字としてそのまま読む */
-export type KnowledgeFormat = "pdf" | "docx" | "xlsx" | "xls" | "csv" | "text";
+/** 知識のファイルの形式。csvとtextは、文字としてそのまま読む。pptxは、PDFにしてから文字にする */
+export type KnowledgeFormat =
+	| "pdf"
+	| "docx"
+	| "xlsx"
+	| "xls"
+	| "pptx"
+	| "csv"
+	| "text";
 
 /**
  * 知識のファイルの状態。pendingは受け付けた(文字にするのを待つ)、convertedは文字にした(要約を待つ)、
@@ -73,6 +80,15 @@ export interface KnowledgeFile {
 	textLength: number | null;
 	/** 要約。要約するまではnull */
 	summary: string | null;
+}
+
+/**
+ * 消したか、知識に加えないことにした、知識のファイル。D1の外に置いたもの(PowerPointをPDFにしたもの)を、
+ * 呼んだ側で消すのに使う
+ */
+export interface ForgottenKnowledgeFile {
+	id: number;
+	format: KnowledgeFormat;
 }
 
 /** 新しく受け付けるファイル */
@@ -180,12 +196,12 @@ export async function designateKnowledgeChannel(
 
 /**
  * 知識チャンネルを解除し、そのチャンネル(中のスレッドを含む)から加えた知識を消す。
- * 消した知識のファイルの数(知識に加えなかったものを含む)を返す
+ * 消した知識のファイル(知識に加えなかったものを含む)を返す
  */
 export async function removeKnowledgeChannel(
 	db: D1Database,
 	channelId: string,
-): Promise<number> {
+): Promise<ForgottenKnowledgeFile[]> {
 	const [, files] = await db.batch([
 		db
 			.prepare(
@@ -193,13 +209,15 @@ export async function removeKnowledgeChannel(
 			)
 			.bind(channelId),
 		db
-			.prepare("DELETE FROM knowledge_files WHERE knowledge_channel_id = ?")
+			.prepare(
+				"DELETE FROM knowledge_files WHERE knowledge_channel_id = ? RETURNING id, format",
+			)
 			.bind(channelId),
 		db
 			.prepare("DELETE FROM knowledge_channels WHERE channel_id = ?")
 			.bind(channelId),
 	]);
-	return files?.meta.changes ?? 0;
+	return forgottenFrom(files);
 }
 
 /**
@@ -482,14 +500,14 @@ export async function rejectKnowledgeFile(
 
 /**
  * メッセージのうち、まだ知識に入っていないファイルを、まとめて知識に加えなかった(rejected)にする
- * (送った人がキーを登録していないとき。メッセージごとに1回だけ知らせるため)。変えた数を返す
+ * (送った人がキーを登録していないとき。メッセージごとに1回だけ知らせるため)。変えたファイルを返す
  */
 export async function rejectPendingKnowledgeFiles(
 	db: D1Database,
 	messageId: string,
 	reason: KnowledgeRejection,
 	now = Date.now(),
-): Promise<number> {
+): Promise<ForgottenKnowledgeFile[]> {
 	const [, update] = await db.batch([
 		db
 			.prepare(
@@ -501,37 +519,43 @@ export async function rejectPendingKnowledgeFiles(
 		db
 			.prepare(
 				`UPDATE knowledge_files SET state = 'rejected', rejected_reason = ?, text_length = NULL, summary = NULL, updated_at = ?
-				WHERE message_id = ? AND state IN ('pending', 'converted')`,
+				WHERE message_id = ? AND state IN ('pending', 'converted')
+				RETURNING id, format`,
 			)
 			.bind(reason, now, messageId),
 	]);
-	return update?.meta.changes ?? 0;
+	return forgottenFrom(update);
 }
 
-/** 知識のファイルを、IDを指定して消す(文字にした内容も) */
+/** 知識のファイルを、IDを指定して消す(文字にした内容も)。消したファイルを返す */
 export async function deleteKnowledgeFiles(
 	db: D1Database,
 	ids: readonly number[],
-): Promise<void> {
+): Promise<ForgottenKnowledgeFile[]> {
+	const deleted: ForgottenKnowledgeFile[] = [];
 	for (const part of chunks([...new Set(ids)], MAX_IDS_PER_QUERY)) {
 		const marks = part.map(() => "?").join(", ");
-		await db.batch([
+		const [, files] = await db.batch([
 			db
 				.prepare(`DELETE FROM knowledge_texts WHERE file_id IN (${marks})`)
 				.bind(...part),
 			db
-				.prepare(`DELETE FROM knowledge_files WHERE id IN (${marks})`)
+				.prepare(
+					`DELETE FROM knowledge_files WHERE id IN (${marks}) RETURNING id, format`,
+				)
 				.bind(...part),
 		]);
+		deleted.push(...forgottenFrom(files));
 	}
+	return deleted;
 }
 
-/** 消されたメッセージの、知識のファイルを消す(文字にした内容も)。消した数を返す */
+/** 消されたメッセージの、知識のファイルを消す(文字にした内容も)。消したファイルを返す */
 export async function deleteKnowledgeFilesOfMessages(
 	db: D1Database,
 	messageIds: readonly string[],
-): Promise<number> {
-	let deleted = 0;
+): Promise<ForgottenKnowledgeFile[]> {
+	const deleted: ForgottenKnowledgeFile[] = [];
 	for (const ids of chunks([...new Set(messageIds)], MAX_IDS_PER_QUERY)) {
 		const marks = ids.map(() => "?").join(", ");
 		const [, files] = await db.batch([
@@ -541,24 +565,26 @@ export async function deleteKnowledgeFilesOfMessages(
 				)
 				.bind(...ids),
 			db
-				.prepare(`DELETE FROM knowledge_files WHERE message_id IN (${marks})`)
+				.prepare(
+					`DELETE FROM knowledge_files WHERE message_id IN (${marks}) RETURNING id, format`,
+				)
 				.bind(...ids),
 		]);
-		deleted += files?.meta.changes ?? 0;
+		deleted.push(...forgottenFrom(files));
 	}
 	return deleted;
 }
 
 /**
  * 消されたチャンネルと、共有しなくなったチャンネル(中のスレッドを含む)の、知識を消す。
- * 知識チャンネルなら、指定も外す。外した知識チャンネルの数と、消したファイルの数を返す
+ * 知識チャンネルなら、指定も外す。外した知識チャンネルの数と、消したファイルを返す
  */
 export async function forgetKnowledgeChannels(
 	db: D1Database,
 	channelIds: readonly string[],
-): Promise<{ channels: number; files: number }> {
+): Promise<{ channels: number; files: ForgottenKnowledgeFile[] }> {
 	let channels = 0;
-	let files = 0;
+	const files: ForgottenKnowledgeFile[] = [];
 	// 1つの問い合わせに、同じIDを2回ずつ入れるので、半分ずつにする
 	for (const ids of chunks([...new Set(channelIds)], MAX_IDS_PER_QUERY / 2)) {
 		const marks = ids.map(() => "?").join(", ");
@@ -572,7 +598,8 @@ export async function forgetKnowledgeChannels(
 				.bind(...ids, ...ids),
 			db
 				.prepare(
-					`DELETE FROM knowledge_files WHERE channel_id IN (${marks}) OR knowledge_channel_id IN (${marks})`,
+					`DELETE FROM knowledge_files WHERE channel_id IN (${marks}) OR knowledge_channel_id IN (${marks})
+					RETURNING id, format`,
 				)
 				.bind(...ids, ...ids),
 			db
@@ -581,7 +608,7 @@ export async function forgetKnowledgeChannels(
 				)
 				.bind(...ids),
 		]);
-		files += deletedFiles?.meta.changes ?? 0;
+		files.push(...forgottenFrom(deletedFiles));
 		channels += deletedChannels?.meta.changes ?? 0;
 	}
 	return { channels, files };
@@ -610,6 +637,13 @@ export function splitText(
 
 function isHighSurrogate(code: number): boolean {
 	return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** 消したか、知識に加えないことにした行(RETURNING id, format)を読む */
+function forgottenFrom(result: D1Result | undefined): ForgottenKnowledgeFile[] {
+	return ((result?.results ?? []) as { id: number; format: string }[]).map(
+		(row) => ({ id: row.id, format: row.format as KnowledgeFormat }),
+	);
 }
 
 function fromRow(row: KnowledgeFileRow): KnowledgeFile {

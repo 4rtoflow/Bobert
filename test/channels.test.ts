@@ -222,6 +222,7 @@ function fakeDeps(known: Record<string, ChannelInfo | null> = {}) {
 			},
 		},
 		botUserId: BOT.id,
+		knowledgeFiles: env.KNOWLEDGE_FILES,
 		fetchChannel: async (channelId) => {
 			fetched.push(channelId);
 			return known[channelId] ?? null;

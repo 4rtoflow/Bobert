@@ -1,5 +1,6 @@
 import { agentChannelIdsAmong } from "../agent/store";
 import type { ChannelInfo, GuildRoles, RoleInfo } from "../discord/channels";
+import { forgetKnowledgeFiles } from "../knowledge/storage";
 import { logEvent } from "../log";
 import {
 	deleteChannelRecords,
@@ -41,6 +42,8 @@ export interface ChannelDeps {
 	) => Promise<ChannelInfo | null>;
 	/** サーバーのロールの権限と、Botのロールを、DiscordのAPIで取る。取れなければnull */
 	fetchGuildRoles: (guildId: string) => Promise<GuildRoles | null>;
+	/** 知識のファイルのうち、D1の外に置いたもの(PowerPointをPDFにしたもの)。チャンネルの知識を消すときに使う */
+	knowledgeFiles: Pick<R2Bucket, "delete">;
 }
 
 /**
@@ -236,8 +239,12 @@ async function forgetChannels(
 	deps: ChannelDeps,
 ): Promise<void> {
 	const knowledge = await forgetKnowledgeChannels(deps.db, channelIds);
-	if (knowledge.channels > 0 || knowledge.files > 0) {
-		logEvent("knowledge", "channels_forgotten", knowledge);
+	await forgetKnowledgeFiles(deps.knowledgeFiles, knowledge.files);
+	if (knowledge.channels > 0 || knowledge.files.length > 0) {
+		logEvent("knowledge", "channels_forgotten", {
+			channels: knowledge.channels,
+			files: knowledge.files.length,
+		});
 	}
 	const messageIds = await deleteChannelMessages(deps.db, channelIds);
 	await deleteChannelReactions(deps.db, channelIds);

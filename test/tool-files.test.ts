@@ -35,6 +35,21 @@ const FILES_RESULT: ToolResult = {
 	],
 };
 
+/** 中身ごと渡すPDF(知識チャンネルのPowerPointをPDFにしたもの)を読んだ、道具の結果 */
+const INLINE_PDF_RESULT: ToolResult = {
+	text: "k3「発表.pptx」を、PDFにしたものです。",
+	files: [
+		{
+			label: "k3「発表.pptx」",
+			file: {
+				type: "pdf",
+				url: "data:application/pdf;base64,JVBERi0xLjc=",
+				filename: "発表.pptx.pdf",
+			},
+		},
+	],
+};
+
 /** 決まった結果を返す、偽物のファイルを読む道具 */
 function fileTool(result: ToolResult = FILES_RESULT): ChatTool {
 	return {
@@ -154,6 +169,28 @@ describe("道具の結果のファイル(Anthropic)", () => {
 		expect(result.text).toBe("猫の写真です。");
 	});
 
+	it("中身ごと渡すPDF(data URL。知識チャンネルのPowerPointをPDFにしたもの)は、base64で渡す", async () => {
+		const calls = toolThenAnswer();
+
+		await chatWithAnthropic(
+			CREDENTIAL,
+			request("claude-haiku-5-5", [fileTool(INLINE_PDF_RESULT)]),
+		);
+
+		expect(bodies(calls)[1].messages.at(-1).content[0].content).toEqual([
+			{ type: "text", text: INLINE_PDF_RESULT.text },
+			{
+				type: "document",
+				source: {
+					type: "base64",
+					media_type: "application/pdf",
+					data: "JVBERi0xLjc=",
+				},
+				title: "発表.pptx.pdf",
+			},
+		]);
+	});
+
 	it("ファイルを受け付けなかったら、そのファイルを外し、渡せなかったことを書いて、1回だけ送り直す", async () => {
 		const calls = toolThenAnswer(anthropicRejected);
 
@@ -239,6 +276,28 @@ describe("道具の結果のファイル(OpenRouter)", () => {
 			{ id: "file-parser", pdf: { engine: "native" } },
 		]);
 		expect(result.text).toBe("猫の写真です。");
+	});
+
+	it("中身ごと渡すPDF(data URL)は、そのままfile_dataに入れる", async () => {
+		let call = 0;
+		const calls = mockFetch(() =>
+			call++ === 0
+				? openRouterReadFile("call_1")
+				: openRouterAnswer("発表の資料です。"),
+		);
+
+		await chatWithOpenRouter(
+			"sk-or-test",
+			request("openai/gpt-6-luna", [fileTool(INLINE_PDF_RESULT)]),
+		);
+
+		expect(bodies(calls)[1].messages.at(-1).content.at(-1)).toEqual({
+			type: "file",
+			file: {
+				filename: "発表.pptx.pdf",
+				file_data: "data:application/pdf;base64,JVBERi0xLjc=",
+			},
+		});
 	});
 
 	it("受け付けなかったら、ファイルを添付した発言を外し、渡せなかったことを道具の結果に書いて、1回だけ送り直す", async () => {

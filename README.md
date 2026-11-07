@@ -29,7 +29,7 @@ Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のも�
 | `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                                                                                                 |
 | `src/jev/`             | 右クリックメニューの「Jevに聞く」と`/jev`(TypeSafeのJevの呼び出し、AIに渡す道具と指示、回答の整形)                                                                  |
 | `src/voice/`           | 音声メッセージの文字起こし(Workers AIのWhisperの呼び出し、1回の返答の長さの上限、前もって文字にする仕事、表示する文言)                                              |
-| `src/knowledge/`       | 知識チャンネル(ファイルの受け付け、文字にして要約する仕事、AIに渡す一覧と読む道具、表示する文言)                                                                    |
+| `src/knowledge/`       | 知識チャンネル(ファイルの受け付け、文字にして要約する仕事、PowerPointをPDFにするコンテナ、AIに渡す一覧と読む道具、表示する文言)                                     |
 | `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ、リアクション、寄付、スキル、Bobert.md、音声メッセージを文字にした内容)と、検索用のデータ化 |
 | `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                                                                                                    |
 | `src/config/models.ts` | `/model`で選べるモデルの候補                                                                                                                                        |
@@ -74,6 +74,12 @@ pnpm exec wrangler vectorize create-metadata-index bobert-messages-dev --propert
 pnpm exec wrangler vectorize create-metadata-index bobert-messages-dev --propertyName=created_at --type=number
 pnpm exec wrangler vectorize create-metadata-index bobert-messages-dev --propertyName=guild_id --type=string
 
+# R2(知識チャンネルのPowerPointをPDFにしたものを置く)
+pnpm exec wrangler r2 bucket create bobert-knowledge-dev --location=enam
+
+# Containers(知識チャンネルのPowerPointをPDFにするGotenberg)は、作る操作は要らない。
+# デプロイすると、wrangler.jsonc の containers のイメージ(Docker Hub)で動く。手元にDockerは要らない
+
 # シークレット(.env.example にある名前をすべて設定する)
 pnpm exec wrangler secret put DISCORD_BOT_TOKEN --env=""
 
@@ -109,6 +115,7 @@ mainにpushすると(PRのマージを含む)、GitHub Actions(`.github/workflow
 | `CLOUDFLARE_ACCOUNT_ID` | CloudflareのアカウントID(`pnpm exec wrangler whoami`で表示される)                                                                                                                                                               |
 | `ADMIN_TOKEN`           | 本番の管理用エンドポイントのトークン(`.env.production`の値)。スラッシュコマンドの登録に使う                                                                                                                                     |
 | `WHATS_NEW_WEBHOOK_URL` | What's Newを送るDiscordのWebhookのURL。送り先のチャンネルの設定の「連携サービス」で、ウェブフックを作ってURLをコピーする。送ったメッセージには、ウェブフックに付けた名前とアイコンが出る                                        |
+- 知識チャンネルのPowerPointの変換で、R2とContainersを使う。`CLOUDFLARE_API_TOKEN`の権限に、「Workers R2 Storage」の「Edit」と、Containersの権限がなければ足す。Containersの権限の名前は、2026-11-07の時点で確かめられていない。デプロイで権限が足りないと言われたら、そこに出る名前の権限を足す。
 
 ### 自動ではしないこと
 

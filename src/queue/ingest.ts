@@ -3,6 +3,7 @@ import {
 	acceptKnowledgeFiles,
 	type KnowledgeIntakeDeps,
 } from "../knowledge/accept";
+import { forgetKnowledgeFiles } from "../knowledge/storage";
 import { logEvent } from "../log";
 import { type Embedder, embeddingText } from "../store/embedding";
 import { deleteKnowledgeFilesOfMessages } from "../store/knowledge";
@@ -200,8 +201,12 @@ export async function deleteMessages(
 	await forgetMemorySources(deps.db, ids);
 	// 知識チャンネルのファイルの知識も消す(仕様: docs/spec/architecture.md「知識チャンネル」)
 	const knowledgeFiles = await deleteKnowledgeFilesOfMessages(deps.db, ids);
+	await forgetKnowledgeFiles(deps.knowledgeFiles, knowledgeFiles);
 	await deps.vectors.deleteByIds(ids);
-	logEvent("queue", "deleted", { messages: ids.length, knowledgeFiles });
+	logEvent("queue", "deleted", {
+		messages: ids.length,
+		knowledgeFiles: knowledgeFiles.length,
+	});
 }
 
 /**

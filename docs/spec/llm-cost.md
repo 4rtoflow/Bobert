@@ -7,7 +7,7 @@
 - LLMの利用料は、使ったユーザー本人が自分の分を負担する。Botの運営者は負担しない。
 - 例外として、会話の検索(RAG)のための埋め込みの費用は運営者が負担する。Cloudflare Workers AIを使い、少額で済む(bge-m3なら100万トークンあたり約$0.012)。
 - 音声メッセージを文字にする費用も、運営者が負担する。埋め込みと同じくWorkers AIを使い、少額で済む(1分あたり約$0.0005。「音声メッセージの費用」を参照)。
-- 知識チャンネルのファイルを文字にする費用(Workers AIのMarkdown変換)も、運営者が負担する。多くの形式の変換は無料。要約の費用は、ファイルを送った人の負担(「知識チャンネルの費用」を参照)。
+- 知識チャンネルのファイルを文字にする費用(Workers AIのMarkdown変換と、PowerPointをPDFにするコンテナ)も、運営者が負担する。多くの形式の変換は無料で、コンテナも月250回ほどまでは、Workersの有料プランに含まれる分で収まる。要約の費用は、ファイルを送った人の負担(「知識チャンネルの費用」を参照)。
 - もう1つの例外として、ユーザーは、サーバーの全員が使えるクレジットを寄付できる。寄付された額までは、寄付した人が、ほかの人の分を負担する(「クレジットの寄付」を参照)。
 - 各ユーザーは自分の資格情報をBotに登録する。Botはそれを、登録したユーザー本人のリクエストに使う。寄付した人の資格情報は、寄付された額まで、同じサーバーのほかの人のリクエストにも使う。それ以外で、他人の資格情報で応答することはない。
 - 資格情報を登録していないユーザーのために、運営者の資格情報でLLMを呼び出すことはしない。
@@ -158,8 +158,10 @@
   - ファイルを読めば、読んだ分(1回で5万文字まで)も増える。
 - **運営者の負担:**
   - 文字にする費用(Workers AIのMarkdown変換): Cloudflareの説明では、多くの形式の変換は無料。画像の変換はAIのモデルを使うので、無料枠を超えると費用がかかることがある。PDFとWordに埋め込まれた画像は、変換しない設定にしている。
+  - PowerPointをPDFにするコンテナ(Cloudflare Containersの`standard-1`。メモリ4GiB、vCPU 1/2、ディスク8GB): 動いている間だけ課金され、最後に使ってから1分で止める。1回の変換で、動き出す時間と、止まるまでの1分を合わせて約1.5分動くとすると、メモリは0.1GiB時間。Workersの有料プランには、毎月、メモリ25GiB時間、vCPU 375分、ディスク200GB時間が含まれるので、月250回ほどまでは、含まれる分で収まる(続けて送られたファイルは、止まる前に変換するので、もっと少なく済む)。超えた分は、1回約0.1セント(メモリ1GiB秒あたり$0.0000025)。
+  - R2: PowerPointをPDFにしたものの保存。毎月10GBまでの保存と、100万回までの書き込みが無料で、消すのは無料。
   - D1: 文字にした内容と、要約の保存。含まれる量の範囲内の見込み。
-- **送る内容:** 要約のために、ファイルの中身(先頭の6万文字まで)を、送った人のプロバイダに送る。返答で一覧やファイルの中身を使うときは、その返答の費用を払う人のプロバイダに送る(会話と同じ)。PDF、Word、Excelのファイルは、文字にするためにCloudflareのWorkers AIに送る。
+- **送る内容:** 要約のために、ファイルの中身(先頭の6万文字まで)を、送った人のプロバイダに送る。返答で一覧やファイルの中身を使うときは、その返答の費用を払う人のプロバイダに送る(会話と同じ)。PDF、Word、Excelのファイルは、文字にするためにCloudflareのWorkers AIに送る。PowerPointは、Cloudflareの中で動かすコンテナでPDFにする(Cloudflareの外には出さない)。
 
 ## エージェントの費用
 
@@ -219,7 +221,7 @@
 - OpenAI: [Sign in with ChatGPT: Request a client ID](https://developers.openai.com/siwc/request-client-id) / [ChatGPT plan usage](https://developers.openai.com/siwc/token-sharing-open-source) / [Services Agreement](https://openai.com/policies/services-agreement/)
 - Google: [Gemini Code Assist release notes](https://docs.cloud.google.com/gemini/docs/codeassist/release-notes) / [Antigravity terms](https://antigravity.google/terms) / [Google APIs Terms of Service](https://developers.google.com/terms) / [Gemini API Additional Terms](https://ai.google.dev/gemini-api/terms)
 - GitHub: [Copilot SDK: GitHub OAuth](https://docs.github.com/en/copilot/how-tos/copilot-sdk/set-up-copilot-sdk/github-oauth)
-- Cloudflare(2026-11時点): [Workers AIの料金](https://developers.cloudflare.com/workers-ai/platform/pricing/) / [whisper-large-v3-turbo](https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/) / [Markdown変換(料金の説明を含む)](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/)
+- Cloudflare(2026-11時点): [Containersの料金](https://developers.cloudflare.com/containers/pricing/) / [R2の料金](https://developers.cloudflare.com/r2/pricing/) / [Workers AIの料金](https://developers.cloudflare.com/workers-ai/platform/pricing/) / [whisper-large-v3-turbo](https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/) / [Markdown変換(料金の説明を含む)](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/)
 - TypeSafe(2026-11時点): [Models(単価、文脈の長さ、言語)](https://docs.typesafe.ai/models) / [Request rules and errors](https://docs.typesafe.ai/api/errors) / [Privacy Policy](https://typesafe.ai/legal/privacy-policy) / [OpenRouterのJev](https://openrouter.ai/docs/guides/community/jev)
 
 各社の規約は2026年に何度も変わっているので、実装前と定期的に再確認する。

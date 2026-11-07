@@ -22,6 +22,7 @@ export function ingestDeps(env: Env): IngestDeps {
 		fetchChannel: (channelId, guildId) =>
 			fetchChannelInfo(token, channelId, guildId),
 		fetchGuildRoles: (guildId) => fetchGuildRoles(token, guildId, botUserId),
+		knowledgeFiles: env.KNOWLEDGE_FILES,
 		// 文字にするのに時間がかかることがあるので、1件ずつ処理するRESPOND_QUEUEで運ぶ
 		transcribeLater: async (targets) => {
 			// Queueに1回で入れられるのは、100件まで

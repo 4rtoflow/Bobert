@@ -9,12 +9,15 @@ import {
 } from "../store/knowledge";
 import { loadMessagesByIds } from "../store/messages";
 import { knowledgeFormat } from "./format";
+import { forgetKnowledgeFiles } from "./storage";
 
 /** 知識のファイルの受け付けに使うもの */
 export interface KnowledgeIntakeDeps {
 	db: D1Database;
 	/** 受け付けたファイルを、文字にして要約する仕事を入れる(時間がかかるので、別の仕事にする) */
 	knowledgeLater: (fileIds: readonly number[]) => Promise<void>;
+	/** 知識のファイルのうち、D1の外に置いたもの(PowerPointをPDFにしたもの)。消すときに使う */
+	knowledgeFiles: Pick<R2Bucket, "delete">;
 }
 
 /**
@@ -49,7 +52,7 @@ export async function acceptKnowledgeFiles(
 			.map((message) => message.messageId),
 	);
 	const removed = await removeDetachedFiles(
-		deps.db,
+		deps,
 		stored.filter((message) => message.editedAt !== null),
 	);
 	const candidates = stored.flatMap((message): NewKnowledgeFile[] => {
@@ -94,7 +97,7 @@ export async function acceptKnowledgeFiles(
 
 /** 編集されたメッセージのうち、知識のファイルの添付が外されたものの知識を消す。消した数を返す */
 async function removeDetachedFiles(
-	db: D1Database,
+	deps: KnowledgeIntakeDeps,
 	messages: readonly StoredMessageInput[],
 ): Promise<number> {
 	if (messages.length === 0) {
@@ -108,13 +111,16 @@ async function removeDetachedFiles(
 	);
 	const detached = (
 		await knowledgeFilesOfMessages(
-			db,
+			deps.db,
 			messages.map((message) => message.messageId),
 		)
 	).filter((file) => !present.get(file.messageId)?.has(file.attachmentId));
-	await deleteKnowledgeFiles(
-		db,
-		detached.map((file) => file.id),
+	await forgetKnowledgeFiles(
+		deps.knowledgeFiles,
+		await deleteKnowledgeFiles(
+			deps.db,
+			detached.map((file) => file.id),
+		),
 	);
 	return detached.length;
 }

@@ -24,12 +24,18 @@ import {
 } from "../store/knowledge";
 import { loadMessagesByIds } from "../store/messages";
 import {
+	type ConversionDeps,
 	convertKnowledgeFile,
 	type Download,
 	downloadKnowledgeFile,
-	type MarkdownConverter,
 } from "./convert";
+import { powerPointToPdf } from "./converter";
 import { MAX_KNOWLEDGE_FILE_BYTES } from "./format";
+import {
+	forgetKnowledgeFiles,
+	type KnowledgeFilesBucket,
+	saveKnowledgePdf,
+} from "./storage";
 import {
 	KNOWLEDGE_SUMMARY_MODEL_KEY,
 	MAX_SUMMARY_INPUT_CHARS,
@@ -66,10 +72,10 @@ const TRANSIENT_LLM_ERRORS: ReadonlySet<LlmErrorKind> = new Set([
 ]);
 
 /** 仕事に使うもの。テストでは偽物に差し替える */
-export interface KnowledgeJobDeps {
+export interface KnowledgeJobDeps extends ConversionDeps {
 	db: D1Database;
-	/** Workers AIの、文字(Markdown)への変換 */
-	ai: MarkdownConverter;
+	/** PowerPointをPDFにしたものを置くR2のバケット */
+	files: KnowledgeFilesBucket;
 	/** ファイルのメッセージを読み直して、添付ファイルのURLを取り直すのに使う */
 	history: Pick<HistoryDeps, "fetchMessage" | "ingest" | "guildId">;
 	/** ファイルを、DiscordのCDNから読む */
@@ -113,6 +119,8 @@ export function knowledgeJobDeps(
 	return {
 		db: env.DB,
 		ai: env.AI,
+		powerPointToPdf: (bytes) => powerPointToPdf(env.KNOWLEDGE_CONVERTER, bytes),
+		files: env.KNOWLEDGE_FILES,
 		history: historyFor(env, {
 			guildId: file.guildId,
 			channelId: file.channelId,
@@ -138,7 +146,7 @@ export async function processKnowledgeFile(
 	);
 	if (message === undefined || attachment === undefined) {
 		// メッセージが消されたか、編集でファイルが外された(消す処理が先に動いていなければ、ここで消す)
-		await deleteKnowledgeFiles(deps.db, [file.id]);
+		await forget(deps, file);
 		log("job_skipped", { fileId: file.id, reason: "gone" });
 		return;
 	}
@@ -149,8 +157,9 @@ export async function processKnowledgeFile(
 		content: string,
 		detail: Record<string, unknown> = {},
 	): Promise<void> => {
-		// 知らせるのは、知識に加えないと決めたときの1回だけ
+		// 知らせるのは、知識に加えないと決めたときの1回だけ。PowerPointをPDFにしたものを置いていたら、消す
 		if (await rejectKnowledgeFile(deps.db, file.id, reason)) {
+			await forgetKnowledgeFiles(deps.files, [file]);
 			await deps.reply(file.channelId, file.messageId, content);
 		}
 		log("rejected", { ...fileDetail(file), reason, attempts, ...detail });
@@ -165,13 +174,14 @@ export async function processKnowledgeFile(
 				file.messageId,
 				"no_key",
 			);
-			if (rejected > 0) {
+			if (rejected.length > 0) {
+				await forgetKnowledgeFiles(deps.files, rejected);
 				await deps.reply(file.channelId, file.messageId, KNOWLEDGE_NO_KEY);
 			}
 			log("rejected", {
 				...fileDetail(file),
 				reason: "no_key",
-				files: rejected,
+				files: rejected.length,
 			});
 			return;
 		}
@@ -190,7 +200,7 @@ export async function processKnowledgeFile(
 				deps.history,
 			);
 			if (fresh === null) {
-				await deleteKnowledgeFiles(deps.db, [file.id]);
+				await forget(deps, file);
 				log("job_skipped", { fileId: file.id, reason: "gone" });
 				return;
 			}
@@ -202,14 +212,14 @@ export async function processKnowledgeFile(
 			if (download.kind === "failed") {
 				// ファイルが消えていた(メッセージを消す処理が、まだ届いていない)
 				if (download.status === 404) {
-					await deleteKnowledgeFiles(deps.db, [file.id]);
+					await forget(deps, file);
 					log("job_skipped", { fileId: file.id, reason: "gone" });
 					return;
 				}
 				throw new Error(`ファイルを読めませんでした(${download.status})`);
 			}
 			const conversion = await convertKnowledgeFile(
-				deps.ai,
+				deps,
 				file.format,
 				download.bytes,
 				file.filename,
@@ -220,8 +230,13 @@ export async function processKnowledgeFile(
 				});
 				return;
 			}
+			// PowerPointは、AIがPDFのまま読めるよう、PDFにしたものをR2に置く
+			if (conversion.pdf !== undefined) {
+				await saveKnowledgePdf(deps.files, file.id, conversion.pdf);
+			}
 			if (!(await saveKnowledgeText(deps.db, file.id, conversion.text))) {
 				// 文字にしている間に、消されたか、知識に加えないことになった
+				await forgetKnowledgeFiles(deps.files, [file]);
 				log("job_skipped", { fileId: file.id, reason: "changed" });
 				return;
 			}
@@ -352,6 +367,17 @@ async function replyToFile(
 			status: error instanceof DiscordApiError ? error.status : null,
 		});
 	}
+}
+
+/** 知識のファイルを消す。PowerPointをPDFにしたものを置いていたら、それも消す */
+async function forget(
+	deps: KnowledgeJobDeps,
+	file: KnowledgeFile,
+): Promise<void> {
+	await forgetKnowledgeFiles(
+		deps.files,
+		await deleteKnowledgeFiles(deps.db, [file.id]),
+	);
 }
 
 /** ログに残す、ファイルの情報(ファイル名は残さない) */

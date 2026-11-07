@@ -1,7 +1,7 @@
 /**
  * 知識チャンネルについて、Discordに表示する文言と、AIに渡す文(仕様: docs/spec/behavior.md「知識チャンネル」)。
- * 表示する文言は、2026-11-06に承認されたもの(issue #96)。PowerPointに対応するまでは、「指定した」の文と /help の1行から
- * 「PowerPoint、」を除く。複数のファイルがあるメッセージへの返信の形と、読み込めなかったときの文は、2026-11-07に承認
+ * 表示する文言は、2026-11-06に承認されたもの(issue #96)。複数のファイルがあるメッセージへの返信の形と、
+ * 読み込めなかったときの文は、2026-11-07に承認
  */
 
 /** /knowledge の名前と説明(/help のコマンドの一覧にも出る) */
@@ -21,7 +21,7 @@ export function knowledgeListLine(channelId: string, files: number): string {
 	return `- ${channelMention(channelId)}(ファイル${files}件)`;
 }
 export function knowledgeDesignated(channelId: string): string {
-	return `${channelMention(channelId)} を知識チャンネルにしました。これから送られたPDF、Word、Excel、テキストのファイルを、送った人のAIのキーで要約して、AIの知識に加えます。指定する前に送られたファイルは加えません。`;
+	return `${channelMention(channelId)} を知識チャンネルにしました。これから送られたPDF、Word、Excel、PowerPoint、テキストのファイルを、送った人のAIのキーで要約して、AIの知識に加えます。指定する前に送られたファイルは加えません。`;
 }
 export function knowledgeUnsetConfirm(
 	channelId: string,
@@ -79,7 +79,7 @@ export function knowledgeRetryFailed(filename: string | null): string {
 
 /** /help の使い方に足す1行(記憶の行の次) */
 export const KNOWLEDGE_HELP =
-	"- `/knowledge` で知識チャンネルを指定すると、そこに送られたPDF、Word、Excel、テキストのファイルを、AIが要約して覚え、返答に使います。要約の費用は、ファイルを送った人のキーにかかります。指定と解除は、サーバー管理者が行います。";
+	"- `/knowledge` で知識チャンネルを指定すると、そこに送られたPDF、Word、Excel、PowerPoint、テキストのファイルを、AIが要約して覚え、返答に使います。要約の費用は、ファイルを送った人のキーにかかります。指定と解除は、サーバー管理者が行います。";
 
 /*
  * ここから下は、AIに渡す文(Discordには表示しない)
