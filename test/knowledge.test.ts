@@ -1216,6 +1216,29 @@ describe("返答で知識を使う", () => {
 		);
 	});
 
+	it("返答のログには、一覧に載せた数と、読んだファイルのIDだけを残す(ファイル名と要約は残さない)", async () => {
+		const { guildId, channelId } = await knowledgeGuild();
+		await readyFile(
+			storedMessage(guildId, channelId, [attachment(channelId, "規約.pdf")]),
+			"部費は月500円です。",
+			"部費の額について。",
+		);
+		const user = await userWith("openrouter");
+		const trigger = mention(user, channelId);
+		mockApis(trigger, () => openRouterChat("月500円です!"));
+		const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await handleRespondJob(respondJob(trigger, guildId), testEnv);
+
+		const responded = logs.mock.calls
+			.map(([line]) => JSON.parse(String(line)))
+			.find((entry) => entry.event === "responded");
+		expect(responded).toMatchObject({ knowledgeFiles: 1, knowledgeReads: [] });
+		const lines = logs.mock.calls.map(([line]) => String(line)).join("\n");
+		expect(lines).not.toContain("規約.pdf");
+		expect(lines).not.toContain("部費の額について。");
+	});
+
 	it("知識に入ったファイルがなければ(受け付けただけのものしかなくても)、一覧も道具も渡さない", async () => {
 		const { guildId, channelId } = await knowledgeGuild();
 		await pendingFiles(

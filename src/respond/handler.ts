@@ -606,9 +606,12 @@ export async function answer(
 		// 記憶は、使ったかと、直した回数だけを残す(中身は残さない)
 		memory: memoryBlock !== null,
 		memoryEdits: memoryEdits.calls,
-		// 読んだファイルは、種類だけを残す(名前と中身は残さない)
+		// 読んだファイルは、種類だけを残す(名前と中身は残さない)。回数は、知識のファイルを読んだ分を含む
 		fileReads: fileReads.calls,
 		fileKinds: fileReads.kinds,
+		// 知識のファイルは、一覧に載せた数と、読んだファイルのIDだけを残す(名前、中身、要約は残さない)
+		knowledgeFiles: knowledge?.listed ?? 0,
+		knowledgeReads: knowledgeReads.ids,
 		// 会話の音声メッセージの数(文字にした内容は残さない)
 		voiceMessages: voiceTexts.size,
 		...result.usage,
