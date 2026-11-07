@@ -17,16 +17,30 @@ import {
 	TextInputStyle,
 } from "../discord/constants";
 import { logEvent } from "../log";
+import {
+	loadPlugin,
+	MAX_ARCHIVE_BYTES,
+	MAX_SKILL_FILE_BYTES,
+	MAX_SKILL_FILES,
+	MAX_SKILL_FILES_BYTES,
+	parseRepository,
+	type RepositoryRef,
+	repositoryName,
+} from "../plugins/marketplace";
 import { formatJstDate } from "../respond/time";
 import {
 	addSkill,
 	countCharacters,
 	countSkills,
+	deletePendingPlugin,
 	deletePendingSkill,
 	deleteSkill,
 	findSkillByName,
+	getPendingPlugin,
 	getPendingSkill,
 	getSkill,
+	type InstallingSkill,
+	installSkills,
 	isValidSkillName,
 	listSkills,
 	MAX_BODY_LENGTH,
@@ -37,7 +51,9 @@ import {
 	type Skill,
 	type SkillContent,
 	type SkillEditor,
+	type SkillSource,
 	type SkillSummary,
+	savePendingPlugin,
 	savePendingSkill,
 	updateSkill,
 } from "../store/skills";
@@ -56,6 +72,9 @@ export const SKILLS_COMMAND_NAME = "skills";
 /** /regskills のコマンドの名前と、SKILL.mdを添付する欄の名前 */
 export const REGSKILLS_COMMAND_NAME = "regskills";
 export const REGSKILLS_FILE_OPTION = "file";
+/** /regskills で、Claude Codeのプラグインから入れるときの欄の名前(プラグインの名前と、配っているGitHubのリポジトリ) */
+export const REGSKILLS_PLUGIN_OPTION = "plugin";
+export const REGSKILLS_MARKETPLACE_OPTION = "marketplace";
 
 /**
  * /skills と /regskills の、ボタン、セレクトメニュー、モーダルのIDの頭。
@@ -71,6 +90,7 @@ const Action = {
 	Delete: "delete",
 	DeleteConfirm: "delete-confirm",
 	Overwrite: "overwrite",
+	OverwritePlugin: "overwrite-plugin",
 	RegisterModal: "register-modal",
 	EditModal: "edit-modal",
 	ReplaceModal: "replace-modal",
@@ -126,11 +146,21 @@ const DRAFT_ATTACHED =
 	"書いた内容を添付します。直してから `/regskills` に添付すると、登録できます。";
 const PENDING_GONE =
 	"この置き換えは、もう使えません。もう一度 `/regskills` から登録してください。";
+const PLUGIN_NEEDS_BOTH =
+	"プラグインから入れるときは、pluginとmarketplaceの両方を指定してください。例: plugin `nakamaba`、marketplace `4rtoflow/Nakamaba`";
+const FILE_AND_PLUGIN =
+	"SKILL.mdの添付と、プラグインからの登録は、別々に行ってください。";
+const INVALID_MARKETPLACE =
+	"marketplaceは、GitHubのリポジトリを`持ち主/名前`の形で指定してください。例: `4rtoflow/Nakamaba`";
+const GITHUB_FAILED =
+	"GitHubとのやり取りでエラーが起きました。少し待ってから、もう一度試してください。";
+const SKILL_FILE_UNREADABLE = "SKILL.mdを読めませんでした。";
 
 /**
  * /regskills: スキルを登録する(仕様: docs/spec/behavior.md「スキル」)。
+ * pluginとmarketplaceが入っていれば、Claude Codeのプラグインのスキルを、GitHubから読んで入れる。
  * SKILL.mdが添付されていれば、確かめて登録する(ファイルを読むので、保留にしてから結果を書く)。
- * 添付されていなければ、名前・説明・本文を書く入力画面を開く
+ * どちらでもなければ、名前・説明・本文を書く入力画面を開く
  */
 export async function regskillsCommand(
 	interaction: APIChatInputApplicationCommandInteraction,
@@ -140,6 +170,29 @@ export async function regskillsCommand(
 	editor: SkillEditor,
 ): Promise<APIInteractionResponse> {
 	const attachment = attachedFile(interaction);
+	const plugin = stringOption(interaction, REGSKILLS_PLUGIN_OPTION);
+	const marketplace = stringOption(interaction, REGSKILLS_MARKETPLACE_OPTION);
+	if (plugin !== undefined || marketplace !== undefined) {
+		if (attachment !== undefined) {
+			return ephemeral(FILE_AND_PLUGIN);
+		}
+		if (plugin === undefined || marketplace === undefined) {
+			return ephemeral(PLUGIN_NEEDS_BOTH);
+		}
+		const repository = parseRepository(marketplace);
+		if (repository === null) {
+			return ephemeral(INVALID_MARKETPLACE);
+		}
+		// GitHubからリポジトリを読むので、保留にしてから結果を書く
+		return respondLater(
+			ctx,
+			interaction,
+			editor.id,
+			"reply",
+			() => installPlugin(env.DB, guildId, repository, plugin, editor),
+			{ content: SAVE_FAILED },
+		);
+	}
 	if (attachment === undefined) {
 		if ((await countSkills(env.DB, guildId)) >= MAX_SKILLS) {
 			return ephemeral(LIMIT_REACHED);
@@ -296,6 +349,16 @@ export async function skillComponent(
 				},
 			};
 		}
+		case Action.OverwritePlugin:
+			// 確かめたときと同じコミットを、GitHubから読み直して置き換える。時間がかかるので、保留にする。
+			// 置き換えられないときは、確かめる画面を残したまま、理由を見せる
+			return updateOrReplyLater(
+				ctx,
+				interaction,
+				editor.id,
+				() => overwritePlugin(env.DB, guildId, Number(target), editor),
+				{ content: SAVE_FAILED },
+			);
 	}
 	return null;
 }
@@ -409,20 +472,290 @@ async function register(
 			: `「${content.name}」という名前のスキルは、すでにあります。書いた内容で置き換えますか?`;
 	return {
 		...(via === "text" ? withDraft(question, content) : { content: question }),
+		components: [overwriteRow(idOf(Action.Overwrite, pendingId))],
+	};
+}
+
+/**
+ * /regskills で、Claude Codeのプラグインのスキルを入れる(仕様: docs/spec/behavior.md「スキル」)。
+ * 同じ名前のスキルがあれば、置き換えるかを確かめる(一覧のリポジトリとコミットを、確かめている間だけ保存する)
+ */
+async function installPlugin(
+	db: D1Database,
+	guildId: string,
+	repository: RepositoryRef,
+	plugin: string,
+	editor: SkillEditor,
+): Promise<MessageEdit> {
+	const prepared = await preparePlugin(repository, plugin);
+	if ("problem" in prepared) {
+		return { content: prepared.problem };
+	}
+	const result = await installSkills(
+		db,
+		guildId,
+		prepared.skills,
+		prepared.source,
+		editor,
+		{ overwrite: false },
+	);
+	if (result.result === "limit") {
+		return { content: pluginLimitReached(plugin, result.adding) };
+	}
+	if (result.result === "installed") {
+		logInstalled(guildId, editor, prepared.source, result.added, []);
+		return { content: installedText(plugin, prepared.skills, "追加") };
+	}
+	const pendingId = await savePendingPlugin(db, guildId, editor.id, {
+		repository: prepared.source.repository,
+		plugin,
+		commit: prepared.marketplaceCommit,
+	});
+	return {
+		content: `${quoted(result.names)}という名前のスキルは、すでにあります。プラグイン「${plugin}」(${prepared.source.repository})の内容で置き換えますか?`,
+		components: [overwriteRow(idOf(Action.OverwritePlugin, pendingId))],
+	};
+}
+
+/**
+ * プラグインのスキルを置き換えると確かめたとき。確かめたときと同じコミットを読み直して、同じ名前のスキルを置き換える。
+ * 置き換えたら、確かめる画面を結果に書き換える
+ */
+async function overwritePlugin(
+	db: D1Database,
+	guildId: string,
+	pendingId: number,
+	editor: SkillEditor,
+): Promise<DeferredResult> {
+	const pending = await getPendingPlugin(db, guildId, editor.id, pendingId);
+	const repository =
+		pending === null ? null : parseRepository(pending.repository);
+	if (pending === null || repository === null) {
+		return { reply: { content: PENDING_GONE } };
+	}
+	const prepared = await preparePlugin(
+		repository,
+		pending.plugin,
+		pending.commit,
+	);
+	if ("problem" in prepared) {
+		return { reply: { content: prepared.problem } };
+	}
+	const result = await installSkills(
+		db,
+		guildId,
+		prepared.skills,
+		prepared.source,
+		editor,
+		{ overwrite: true },
+	);
+	if (result.result !== "installed") {
+		return {
+			reply: {
+				content: pluginLimitReached(
+					pending.plugin,
+					result.result === "limit" ? result.adding : 0,
+				),
+			},
+		};
+	}
+	await deletePendingPlugin(db, pendingId);
+	logInstalled(guildId, editor, prepared.source, result.added, result.replaced);
+	return {
+		update: {
+			content: installedText(pending.plugin, prepared.skills, "保存"),
+			components: [],
+		},
+	};
+}
+
+/** 読んで確かめた、プラグインのスキル。problemは、入れられない理由(本人に見せる文) */
+type PreparedPlugin =
+	| {
+			skills: InstallingSkill[];
+			source: SkillSource;
+			/** 一覧のリポジトリのコミット。置き換えるかを確かめた後に、同じものを読み直すのに使う */
+			marketplaceCommit: string;
+	  }
+	| { problem: string };
+
+/** GitHubからプラグインのスキルを読み、決まり(名前の規則、長さとファイルの上限)を確かめる */
+async function preparePlugin(
+	repository: RepositoryRef,
+	plugin: string,
+	ref?: string,
+): Promise<PreparedPlugin> {
+	const name = repositoryName(repository);
+	const load = await loadPlugin(repository, plugin, ref);
+	switch (load.status) {
+		case "unreadable":
+			return {
+				problem: `GitHubのリポジトリ「${repositoryName(load.repository)}」を読めませんでした。公開されているか、名前が合っているかを確かめてください。`,
+			};
+		case "too-large":
+			return {
+				problem: `GitHubのリポジトリ「${repositoryName(load.repository)}」が大きすぎるため、読めませんでした(${megabytes(MAX_ARCHIVE_BYTES)}MBまで)。`,
+			};
+		case "no-marketplace":
+			return {
+				problem: `「${name}」の、プラグインの一覧(\`.claude-plugin/marketplace.json\`)がないか、読めませんでした。`,
+			};
+		case "plugin-not-found":
+			return { problem: pluginNotFound(name, plugin, load.available) };
+		case "unsupported-source":
+			return {
+				problem: `プラグイン「${plugin}」は、GitHubのリポジトリ以外(npmなど)から配られているため、入れられません。`,
+			};
+		case "no-skills":
+			return { problem: `プラグイン「${plugin}」には、スキルがありません。` };
+		case "github-error":
+			return { problem: GITHUB_FAILED };
+	}
+	const skills: InstallingSkill[] = [];
+	for (const skill of load.skills) {
+		if (skill.file === null) {
+			return {
+				problem: `プラグインのスキル「${skill.directory}」を登録できませんでした。\n${SKILL_FILE_UNREADABLE}`,
+			};
+		}
+		const content = {
+			...skill.file,
+			name: normalizeSkillName(skill.file.name),
+		};
+		const problem = problemOf(content);
+		if (problem !== null) {
+			return {
+				problem: `プラグインのスキル「${content.name}」を登録できませんでした。\n${problem}`,
+			};
+		}
+		if (skill.tooManyFiles) {
+			return {
+				problem: `スキル「${content.name}」のファイルが多すぎるか、大きすぎます(1つのスキルで${MAX_SKILL_FILES}個・合計${megabytes(MAX_SKILL_FILES_BYTES)}MB・1つ${megabytes(MAX_SKILL_FILE_BYTES)}MBまで)。`,
+			};
+		}
+		// 同じ名前のスキルが2つあるプラグインは、先のフォルダのものを使う
+		if (!skills.some((added) => added.content.name === content.name)) {
+			skills.push({ content, files: skill.files });
+		}
+	}
+	return {
+		skills,
+		source: { repository: name, plugin, commit: load.commit },
+		marketplaceCommit: load.marketplaceCommit,
+	};
+}
+
+/**
+ * プラグインのスキルを入れたときの結果の文。ファイルが付いたスキルは、エージェントだけで使うことを書き添える
+ */
+function installedText(
+	plugin: string,
+	skills: readonly InstallingSkill[],
+	verb: "追加" | "保存",
+): string {
+	const names = skills.map((skill) => skill.content.name);
+	const withFiles = skills
+		.filter((skill) => skill.files.length > 0)
+		.map((skill) => skill.content.name);
+	const usage =
+		withFiles.length === skills.length
+			? "ファイルが付いているので、エージェント(`/agent`)だけで使います。"
+			: withFiles.length === 0
+				? "次の返答から使います。"
+				: `次の返答から使います。ファイルが付いている${quoted(withFiles)}は、エージェント(\`/agent\`)だけで使います。`;
+	return `プラグイン「${plugin}」から、スキル${quoted(names)}を${verb}しました。${usage}`;
+}
+
+/** プラグインのスキルを足すと、数の上限を超えるときの文 */
+function pluginLimitReached(plugin: string, adding: number): string {
+	return `スキルは${MAX_SKILLS}個までです。プラグイン「${plugin}」のスキル(${adding}個)を足すと、上限を超えます。使っていないスキルを削除してから追加してください。`;
+}
+
+/** 一覧に、名前がpluginのプラグインがないときの文。入れられるプラグインの名前を、1通に収まるまで並べる */
+function pluginNotFound(
+	repository: string,
+	plugin: string,
+	available: readonly string[],
+): string {
+	const text = `「${repository}」に、「${plugin}」という名前のプラグインはありません。`;
+	if (available.length === 0) {
+		return text;
+	}
+	let list = "";
+	for (const [index, name] of available.entries()) {
+		const next = `${list}${index === 0 ? "" : "、"}\`${name}\``;
+		if (`${text}入れられるプラグイン: ${next}、…`.length > MESSAGE_LENGTH) {
+			list = `${list}、…`;
+			break;
+		}
+		list = next;
+	}
+	return `${text}入れられるプラグイン: ${list}`;
+}
+
+/** 名前を「」で囲んで並べる(例: 「meeting-notes」「trpg-rules」) */
+function quoted(names: readonly string[]): string {
+	return names.map((name) => `「${name}」`).join("");
+}
+
+function megabytes(bytes: number): number {
+	return bytes / (1024 * 1024);
+}
+
+/** プラグインから入れたことを、スキルごとにログに残す(スキルは誰でも編集できるため) */
+function logInstalled(
+	guildId: string,
+	editor: SkillEditor,
+	source: SkillSource,
+	added: readonly string[],
+	replaced: readonly string[],
+): void {
+	const detail = {
+		userId: editor.id,
+		guildId,
+		via: "plugin",
+		repository: source.repository,
+		plugin: source.plugin,
+		commit: source.commit,
+	};
+	for (const skill of added) {
+		log("skill_added", { ...detail, skill });
+	}
+	for (const skill of replaced) {
+		log("skill_updated", { ...detail, skill });
+	}
+}
+
+/** 置き換えるかを確かめるメッセージの、赤い「置き換える」ボタン */
+function overwriteRow(
+	customId: string,
+): APIActionRowComponent<APIComponentInMessageActionRow> {
+	return {
+		type: ComponentType.ActionRow,
 		components: [
 			{
-				type: ComponentType.ActionRow,
-				components: [
-					{
-						type: ComponentType.Button,
-						style: ButtonStyle.Danger,
-						custom_id: idOf(Action.Overwrite, pendingId),
-						label: "置き換える",
-					},
-				],
+				type: ComponentType.Button,
+				style: ButtonStyle.Danger,
+				custom_id: customId,
+				label: "置き換える",
 			},
 		],
 	};
+}
+
+/** /regskills の、文字を入れる欄の値。前後の空白を除き、空なら(入れていなければ)undefined */
+function stringOption(
+	interaction: APIChatInputApplicationCommandInteraction,
+	name: string,
+): string | undefined {
+	const option = interaction.data.options?.find(
+		(candidate) => candidate.name === name,
+	);
+	if (option?.type !== ApplicationCommandOptionType.String) {
+		return undefined;
+	}
+	const value = option.value.normalize("NFKC").trim();
+	return value === "" ? undefined : value;
 }
 
 /** 登録できなかった理由に、書いた内容を添付したことを書き添え、書いた内容をSKILL.mdにして添付する */
@@ -584,11 +917,15 @@ function panelText(skills: SkillSummary[]): string {
 	return text.slice(0, MESSAGE_LENGTH);
 }
 
-/** 一覧の1行。説明はpreviewLength文字まで(0なら書かない)。例: - `meeting-notes`: 会議の議事録を書く手順 */
+/**
+ * 一覧の1行。説明はpreviewLength文字まで(0なら書かない)。例: - `meeting-notes`: 会議の議事録を書く手順。
+ * ファイルが付いたスキルは、エージェントだけで使うので、名前の後ろに「(エージェント用)」を付ける
+ */
 function listLine(skill: SkillSummary, previewLength: number): string {
+	const agentOnly = skill.fileCount > 0 ? "(エージェント用)" : "";
 	const description =
 		previewLength > 0 ? `: ${preview(skill.description, previewLength)}` : "";
-	return `- \`${skill.name}\`${description}`;
+	return `- \`${skill.name}\`${agentOnly}${description}`;
 }
 
 /** スキルを選ぶセレクトメニュー。選択肢には、名前と説明の先頭を出す */
@@ -615,17 +952,30 @@ function selectRow(
 	};
 }
 
-/** スキルの画面。説明と、登録した人と最後に編集した人を書き、SKILL.mdを添付する */
+/**
+ * スキルの画面。説明と、登録した人と最後に編集した人を書き、SKILL.mdを添付する。
+ * プラグインから入れたスキルには、入手元(リポジトリ、プラグイン、コミット)と、付いているファイルの数も書く
+ */
 function skillScreen(skill: Skill): MessageEdit {
 	const registered = `登録: ${skill.createdByName}(${formatJstDate(skill.createdAt)})`;
 	const people =
 		skill.editedByName === null
 			? registered
 			: `${registered}・最後の編集: ${skill.editedByName}(${formatJstDate(skill.updatedAt)})`;
+	const { source } = skill;
+	const origin =
+		source === null
+			? []
+			: [
+					`-# 入手元: ${source.repository} のプラグイン「${source.plugin}」(${source.commit.slice(0, 7)})${skill.fileCount > 0 ? `・ファイル${skill.fileCount}個` : ""}`,
+				];
 	return {
-		content: [`**${skill.name}**`, skill.description, `-# ${people}`].join(
-			"\n",
-		),
+		content: [
+			`**${skill.name}**`,
+			skill.description,
+			`-# ${people}`,
+			...origin,
+		].join("\n"),
 		components: [
 			{
 				type: ComponentType.ActionRow,
