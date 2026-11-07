@@ -1,12 +1,13 @@
 # LLM利用コスト
 
-最終更新: 2026-11-05
+最終更新: 2026-11-07
 
 ## 方針
 
 - LLMの利用料は、使ったユーザー本人が自分の分を負担する。Botの運営者は負担しない。
 - 例外として、会話の検索(RAG)のための埋め込みの費用は運営者が負担する。Cloudflare Workers AIを使い、少額で済む(bge-m3なら100万トークンあたり約$0.012)。
 - 音声メッセージを文字にする費用も、運営者が負担する。埋め込みと同じくWorkers AIを使い、少額で済む(1分あたり約$0.0005。「音声メッセージの費用」を参照)。
+- 知識チャンネルのファイルを文字にする費用(Workers AIのMarkdown変換)も、運営者が負担する。多くの形式の変換は無料。要約の費用は、ファイルを送った人の負担(「知識チャンネルの費用」を参照)。
 - もう1つの例外として、ユーザーは、サーバーの全員が使えるクレジットを寄付できる。寄付された額までは、寄付した人が、ほかの人の分を負担する(「クレジットの寄付」を参照)。
 - 各ユーザーは自分の資格情報をBotに登録する。Botはそれを、登録したユーザー本人のリクエストに使う。寄付した人の資格情報は、寄付された額まで、同じサーバーのほかの人のリクエストにも使う。それ以外で、他人の資格情報で応答することはない。
 - 資格情報を登録していないユーザーのために、運営者の資格情報でLLMを呼び出すことはしない。
@@ -120,7 +121,7 @@
 - **モデル:** 使う人の設定のモデルで答える。キーのない人は、既定のモデル(Claude Haiku 5.5)で答える。
   - 寄付した人のキーで呼べないモデルには使わず、本人のキーで答える。例えば、Anthropicのキーだけの人の寄付では、GPTやGeminiは呼べない。
   - 「その他」で入力したモデルには使わない。費用が分からないことがあり、単価に上限もないため。
-- **対象:** メンションへの返答、「Bobertに聞く」、要約(自動と今すぐ)。記憶をまとめるときには使わない(「記憶の費用」を参照)。
+- **対象:** メンションへの返答、「Bobertに聞く」、要約(自動と今すぐ)。記憶をまとめるときと、知識チャンネルのファイルを要約するときには使わない(「記憶の費用」と「知識チャンネルの費用」を参照)。
 - **差し引き:** APIを呼ぶたびに、その分の費用を寄付から差し引く。
   - 費用は、利用量の表示と同じ計算で出す。それでも分からない回(単価を取得できなかったときなど)は、候補の一覧の単価で見積もる。
   - 費用は呼んだ後に分かるので、使い切る直前の返答の分だけ、寄付した額を少し超えることがある。同時にいくつか返答していると、超える分が増える。超えた分は、次に寄付したときの額から引かない。
@@ -145,6 +146,20 @@
   - Bobertを使わない日は、更新しないので、費用がかからない。
 - **返答の費用:** 返答に記憶を入れると、入力が増える(一覧は1500文字までで、約1,000〜2,000トークン)。プロンプトキャッシュが効くので、2回目からは、その分の料金は通常の1割ほど(Opus 5.5は5%)。この分は、その返答の費用を払う人(本人か、寄付した人)の負担。
 - **寄付で答えるとき:** 記憶も、会話と同じく、寄付した人のアカウント(AnthropicかOpenRouter)に送られる。このことは、`/memory`の画面で本人に伝える。
+
+## 知識チャンネルの費用
+
+知識チャンネル([アーキテクチャ](architecture.md)「知識チャンネル」を参照)の費用は、次のように分ける。記憶と同じく、本人がその場で頼んでいないのにAIを呼ぶので、要約は、ファイルを送った人のキーにかける。
+- **要約:** ファイルを送った人のアカウント(AnthropicかOpenRouter)にかかる。Claude Haiku 5.5で、渡すのは文字にした内容の先頭の6万文字まで。入力の10万トークンを超えないので、1ファイルあたり多くても約1セント。
+  - 寄付は使わない。このため、キーを登録していない人のファイルは受け付けない(寄付があっても)。
+  - 要約できたファイルは保存して使い回すので、同じファイルの要約は1回だけ。
+- **一覧と、読んだファイル:** その返答の費用を払う人(本人か、寄付した人)の負担。
+  - 一覧の分だけ、毎回の入力が増える(50件で1万トークンほど。Haiku 5.5なら1回約$0.001で、キャッシュが効けば、その1割)。
+  - ファイルを読めば、読んだ分(1回で5万文字まで)も増える。
+- **運営者の負担:**
+  - 文字にする費用(Workers AIのMarkdown変換): Cloudflareの説明では、多くの形式の変換は無料。画像の変換はAIのモデルを使うので、無料枠を超えると費用がかかることがある。PDFとWordに埋め込まれた画像は、変換しない設定にしている。
+  - D1: 文字にした内容と、要約の保存。含まれる量の範囲内の見込み。
+- **送る内容:** 要約のために、ファイルの中身(先頭の6万文字まで)を、送った人のプロバイダに送る。返答で一覧やファイルの中身を使うときは、その返答の費用を払う人のプロバイダに送る(会話と同じ)。PDF、Word、Excelのファイルは、文字にするためにCloudflareのWorkers AIに送る。
 
 ## エージェントの費用
 
@@ -204,7 +219,7 @@
 - OpenAI: [Sign in with ChatGPT: Request a client ID](https://developers.openai.com/siwc/request-client-id) / [ChatGPT plan usage](https://developers.openai.com/siwc/token-sharing-open-source) / [Services Agreement](https://openai.com/policies/services-agreement/)
 - Google: [Gemini Code Assist release notes](https://docs.cloud.google.com/gemini/docs/codeassist/release-notes) / [Antigravity terms](https://antigravity.google/terms) / [Google APIs Terms of Service](https://developers.google.com/terms) / [Gemini API Additional Terms](https://ai.google.dev/gemini-api/terms)
 - GitHub: [Copilot SDK: GitHub OAuth](https://docs.github.com/en/copilot/how-tos/copilot-sdk/set-up-copilot-sdk/github-oauth)
-- Cloudflare(2026-11時点): [Workers AIの料金](https://developers.cloudflare.com/workers-ai/platform/pricing/) / [whisper-large-v3-turbo](https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/)
+- Cloudflare(2026-11時点): [Workers AIの料金](https://developers.cloudflare.com/workers-ai/platform/pricing/) / [whisper-large-v3-turbo](https://developers.cloudflare.com/workers-ai/models/whisper-large-v3-turbo/) / [Markdown変換(料金の説明を含む)](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/)
 - TypeSafe(2026-11時点): [Models(単価、文脈の長さ、言語)](https://docs.typesafe.ai/models) / [Request rules and errors](https://docs.typesafe.ai/api/errors) / [Privacy Policy](https://typesafe.ai/legal/privacy-policy) / [OpenRouterのJev](https://openrouter.ai/docs/guides/community/jev)
 
 各社の規約は2026年に何度も変わっているので、実装前と定期的に再確認する。

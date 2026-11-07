@@ -3,7 +3,7 @@ import type { JevSource } from "../jev/texts";
 
 /**
  * Queueで受け渡す仕事。RESPOND_QUEUEはRespondJobとExplainJobとJevJobとCompactJobとImportCommandJobとMemoryJobと
- * TranscribeJob、INGEST_QUEUEはそれ以外を運ぶ。
+ * TranscribeJobとKnowledgeJob、INGEST_QUEUEはそれ以外を運ぶ。
  */
 export type QueueMessage =
 	| RespondJob
@@ -13,6 +13,7 @@ export type QueueMessage =
 	| ImportCommandJob
 	| MemoryJob
 	| TranscribeJob
+	| KnowledgeJob
 	| IngestJob
 	| DeleteJob
 	| ImportJob
@@ -115,6 +116,17 @@ export interface TranscribeJob {
 	kind: "transcribe";
 	channelId: string;
 	messageId: string;
+}
+
+/**
+ * 知識チャンネルに送られたファイルを、文字にして要約する(仕様: docs/spec/architecture.md「知識チャンネル」)。
+ * 送った人のキーと大きさを確かめ、受け付けないときは、ファイルのメッセージへの返信で知らせる。
+ * 文字にするのと要約に時間がかかることがあるので、1件ずつ処理するRESPOND_QUEUEで運ぶ
+ */
+export interface KnowledgeJob {
+	kind: "knowledge";
+	/** 知識のファイルのID */
+	fileId: number;
 }
 
 /**

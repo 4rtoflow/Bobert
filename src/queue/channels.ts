@@ -16,6 +16,7 @@ import {
 	unrecordedMessageChannels,
 } from "../store/channels";
 import { deleteChannelImports } from "../store/imports";
+import { forgetKnowledgeChannels } from "../store/knowledge";
 import { forgetMemorySources } from "../store/memory";
 import { deleteChannelMessages } from "../store/messages";
 import { deleteChannelReactions } from "../store/reactions";
@@ -226,11 +227,18 @@ async function removeChannels(
 	await deleteChannelRecords(deps.db, ids);
 }
 
-/** チャンネルの保存したメッセージ(D1とVectorize)と、リアクションと、取り込みの記録を消す */
+/**
+ * チャンネルの保存したメッセージ(D1とVectorize)と、リアクションと、取り込みの記録を消す。
+ * 知識チャンネルなら指定を外し、そのチャンネルの知識も消す(仕様: docs/spec/architecture.md「知識チャンネル」)
+ */
 async function forgetChannels(
 	channelIds: readonly string[],
 	deps: ChannelDeps,
 ): Promise<void> {
+	const knowledge = await forgetKnowledgeChannels(deps.db, channelIds);
+	if (knowledge.channels > 0 || knowledge.files > 0) {
+		logEvent("knowledge", "channels_forgotten", knowledge);
+	}
 	const messageIds = await deleteChannelMessages(deps.db, channelIds);
 	await deleteChannelReactions(deps.db, channelIds);
 	// 消した発言から覚えた、記憶の項目も消す(仕様: docs/spec/architecture.md「記憶」)

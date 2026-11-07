@@ -1,6 +1,11 @@
 import { IMPORT_COMMAND_NAME } from "../import/progress";
+import {
+	acceptKnowledgeFiles,
+	type KnowledgeIntakeDeps,
+} from "../knowledge/accept";
 import { logEvent } from "../log";
 import { type Embedder, embeddingText } from "../store/embedding";
+import { deleteKnowledgeFilesOfMessages } from "../store/knowledge";
 import { forgetMemorySources } from "../store/memory";
 import {
 	clearEmbedded,
@@ -29,7 +34,7 @@ const REINDEX_PAGE_SIZE = 100;
 export const EAGER_TRANSCRIPTION_WINDOW_MS = 60 * 60 * 1000;
 
 /** 保存とベクトル化に使うもの。テストでは偽物に差し替える */
-export interface IngestDeps extends ChannelDeps {
+export interface IngestDeps extends ChannelDeps, KnowledgeIntakeDeps {
 	/**
 	 * Vectorizeの索引。生成された型(VectorizeIndex)は古いベータ版のもので、戻り値が今の版と違う。
 	 * 戻り値は使わないので、どちらでも受け取れる形にしておく
@@ -78,12 +83,17 @@ export async function ingestMessages(
 		deps,
 	);
 	const transcribing = await transcribeFreshVoice(kept, deps);
+	// 知識チャンネルに送られたファイルを受け付け、編集で外されたファイルの知識を消す
+	// (仕様: docs/spec/architecture.md「知識チャンネル」)
+	const knowledge = await acceptKnowledgeFiles(kept, deps);
 	logEvent("queue", "ingested", {
 		messages: latest.size,
 		saved: kept.length,
 		embedded,
 		emptied,
 		transcribing,
+		knowledgeAccepted: knowledge.accepted,
+		knowledgeRemoved: knowledge.removed,
 	});
 	return kept.length;
 }
@@ -178,7 +188,7 @@ export async function embedMessages(
 	return { embedded: embeddable.length, emptied: emptied.length };
 }
 
-/** 削除されたメッセージを、D1とVectorizeから消す。リアクションの記録も消す */
+/** 削除されたメッセージを、D1とVectorizeから消す。リアクションの記録と、知識のファイルも消す */
 export async function deleteMessages(
 	messageIds: readonly string[],
 	deps: IngestDeps,
@@ -188,8 +198,10 @@ export async function deleteMessages(
 	await deleteMessageReactions(deps.db, ids);
 	// 消された発言から覚えた、記憶の項目も消す(仕様: docs/spec/architecture.md「記憶」)
 	await forgetMemorySources(deps.db, ids);
+	// 知識チャンネルのファイルの知識も消す(仕様: docs/spec/architecture.md「知識チャンネル」)
+	const knowledgeFiles = await deleteKnowledgeFilesOfMessages(deps.db, ids);
 	await deps.vectors.deleteByIds(ids);
-	logEvent("queue", "deleted", { messages: ids.length });
+	logEvent("queue", "deleted", { messages: ids.length, knowledgeFiles });
 }
 
 /**

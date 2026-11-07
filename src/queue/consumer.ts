@@ -1,5 +1,9 @@
 import { getChannelMessages } from "../discord/api";
 import { handleImportCommandJob } from "../import/start";
+import {
+	handleKnowledgeJob,
+	KNOWLEDGE_RETRY_DELAY_SECONDS,
+} from "../knowledge/job";
 import { logEvent } from "../log";
 import { handleMemoryJob } from "../memory/update";
 import { handleCompactJob } from "../respond/compact";
@@ -20,6 +24,7 @@ import type {
 	ImportJob,
 	IngestJob,
 	JevJob,
+	KnowledgeJob,
 	MemoryJob,
 	QueueMessage,
 	ReactionJob,
@@ -48,6 +53,7 @@ export async function handleQueueBatch(
 		importCommand: (job) => handleImportCommandJob(job, env),
 		memory: (job) => handleMemoryJob(job, env),
 		transcribe: (job) => handleTranscribeJob(job, env),
+		knowledge: (job, attempts) => handleKnowledgeJob(job, env, attempts),
 		ingest: async (messages) => {
 			await ingestMessages(messages, deps);
 		},
@@ -91,6 +97,8 @@ export interface JobHandlers {
 	importCommand: (job: ImportCommandJob) => Promise<void>;
 	memory: (job: MemoryJob) => Promise<void>;
 	transcribe: (job: TranscribeJob) => Promise<void>;
+	/** attemptsは、この仕事を試した回数(1から)。最後の回でも失敗したら、知らせて終えるため */
+	knowledge: (job: KnowledgeJob, attempts: number) => Promise<void>;
 	ingest: (messages: StoredMessageInput[]) => Promise<void>;
 	delete: (jobs: DeleteJob[]) => Promise<void>;
 	import: (job: ImportJob) => Promise<void>;
@@ -138,6 +146,10 @@ export async function processBatch(
 		(message): message is Message<TranscribeJob> =>
 			message.body.kind === "transcribe",
 	);
+	const knowledge = messages.filter(
+		(message): message is Message<KnowledgeJob> =>
+			message.body.kind === "knowledge",
+	);
 	const ingest = messages.filter(
 		(message): message is Message<IngestJob> => message.body.kind === "ingest",
 	);
@@ -164,6 +176,8 @@ export async function processBatch(
 	await eachOne(importCommands, handlers.importCommand);
 	await eachOne(memory, handlers.memory);
 	await eachOne(transcribe, handlers.transcribe);
+	// 知識のファイルは、レート制限などで失敗したとき、少し待ってからやり直す
+	await eachOne(knowledge, handlers.knowledge, KNOWLEDGE_RETRY_DELAY_SECONDS);
 	await settle(ingest, (jobs) => handlers.ingest(jobs.map(withDefaults)));
 	await settle(deletion, (jobs) => handlers.delete(jobs));
 	await eachOne(imports, handlers.import);
@@ -171,17 +185,25 @@ export async function processBatch(
 	await settle(reactions, (jobs) => handlers.reaction(jobs));
 }
 
-/** 1件ずつ処理する。失敗した仕事だけを、やり直しに回す */
+/**
+ * 1件ずつ処理する。失敗した仕事だけを、やり直しに回す。handleには、その仕事を試した回数(1から)も渡す。
+ * retryDelaySecondsを渡すと、やり直すまで、その秒数だけ待つ
+ */
 async function eachOne<T extends QueueMessage>(
 	messages: readonly Message<T>[],
-	handle: (job: T) => Promise<void>,
+	handle: (job: T, attempts: number) => Promise<void>,
+	retryDelaySeconds?: number,
 ): Promise<void> {
 	for (const message of messages) {
-		await settle([message], async (jobs) => {
-			for (const job of jobs) {
-				await handle(job);
-			}
-		});
+		await settle(
+			[message],
+			async (jobs) => {
+				for (const job of jobs) {
+					await handle(job, message.attempts);
+				}
+			},
+			retryDelaySeconds,
+		);
 	}
 }
 
@@ -192,6 +214,7 @@ async function eachOne<T extends QueueMessage>(
 async function settle<T extends QueueMessage>(
 	messages: readonly Message<T>[],
 	task: (jobs: T[]) => Promise<void>,
+	retryDelaySeconds?: number,
 ): Promise<void> {
 	const first = messages[0];
 	if (!first) {
@@ -210,11 +233,15 @@ async function settle<T extends QueueMessage>(
 			error: error instanceof Error ? error.message : "unknown",
 		});
 		if (messages.length === 1) {
-			first.retry();
+			if (retryDelaySeconds === undefined) {
+				first.retry();
+			} else {
+				first.retry({ delaySeconds: retryDelaySeconds });
+			}
 			return;
 		}
 		for (const message of messages) {
-			await settle([message], task);
+			await settle([message], task, retryDelaySeconds);
 		}
 	}
 }
