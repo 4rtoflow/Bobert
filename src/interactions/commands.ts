@@ -22,6 +22,12 @@ import {
 	JEV_SLASH_COMMAND_NAME,
 } from "../jev/texts";
 import {
+	KNOWLEDGE_CHANNEL_OPTION,
+	KNOWLEDGE_CHANNEL_OPTION_DESCRIPTION,
+	KNOWLEDGE_COMMAND_DESCRIPTION,
+	KNOWLEDGE_COMMAND_NAME,
+} from "../knowledge/texts";
+import {
 	MEMORY_COMMAND_DESCRIPTION,
 	MEMORY_COMMAND_NAME,
 } from "../memory/texts";
@@ -31,6 +37,7 @@ import {
 	BOBERTMD_COMMAND_NAME,
 } from "./bobert-md";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
+import { KNOWLEDGE_CHANNEL_TYPES } from "./knowledge";
 import {
 	REGSKILLS_COMMAND_NAME,
 	REGSKILLS_FILE_OPTION,
@@ -155,6 +162,23 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 			"Botが見られるチャンネルの過去のメッセージの取り込みと、進み具合の確認(サーバー管理者用)",
 		// 実行できるのは、サーバー管理の権限を持つ人(サーバー設定の「連携サービス」で変えられる)
 		default_member_permissions: String(PermissionFlags.ManageGuild),
+	},
+	{
+		...GUILD_ONLY,
+		name: KNOWLEDGE_COMMAND_NAME,
+		description: KNOWLEDGE_COMMAND_DESCRIPTION,
+		// 使えるのは、サーバー管理の権限を持つ人(/import と同じく、サーバー設定の「連携サービス」で変えられる)
+		default_member_permissions: String(PermissionFlags.ManageGuild),
+		options: [
+			{
+				type: ApplicationCommandOptionType.Channel,
+				name: KNOWLEDGE_CHANNEL_OPTION,
+				description: KNOWLEDGE_CHANNEL_OPTION_DESCRIPTION,
+				required: false,
+				// テキスト、アナウンス、フォーラムだけを選べる(スレッドは、親のチャンネルに従う)
+				channel_types: [...KNOWLEDGE_CHANNEL_TYPES],
+			},
+		],
 	},
 	{
 		...GUILD_ONLY,

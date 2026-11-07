@@ -34,5 +34,16 @@ export function ingestDeps(env: Env): IngestDeps {
 				);
 			}
 		},
+		// 知識チャンネルに送られたファイルは、届いてすぐに読む(DiscordのファイルのURLは期限付きのため)
+		knowledgeLater: async (fileIds) => {
+			// Queueに1回で入れられるのは、100件まで
+			for (let i = 0; i < fileIds.length; i += 100) {
+				await env.RESPOND_QUEUE.sendBatch(
+					fileIds.slice(i, i + 100).map((fileId) => ({
+						body: { kind: "knowledge", fileId } satisfies QueueMessage,
+					})),
+				);
+			}
+		},
 	};
 }

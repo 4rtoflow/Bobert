@@ -115,6 +115,7 @@ export const ApplicationCommandType = {
 
 export const ApplicationCommandOptionType = {
 	String: 3 as DiscordApplicationCommandOptionType.String,
+	Channel: 7 as DiscordApplicationCommandOptionType.Channel,
 	Attachment: 11 as DiscordApplicationCommandOptionType.Attachment,
 } as const;
 

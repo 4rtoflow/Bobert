@@ -6,6 +6,7 @@ import {
 	MessageFlags,
 } from "../discord/constants";
 import { JEV_HELP_LINE } from "../jev/texts";
+import { KNOWLEDGE_HELP } from "../knowledge/texts";
 import { MEMORY_HELP } from "../memory/texts";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
 import { VOICE_HELP } from "../voice/texts";
@@ -43,6 +44,7 @@ export function helpText(): string {
 		"- `/regskills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。一覧と編集は `/skills` で行います。",
 		BOBERTMD_HELP,
 		MEMORY_HELP,
+		KNOWLEDGE_HELP,
 		AGENT_HELP_LINE,
 		"",
 		"**コマンド**",

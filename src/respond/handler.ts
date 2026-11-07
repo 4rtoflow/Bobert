@@ -8,6 +8,8 @@ import {
 	getChannelPins,
 	triggerTyping,
 } from "../discord/api";
+import { loadKnowledgeList } from "../knowledge/prompt";
+import { type KnowledgeReads, readKnowledgeFileTool } from "../knowledge/tool";
 import { chatWithAnthropic } from "../llm/anthropic";
 import { findOpenRouterModel } from "../llm/model-info";
 import { chatWithOpenRouter } from "../llm/openrouter";
@@ -507,6 +509,13 @@ export async function answer(
 		usesTools && guildId !== null ? await listSkills(env.DB, guildId) : [];
 	const skillReads: SkillReads = { calls: 0, names: [] };
 	const fileReads: FileReads = { calls: 0, kinds: [] };
+	// このサーバーの知識チャンネルに送られたファイルがあれば、その一覧をスキルの一覧の次に入れ、中身を読めるようにする
+	// (仕様: docs/spec/architecture.md「知識チャンネル」)。道具を使えないモデルには、一覧も道具も渡さない
+	const knowledge =
+		usesTools && guildId !== null
+			? await loadKnowledgeList(env.DB, guildId)
+			: null;
+	const knowledgeReads: KnowledgeReads = { ids: [] };
 	// 返答を頼んだ人の記憶を、本人の指示の後ろに入れる(仕様: docs/spec/architecture.md「記憶」)。
 	// 記憶を直す道具は、共有チャンネルでだけ渡す。年齢制限のチャンネルと非公開スレッドでの話を、ほかに持ち出さないため
 	const memory =
@@ -546,6 +555,18 @@ export async function answer(
 				...(guildId !== null && skills.length > 0
 					? [readSkillTool(env.DB, guildId, skills, skillReads)]
 					: []),
+				...(guildId !== null && knowledge !== null
+					? [
+							readKnowledgeFileTool(
+								env.DB,
+								guildId,
+								history,
+								fileReads,
+								knowledgeReads,
+								support,
+							),
+						]
+					: []),
 				...(memoryTool && guildId !== null
 					? [updateMemoryTool(env.DB, userId, guildId, memoryEdits)]
 					: []),
@@ -559,6 +580,7 @@ export async function answer(
 		system: buildSystemPrompt({
 			bobertMd,
 			skills,
+			knowledge: knowledge?.block ?? null,
 			customPrompt: settings.customPrompt,
 			memory: memoryBlock,
 		}),
