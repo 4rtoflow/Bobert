@@ -503,8 +503,13 @@ export async function answer(
 		guildId === null
 			? null
 			: ((await getBobertMd(env.DB, guildId))?.content ?? null);
+	// ファイル(スクリプトなど)が付いたスキルは、エージェントだけで使う。Workersではスクリプトを動かせないため
 	const skills =
-		usesTools && guildId !== null ? await listSkills(env.DB, guildId) : [];
+		usesTools && guildId !== null
+			? (await listSkills(env.DB, guildId)).filter(
+					(skill) => skill.fileCount === 0,
+				)
+			: [];
 	const skillReads: SkillReads = { calls: 0, names: [] };
 	const fileReads: FileReads = { calls: 0, kinds: [] };
 	// 返答を頼んだ人の記憶を、本人の指示の後ろに入れる(仕様: docs/spec/architecture.md「記憶」)。

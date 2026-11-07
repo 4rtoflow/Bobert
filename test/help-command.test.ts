@@ -63,7 +63,7 @@ describe("/help", () => {
 			"- `/memory`: AIが覚えている、あなたのこと(このサーバーでの記憶)の確認と設定",
 		);
 		expect(lines).toContain(
-			"- `/regskills`: スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書く",
+			"- `/regskills`: スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書くか、プラグインから入れる",
 		);
 		expect(lines).toContain(
 			"- `/skills`: このサーバーでAIが使うスキル(手順や知識)の一覧と編集",
