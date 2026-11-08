@@ -132,7 +132,7 @@ describe("/bobertmd のコマンド", () => {
 		});
 		const lines = helpText().split("\n");
 		const skillLine = lines.findIndex((line) =>
-			line.startsWith("- `/regskills` で登録したスキル"),
+			line.startsWith("- `/skills` で登録したスキル"),
 		);
 		expect(lines[skillLine + 1]).toBe(
 			"- `/bobertmd` で、このサーバーの情報やAIへの指示を、Bobert.mdに書いておけます。AIは、このサーバーの全員への返答で毎回読みます。誰でも編集できます。",
