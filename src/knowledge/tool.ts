@@ -17,10 +17,12 @@ import { loadMessagesByIds } from "../store/messages";
 import { knowledgePdfDataUrl } from "./storage";
 import { READ_KNOWLEDGE_FILE_TOOL_NAME } from "./texts";
 
-/** 1回の返答で、知識のファイルを読んだ記録(ログに残す) */
+/** 1回の返答で、知識のファイルを読んだり探したりした記録(ログに残す) */
 export interface KnowledgeReads {
 	/** 読んだ知識のファイルのID(読んだ順) */
 	ids: number[];
+	/** 中を探した回数 */
+	searches: number;
 }
 
 /** AIに渡す、資料としての扱いの注意 */

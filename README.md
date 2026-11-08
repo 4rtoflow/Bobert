@@ -171,6 +171,7 @@ GITHUB_TOKEN=$(gh auth token) GITHUB_REPOSITORY=4rtoflow/Bobert GITHUB_SHA=$(git
 - **D1のスキーマ:** 本番では、自動デプロイが反映する。開発用の環境では、`migrations/`にファイルが増えたら、デプロイの前に`pnpm db:migrate:dev`で反映する。
 - **Gatewayのコードやインテントを変えたとき:** デプロイの後に、Gatewayを止め、4分ほど待ってから始め直す。Gatewayを持つDurable Objectは、アラームとWebSocketで動き続けるので、デプロイしても前の版のコードのまま残ることがある(2026-10-28に、開発用の環境で起きた)。止めてしばらくたつと片付けられ、次に始めたときに新しい版で動く。インテントは、Resumeでは反映されないので、始め直しが要る。新しい版で動いているかは、`wrangler tail`のGatewayのイベントの版で確かめられる。
 - **ベクトルの入れ直し:** ベクトルのメタデータを足したら(サーバーIDを足したときなど)、メタデータ索引を作ってから、保存したメッセージのベクトルを入れ直す。
+- **知識のファイルのベクトル:** 知識チャンネルのファイルの中を探す道具を入れる前に、知識に入ったファイルがあれば、デプロイの後に1回、ベクトルにする仕事を入れる。返事の`files`が1000なら、残りがあるので、もう一度呼ぶ。
 
 ```sh
 URL=https://bobert-dev.<サブドメイン>.workers.dev
@@ -179,6 +180,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/status          
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/gateway/stop       # 止める
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/commands/register  # コマンドを登録する
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/vectors/reindex    # ベクトルを入れ直す
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" $URL/admin/knowledge/reindex  # 知識のファイルをベクトルにする
 ```
 
 ## よく使うコマンド

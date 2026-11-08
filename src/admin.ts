@@ -2,6 +2,10 @@ import { overwriteGlobalCommands } from "./discord/api";
 import { GATEWAY_LOCATION_HINT, GATEWAY_OBJECT_NAME } from "./gateway/protocol";
 import { COMMANDS } from "./interactions/commands";
 import type { QueueMessage } from "./queue/messages";
+import { unembeddedKnowledgeFileIds } from "./store/knowledge";
+
+/** 知識のファイルのベクトルの入れ直しで、1回に仕事を入れるファイルの数。多ければ、もう一度呼ぶ */
+const KNOWLEDGE_REINDEX_BATCH = 1_000;
 
 /**
  * 管理用エンドポイント。ADMIN_TOKENで保護する。
@@ -12,6 +16,8 @@ import type { QueueMessage } from "./queue/messages";
  *   返事には、登録したWorkerの版のIDを入れる。デプロイの直後は古い版が応答することがあるため、
  *   自動デプロイ(.github/workflows/deploy.yml)は、これがデプロイした版と同じになるまで登録をやり直す
  * - POST /admin/vectors/reindex: 保存したメッセージのベクトルを、全部入れ直す(メタデータを足したときなど)
+ * - POST /admin/knowledge/reindex: 知識に入ったのに、まだベクトルにしていない知識のファイル(中を探す道具を入れる前に
+ *   入ったものなど)を、ベクトルにする仕事を入れる。1回で1000件まで。返事のfilesが1000なら、もう一度呼ぶ
  */
 export async function handleAdminRequest(
 	request: Request,
@@ -51,6 +57,24 @@ export async function handleAdminRequest(
 			commands: registered.map((command) => command.name),
 			version: env.CF_VERSION_METADATA.id,
 		});
+	}
+	if (
+		request.method === "POST" &&
+		url.pathname === "/admin/knowledge/reindex"
+	) {
+		const ids = await unembeddedKnowledgeFileIds(
+			env.DB,
+			KNOWLEDGE_REINDEX_BATCH,
+		);
+		// Queueに1回で入れられるのは、100件まで
+		for (let i = 0; i < ids.length; i += 100) {
+			await env.RESPOND_QUEUE.sendBatch(
+				ids.slice(i, i + 100).map((fileId) => ({
+					body: { kind: "knowledge", fileId } satisfies QueueMessage,
+				})),
+			);
+		}
+		return Response.json({ ok: true, files: ids.length });
 	}
 	if (request.method === "POST" && url.pathname === "/admin/vectors/reindex") {
 		await env.INGEST_QUEUE.send({

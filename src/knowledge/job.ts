@@ -11,6 +11,7 @@ import {
 	LLM_ERROR_TEXT,
 	REFUSAL_TEXT,
 } from "../respond/replies";
+import { type Embedder, workersAiEmbedder } from "../store/embedding";
 import {
 	deleteKnowledgeFiles,
 	type KnowledgeFile,
@@ -21,6 +22,7 @@ import {
 	rejectPendingKnowledgeFiles,
 	saveKnowledgeSummary,
 	saveKnowledgeText,
+	saveKnowledgeVectorCount,
 } from "../store/knowledge";
 import { loadMessagesByIds } from "../store/messages";
 import {
@@ -34,6 +36,7 @@ import { MAX_KNOWLEDGE_FILE_BYTES } from "./format";
 import {
 	forgetKnowledgeFiles,
 	type KnowledgeFilesBucket,
+	type KnowledgeStorage,
 	saveKnowledgePdf,
 } from "./storage";
 import {
@@ -50,10 +53,17 @@ import {
 	knowledgeTooLarge,
 	knowledgeUnreadable,
 } from "./texts";
+import {
+	deleteKnowledgeVectors,
+	embedKnowledgeFile,
+	type KnowledgeVectorStore,
+	MAX_KNOWLEDGE_CHUNKS,
+} from "./vectors";
 
 /**
  * 知識チャンネルに送られたファイルを、文字にして要約する仕事(仕様: docs/spec/architecture.md「知識チャンネル」)。
  * 送った人のキーを確かめ、大きさを確かめてから、文字にして保存し、送った人のキーで要約する。
+ * 知識に入ったら、中を探せるよう、文字にした内容を区切ってベクトルにする。
  * 受け付けないときと、文字にできないとき、要約できないときは、知識に加えず、ファイルのメッセージへの返信で知らせる。
  * うまくいったときは、何も表示しない
  */
@@ -72,10 +82,14 @@ const TRANSIENT_LLM_ERRORS: ReadonlySet<LlmErrorKind> = new Set([
 ]);
 
 /** 仕事に使うもの。テストでは偽物に差し替える */
-export interface KnowledgeJobDeps extends ConversionDeps {
+export interface KnowledgeJobDeps extends ConversionDeps, KnowledgeStorage {
 	db: D1Database;
 	/** PowerPointをPDFにしたものを置くR2のバケット */
-	files: KnowledgeFilesBucket;
+	knowledgeFiles: KnowledgeFilesBucket;
+	/** 中を探すためのベクトルを入れるVectorize */
+	vectors: KnowledgeVectorStore;
+	/** 文をベクトルにする(Workers AI) */
+	embed: Embedder;
 	/** ファイルのメッセージを読み直して、添付ファイルのURLを取り直すのに使う */
 	history: Pick<HistoryDeps, "fetchMessage" | "ingest" | "guildId">;
 	/** ファイルを、DiscordのCDNから読む */
@@ -100,8 +114,13 @@ export async function handleKnowledgeJob(
 	attempts = 1,
 ): Promise<void> {
 	const file = await loadKnowledgeFile(env.DB, job.fileId);
-	// 消されたか(メッセージの削除や、知識チャンネルの解除)、もう済んでいる(同じ仕事が二度届いたときなど)
-	if (file === null || file.state === "ready" || file.state === "rejected") {
+	// 消されたか(メッセージの削除や、知識チャンネルの解除)、もう済んでいる(同じ仕事が二度届いたときなど)。
+	// 知識に入っていても、まだベクトルにしていなければ、ベクトルにする(やり直しと、この仕組みの前に入ったもの)
+	if (
+		file === null ||
+		file.state === "rejected" ||
+		(file.state === "ready" && file.vectorCount !== null)
+	) {
 		log("job_skipped", {
 			fileId: job.fileId,
 			reason: file === null ? "deleted" : file.state,
@@ -120,7 +139,9 @@ export function knowledgeJobDeps(
 		db: env.DB,
 		ai: env.AI,
 		powerPointToPdf: (bytes) => powerPointToPdf(env.KNOWLEDGE_CONVERTER, bytes),
-		files: env.KNOWLEDGE_FILES,
+		knowledgeFiles: env.KNOWLEDGE_FILES,
+		vectors: env.VECTORIZE,
+		embed: workersAiEmbedder(env.AI),
 		history: historyFor(env, {
 			guildId: file.guildId,
 			channelId: file.channelId,
@@ -134,12 +155,27 @@ export function knowledgeJobDeps(
 	};
 }
 
-/** 受け付けた(pending)か、文字にした(converted)ファイルを、知識に入れる(か、知識に加えないと決めて知らせる) */
+/**
+ * 受け付けた(pending)か、文字にした(converted)ファイルを、知識に入れ(か、知識に加えないと決めて知らせ)、
+ * 知識に入ったら、ベクトルにする。知識に入っているファイルは、ベクトルにするだけ
+ */
 export async function processKnowledgeFile(
 	file: KnowledgeFile,
 	deps: KnowledgeJobDeps,
 	attempts: number,
 ): Promise<void> {
+	if (file.state !== "ready" && !(await addToKnowledge(file, deps, attempts))) {
+		return;
+	}
+	await embedFile(file.id, deps, attempts);
+}
+
+/** ファイルを、知識に入れる(か、知識に加えないと決めて知らせる)。知識に入ったらtrue */
+async function addToKnowledge(
+	file: KnowledgeFile,
+	deps: KnowledgeJobDeps,
+	attempts: number,
+): Promise<boolean> {
 	const [message] = await loadMessagesByIds(deps.db, [file.messageId]);
 	const attachment = message?.attachments.find(
 		(candidate) => attachmentKey(candidate) === file.attachmentId,
@@ -148,7 +184,7 @@ export async function processKnowledgeFile(
 		// メッセージが消されたか、編集でファイルが外された(消す処理が先に動いていなければ、ここで消す)
 		await forget(deps, file);
 		log("job_skipped", { fileId: file.id, reason: "gone" });
-		return;
+		return false;
 	}
 	// メッセージに複数のファイルがあれば、どのファイルのことか分かるよう、返信の書き出しをファイル名にする
 	const label = message.attachments.length > 1 ? file.filename : null;
@@ -159,7 +195,7 @@ export async function processKnowledgeFile(
 	): Promise<void> => {
 		// 知らせるのは、知識に加えないと決めたときの1回だけ。PowerPointをPDFにしたものを置いていたら、消す
 		if (await rejectKnowledgeFile(deps.db, file.id, reason)) {
-			await forgetKnowledgeFiles(deps.files, [file]);
+			await forgetKnowledgeFiles(deps, [file]);
 			await deps.reply(file.channelId, file.messageId, content);
 		}
 		log("rejected", { ...fileDetail(file), reason, attempts, ...detail });
@@ -175,7 +211,7 @@ export async function processKnowledgeFile(
 				"no_key",
 			);
 			if (rejected.length > 0) {
-				await forgetKnowledgeFiles(deps.files, rejected);
+				await forgetKnowledgeFiles(deps, rejected);
 				await deps.reply(file.channelId, file.messageId, KNOWLEDGE_NO_KEY);
 			}
 			log("rejected", {
@@ -183,11 +219,11 @@ export async function processKnowledgeFile(
 				reason: "no_key",
 				files: rejected.length,
 			});
-			return;
+			return false;
 		}
 		if (attachment.size > MAX_KNOWLEDGE_FILE_BYTES) {
 			await reject("too_large", knowledgeTooLarge(label));
-			return;
+			return false;
 		}
 		let textLength = file.textLength;
 		let convertMs: number | null = null;
@@ -202,19 +238,19 @@ export async function processKnowledgeFile(
 			if (fresh === null) {
 				await forget(deps, file);
 				log("job_skipped", { fileId: file.id, reason: "gone" });
-				return;
+				return false;
 			}
 			const download = await deps.download(fresh.url);
 			if (download.kind === "too_large") {
 				await reject("too_large", knowledgeTooLarge(label));
-				return;
+				return false;
 			}
 			if (download.kind === "failed") {
 				// ファイルが消えていた(メッセージを消す処理が、まだ届いていない)
 				if (download.status === 404) {
 					await forget(deps, file);
 					log("job_skipped", { fileId: file.id, reason: "gone" });
-					return;
+					return false;
 				}
 				throw new Error(`ファイルを読めませんでした(${download.status})`);
 			}
@@ -228,22 +264,22 @@ export async function processKnowledgeFile(
 				await reject("unreadable", knowledgeUnreadable(label), {
 					detail: conversion.detail,
 				});
-				return;
+				return false;
 			}
 			// PowerPointは、AIがPDFのまま読めるよう、PDFにしたものをR2に置く
 			if (conversion.pdf !== undefined) {
-				await saveKnowledgePdf(deps.files, file.id, conversion.pdf);
+				await saveKnowledgePdf(deps.knowledgeFiles, file.id, conversion.pdf);
 			}
 			if (!(await saveKnowledgeText(deps.db, file.id, conversion.text))) {
 				// 文字にしている間に、消されたか、知識に加えないことになった
-				await forgetKnowledgeFiles(deps.files, [file]);
+				await forgetKnowledgeFiles(deps, [file]);
 				log("job_skipped", { fileId: file.id, reason: "changed" });
-				return;
+				return false;
 			}
 			textLength = conversion.text.length;
 			convertMs = Date.now() - startedAt;
 		}
-		await summarize(file, deps, model, {
+		return await summarize(file, deps, model, {
 			label,
 			textLength: textLength ?? 0,
 			convertMs,
@@ -260,7 +296,55 @@ export async function processKnowledgeFile(
 				? { kind: error.kind, status: error.status }
 				: {}),
 		});
+		return false;
 	}
+}
+
+/**
+ * 知識に入ったファイルを、中を探せるよう、区切ってベクトルにする(埋め込みとVectorizeは、運営者の負担)。
+ * 失敗したら、Queueでやり直す。最後の回でも失敗したら、知らせずに終える(知識には入っているので、一覧と読む道具では使える。
+ * 管理用エンドポイントで、ベクトルにし直せる)
+ */
+async function embedFile(
+	fileId: number,
+	deps: KnowledgeJobDeps,
+	attempts: number,
+): Promise<void> {
+	const file = await loadKnowledgeFile(deps.db, fileId);
+	if (file === null || file.state !== "ready" || file.vectorCount !== null) {
+		return;
+	}
+	const startedAt = Date.now();
+	let count: number;
+	try {
+		count = await embedKnowledgeFile(deps, file);
+	} catch (error) {
+		if (attempts < KNOWLEDGE_MAX_ATTEMPTS) {
+			throw error;
+		}
+		// 途中まで入れた分は、IDが分からなくならないよう、入れうる分をまとめて消しておく
+		await deleteKnowledgeVectors(deps.vectors, [
+			{ id: file.id, vectorCount: MAX_KNOWLEDGE_CHUNKS },
+		]);
+		log("embed_failed", {
+			...fileDetail(file),
+			error: error instanceof Error ? error.name : "unknown",
+		});
+		return;
+	}
+	if (!(await saveKnowledgeVectorCount(deps.db, file.id, count))) {
+		// ベクトルにしている間に、消された
+		await deleteKnowledgeVectors(deps.vectors, [
+			{ id: file.id, vectorCount: count },
+		]);
+		log("job_skipped", { fileId: file.id, reason: "changed" });
+		return;
+	}
+	log("embedded", {
+		...fileDetail(file),
+		vectors: count,
+		embedMs: Date.now() - startedAt,
+	});
 }
 
 /**
@@ -282,7 +366,7 @@ async function summarize(
 			detail?: Record<string, unknown>,
 		) => Promise<void>;
 	},
-): Promise<void> {
+): Promise<boolean> {
 	const { label, textLength, reject } = context;
 	const startedAt = Date.now();
 	const loaded = await loadKnowledgeText(
@@ -310,7 +394,7 @@ async function summarize(
 				status: error.status,
 			},
 		);
-		return;
+		return false;
 	}
 	const summary =
 		result.stopReason === "refusal" ? "" : normalizeSummary(result.text);
@@ -327,12 +411,12 @@ async function summarize(
 				...result.usage,
 			},
 		);
-		return;
+		return false;
 	}
 	if (!(await saveKnowledgeSummary(deps.db, file.id, summary))) {
 		// 要約している間に、消されたか、知識に加えないことになった
 		log("job_skipped", { fileId: file.id, reason: "changed" });
-		return;
+		return false;
 	}
 	// ファイル名、中身、要約は残さない
 	log("added", {
@@ -343,6 +427,7 @@ async function summarize(
 		summaryMs: Date.now() - startedAt,
 		...result.usage,
 	});
+	return true;
 }
 
 /**
@@ -369,13 +454,13 @@ async function replyToFile(
 	}
 }
 
-/** 知識のファイルを消す。PowerPointをPDFにしたものを置いていたら、それも消す */
+/** 知識のファイルを消す。PowerPointをPDFにしたものと、ベクトルを入れていたら、それも消す */
 async function forget(
 	deps: KnowledgeJobDeps,
 	file: KnowledgeFile,
 ): Promise<void> {
 	await forgetKnowledgeFiles(
-		deps.files,
+		deps,
 		await deleteKnowledgeFiles(deps.db, [file.id]),
 	);
 }
