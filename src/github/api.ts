@@ -9,7 +9,7 @@ import type { GitHubTokens } from "../store/github";
 const API_BASE = "https://api.github.com";
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 /** GitHubのAPIは、User-Agentのないリクエストを断る */
-const USER_AGENT = "Bobert (https://github.com/4rtoflow/Bobert)";
+export const USER_AGENT = "Bobert (https://github.com/4rtoflow/Bobert)";
 const API_VERSION = "2022-11-28";
 /** 1ページで読む件数(GitHubの上限) */
 const PER_PAGE = 100;

@@ -41,6 +41,8 @@ import { KNOWLEDGE_CHANNEL_TYPES } from "./knowledge";
 import {
 	REGSKILLS_COMMAND_NAME,
 	REGSKILLS_FILE_OPTION,
+	REGSKILLS_MARKETPLACE_OPTION,
+	REGSKILLS_PLUGIN_OPTION,
 	SKILLS_COMMAND_NAME,
 } from "./skills";
 
@@ -99,7 +101,7 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: REGSKILLS_COMMAND_NAME,
 		description:
-			"スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書く",
+			"スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書くか、プラグインから入れる",
 		options: [
 			{
 				type: ApplicationCommandOptionType.Attachment,
@@ -107,6 +109,22 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 				description:
 					"登録するSKILL.md。添付しなければ、入力画面で名前・説明・本文を書く",
 				required: false,
+			},
+			{
+				type: ApplicationCommandOptionType.String,
+				name: REGSKILLS_PLUGIN_OPTION,
+				description:
+					"プラグインから入れるときの、プラグインの名前(例: nakamaba)",
+				required: false,
+				max_length: 100,
+			},
+			{
+				type: ApplicationCommandOptionType.String,
+				name: REGSKILLS_MARKETPLACE_OPTION,
+				description:
+					"プラグインを配っているGitHubのリポジトリ(例: 4rtoflow/Nakamaba)",
+				required: false,
+				max_length: 200,
 			},
 		],
 	},

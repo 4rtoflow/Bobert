@@ -506,8 +506,13 @@ export async function answer(
 		guildId === null
 			? null
 			: ((await getBobertMd(env.DB, guildId))?.content ?? null);
+	// ファイル(スクリプトなど)が付いたスキルは、エージェントだけで使う。Workersではスクリプトを動かせないため
 	const skills =
-		usesTools && guildId !== null ? await listSkills(env.DB, guildId) : [];
+		usesTools && guildId !== null
+			? (await listSkills(env.DB, guildId)).filter(
+					(skill) => skill.fileCount === 0,
+				)
+			: [];
 	const skillReads: SkillReads = { calls: 0, names: [] };
 	const fileReads: FileReads = { calls: 0, kinds: [] };
 	// このサーバーの知識チャンネルに送られたファイルがあれば、その一覧をスキルの一覧の次に入れ、中身を読めるようにする

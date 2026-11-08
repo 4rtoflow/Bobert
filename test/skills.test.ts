@@ -17,15 +17,21 @@ import { readSkillTool, type SkillReads } from "../src/respond/tools";
 import {
 	addSkill,
 	countSkills,
+	deletePendingPlugin,
 	deletePendingSkill,
 	deleteSkill,
 	findSkillByName,
+	getPendingPlugin,
 	getPendingSkill,
 	getSkill,
+	installSkills,
+	listSkillFiles,
 	listSkills,
 	MAX_SKILLS,
 	overwriteSkill,
 	type SkillContent,
+	type SkillSource,
+	savePendingPlugin,
 	savePendingSkill,
 	updateSkill,
 } from "../src/store/skills";
@@ -54,6 +60,7 @@ const TRPG_RULES: SkillContent = {
 };
 
 const BOB = { id: "200", name: "bob" };
+const ALICE_EDITOR = { id: ALICE.id, name: "alice" };
 
 /** テストごとに、ほかのテストと重ならないサーバーを使う(スキルはサーバーごとなので) */
 let nextGuildId = 9100;
@@ -219,6 +226,8 @@ describe("スキルの保存(D1)", () => {
 				createdAt: 2000,
 				editedByName: null,
 				updatedAt: 2000,
+				fileCount: 0,
+				source: null,
 			},
 			expect.objectContaining({ name: "trpg-rules", createdAt: 1000 }),
 		]);
@@ -385,6 +394,235 @@ describe("スキルの保存(D1)", () => {
 	});
 });
 
+describe("プラグインから入れたスキルの保存(D1)", () => {
+	const SOURCE: SkillSource = {
+		repository: "4rtoflow/Nakamaba",
+		plugin: "nakamaba",
+		commit: "5e13cf2090027e710b6fb5bbb1a3247753217636",
+	};
+	const NAKAMABA: SkillContent = {
+		name: "nakamaba",
+		description: "Nakamabaに載せるページを作る",
+		body: "node scripts/nakamaba.mjs publish",
+	};
+	const SCRIPT = {
+		path: "scripts/nakamaba.mjs",
+		content: new TextEncoder().encode("console.log('nakamaba');"),
+	};
+	const BINARY = {
+		path: "assets/icon.png",
+		content: new Uint8Array([0, 255, 1]),
+	};
+
+	it("入手元とファイルと一緒に足し、一覧にファイルの数と入手元を出す。ファイルは中身のまま読める", async () => {
+		const guildId = newGuild();
+		await addSkill(env.DB, guildId, MEETING_NOTES, BOB, 1000);
+
+		expect(
+			await installSkills(
+				env.DB,
+				guildId,
+				[
+					{ content: NAKAMABA, files: [SCRIPT, BINARY] },
+					{ content: TRPG_RULES, files: [] },
+				],
+				SOURCE,
+				BOB,
+				{ overwrite: false },
+				2000,
+			),
+		).toEqual({
+			result: "installed",
+			added: ["nakamaba", "trpg-rules"],
+			replaced: [],
+		});
+		expect(await listSkills(env.DB, guildId)).toEqual([
+			expect.objectContaining({
+				name: "meeting-notes",
+				fileCount: 0,
+				source: null,
+			}),
+			expect.objectContaining({
+				name: "nakamaba",
+				fileCount: 2,
+				source: SOURCE,
+				createdByName: "bob",
+				createdAt: 2000,
+			}),
+			expect.objectContaining({
+				name: "trpg-rules",
+				fileCount: 0,
+				source: SOURCE,
+			}),
+		]);
+		const skill = await findSkillByName(env.DB, guildId, "nakamaba");
+		expect(skill).toMatchObject({ ...NAKAMABA, fileCount: 2, source: SOURCE });
+		// 位置の順に返す。ほかのサーバーからは読めない
+		expect(await listSkillFiles(env.DB, guildId, skill?.id ?? 0)).toEqual([
+			BINARY,
+			SCRIPT,
+		]);
+		expect(await listSkillFiles(env.DB, newGuild(), skill?.id ?? 0)).toEqual(
+			[],
+		);
+	});
+
+	it("同じ名前があれば、置き換えずに名前を返す。置き換えると、説明・本文・入手元・ファイルを入れ替える", async () => {
+		const guildId = newGuild();
+		await installSkills(
+			env.DB,
+			guildId,
+			[{ content: NAKAMABA, files: [SCRIPT, BINARY] }],
+			SOURCE,
+			BOB,
+			{ overwrite: false },
+			1000,
+		);
+		const newer = { ...SOURCE, commit: "f".repeat(40) };
+		const updated = { ...NAKAMABA, body: "新しい本文" };
+		const newScript = { ...SCRIPT, content: new Uint8Array([9]) };
+
+		expect(
+			await installSkills(
+				env.DB,
+				guildId,
+				[{ content: updated, files: [newScript] }],
+				newer,
+				ALICE_EDITOR,
+				{ overwrite: false },
+			),
+		).toEqual({ result: "duplicate", names: ["nakamaba"] });
+		expect(
+			await installSkills(
+				env.DB,
+				guildId,
+				[
+					{ content: updated, files: [newScript] },
+					{ content: MEETING_NOTES, files: [] },
+				],
+				newer,
+				ALICE_EDITOR,
+				{ overwrite: true },
+				1000,
+			),
+		).toEqual({
+			result: "installed",
+			added: ["meeting-notes"],
+			replaced: ["nakamaba"],
+		});
+		const skill = await findSkillByName(env.DB, guildId, "nakamaba");
+		expect(skill).toMatchObject({
+			body: "新しい本文",
+			source: newer,
+			fileCount: 1,
+			createdByName: "bob",
+			editedByName: "alice",
+			updatedAt: 1001,
+		});
+		expect(await listSkillFiles(env.DB, guildId, skill?.id ?? 0)).toEqual([
+			newScript,
+		]);
+	});
+
+	it("新しく足すスキルで数の上限を超えるなら、何も足さない(置き換えるだけのスキルは数えない)", async () => {
+		const guildId = newGuild();
+		for (let index = 0; index < MAX_SKILLS - 1; index++) {
+			await addSkill(
+				env.DB,
+				guildId,
+				{ ...MEETING_NOTES, name: `s-${index}` },
+				BOB,
+			);
+		}
+
+		expect(
+			await installSkills(
+				env.DB,
+				guildId,
+				[
+					{ content: NAKAMABA, files: [SCRIPT] },
+					{ content: TRPG_RULES, files: [] },
+				],
+				SOURCE,
+				BOB,
+				{ overwrite: true },
+			),
+		).toEqual({ result: "limit", adding: 2 });
+		expect(await countSkills(env.DB, guildId)).toBe(MAX_SKILLS - 1);
+		expect(
+			await installSkills(
+				env.DB,
+				guildId,
+				[
+					{ content: { ...MEETING_NOTES, name: "s-0" }, files: [] },
+					{ content: NAKAMABA, files: [SCRIPT] },
+				],
+				SOURCE,
+				BOB,
+				{ overwrite: true },
+			),
+		).toEqual({ result: "installed", added: ["nakamaba"], replaced: ["s-0"] });
+	});
+
+	it("スキルを消すと、付いていたファイルも消す", async () => {
+		const guildId = newGuild();
+		await installSkills(
+			env.DB,
+			guildId,
+			[{ content: NAKAMABA, files: [SCRIPT] }],
+			SOURCE,
+			BOB,
+			{ overwrite: false },
+		);
+		const skill = await findSkillByName(env.DB, guildId, "nakamaba");
+		const id = skill?.id ?? 0;
+
+		expect(await deleteSkill(env.DB, newGuild(), id)).toBe(null);
+		expect(await listSkillFiles(env.DB, guildId, id)).toHaveLength(1);
+		expect(await deleteSkill(env.DB, guildId, id)).toBe("nakamaba");
+		const { results } = await env.DB.prepare(
+			"SELECT path FROM skill_files WHERE skill_id = ?",
+		)
+			.bind(id)
+			.all();
+		expect(results).toEqual([]);
+	});
+
+	it("置き換えるかを確かめている間の入手元は、SKILL.mdの内容と合わせて、人ごと・サーバーごとに1つだけ残す", async () => {
+		const guildId = newGuild();
+		const pending = {
+			repository: SOURCE.repository,
+			plugin: SOURCE.plugin,
+			commit: SOURCE.commit,
+		};
+
+		const skillFirst = await savePendingSkill(
+			env.DB,
+			guildId,
+			ALICE.id,
+			MEETING_NOTES,
+		);
+		const plugin = await savePendingPlugin(env.DB, guildId, ALICE.id, pending);
+
+		expect(await getPendingSkill(env.DB, guildId, ALICE.id, skillFirst)).toBe(
+			null,
+		);
+		expect(await getPendingPlugin(env.DB, guildId, ALICE.id, plugin)).toEqual(
+			pending,
+		);
+		expect(await getPendingPlugin(env.DB, guildId, BOB.id, plugin)).toBe(null);
+
+		await savePendingSkill(env.DB, guildId, ALICE.id, MEETING_NOTES);
+		expect(await getPendingPlugin(env.DB, guildId, ALICE.id, plugin)).toBe(
+			null,
+		);
+
+		const again = await savePendingPlugin(env.DB, guildId, ALICE.id, pending);
+		await deletePendingPlugin(env.DB, again);
+		expect(await getPendingPlugin(env.DB, guildId, ALICE.id, again)).toBe(null);
+	});
+});
+
 describe("スキルを読む道具", () => {
 	it("名前を選んで本文を読む。読んだスキルを記録し、1回の返答で読めるのは3つまで", async () => {
 		const guildId = newGuild();
@@ -421,6 +659,31 @@ describe("スキルを読む道具", () => {
 			"1回の返答で読めるスキルは3つまでです。読んだスキルだけで答えてください。",
 		);
 		expect(reads).toEqual({ calls: 3, names: ["meeting-notes"] });
+	});
+
+	it("ファイルが付いたスキルは、エージェントだけで使うので、読めない", async () => {
+		const guildId = newGuild();
+		await installSkills(
+			env.DB,
+			guildId,
+			[
+				{
+					content: { ...MEETING_NOTES, name: "nakamaba" },
+					files: [{ path: "run.mjs", content: new Uint8Array([1]) }],
+				},
+			],
+			{ repository: "4rtoflow/Nakamaba", plugin: "nakamaba", commit: "abc" },
+			BOB,
+			{ overwrite: false },
+		);
+		const tool = readSkillTool(env.DB, guildId, [], {
+			calls: 0,
+			names: [],
+		});
+
+		expect(await tool.run({ name: "nakamaba" })).toBe(
+			"「nakamaba」というスキルはありません。一覧にある名前で指定してください。",
+		);
 	});
 });
 
@@ -701,6 +964,37 @@ describe("返答でスキルを使う", () => {
 		expect(posted(calls)).toEqual([
 			"書きました。\n-# スキル「trpg-rules」「meeting-notes」を使いました",
 		]);
+	});
+
+	it("ファイルが付いたスキルは、エージェントだけで使うので、一覧に入れない(それだけなら、一覧も道具も渡さない)", async () => {
+		const guildId = newGuild();
+		await installSkills(
+			env.DB,
+			guildId,
+			[
+				{
+					content: { ...MEETING_NOTES, name: "nakamaba" },
+					files: [{ path: "run.mjs", content: new Uint8Array([1]) }],
+				},
+			],
+			{ repository: "4rtoflow/Nakamaba", plugin: "nakamaba", commit: "abc" },
+			BOB,
+			{ overwrite: false },
+		);
+		const user = await userWith("openrouter");
+		const trigger = mention(user, "こんにちは");
+		const calls = mockApis(trigger, () => openRouterChat("こんにちは!"));
+
+		await handleRespondJob(respondJob(trigger, guildId), testEnv);
+
+		const [request] = chatRequests(calls);
+		expect(request?.messages[0]).toEqual({
+			role: "system",
+			content: COMMON_SYSTEM_PROMPT,
+		});
+		expect(request?.tools?.map((tool) => tool.function.name)).not.toContain(
+			"read_skill",
+		);
 	});
 
 	it("スキルがないサーバーでは、一覧も道具も渡さない", async () => {

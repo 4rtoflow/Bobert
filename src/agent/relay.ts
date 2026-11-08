@@ -130,6 +130,11 @@ export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /** 添付ファイルを置く場所と、エージェントがファイルを出すときに置く場所(Managed Agentsの決まり) */
 const UPLOADS_DIR = "/mnt/session/uploads";
+/** スキルのファイルを置く、UPLOADS_DIRの下のフォルダ(発言ごとのフォルダは、発言のIDなので重ならない) */
+const SKILLS_MOUNT_DIR = "skills";
+/** Claude Codeで、スキルのフォルダを指す書き方。サンドボックスに置いた場所に置き換える */
+// biome-ignore lint/suspicious/noTemplateCurlyInString: Claude Codeの書き方そのもので、テンプレート文字列ではない
+const SKILL_DIR_VARIABLE = "${CLAUDE_SKILL_DIR}";
 const OUTPUTS_DIR = "/mnt/session/outputs/";
 
 /** Discordの1通に添付できるファイルの数 */
@@ -291,6 +296,11 @@ export interface SessionState {
 	pullRequests: PendingPullRequest[];
 	/** 本人の確認を待っている、GitHubの操作(PRを作る以外) */
 	githubWrites: PendingGitHubWrite[];
+	/**
+	 * サンドボックスに置いた、スキルのファイルの置き場所(Managed Agentsに渡したmount_path)。
+	 * スキルを読み直しても、同じファイルを二度置かないようにする
+	 */
+	mountedSkillFiles: string[];
 }
 
 /** セッションを始めたときの情報 */
@@ -324,14 +334,19 @@ export function initialState(setup: SessionSetup): SessionState {
 		repositoryTokenVersion: setup.repositoryTokenVersion ?? null,
 		pullRequests: [],
 		githubWrites: [],
+		mountedSkillFiles: [],
 	};
 }
 
-/** 前の版で保存した状態に、後から足した項目(GitHub)を補う */
+/** 前の版で保存した状態に、後から足した項目(GitHub、スキルのファイル)を補う */
 export function withDefaults(
 	state: Omit<
 		SessionState,
-		"repositories" | "repositoryTokenVersion" | "pullRequests" | "githubWrites"
+		| "repositories"
+		| "repositoryTokenVersion"
+		| "pullRequests"
+		| "githubWrites"
+		| "mountedSkillFiles"
 	> &
 		Partial<SessionState>,
 ): SessionState {
@@ -340,8 +355,18 @@ export function withDefaults(
 		repositoryTokenVersion: null,
 		pullRequests: [],
 		githubWrites: [],
+		mountedSkillFiles: [],
 		...state,
 	};
+}
+
+/** read_skillの道具で読む、サーバーのスキル */
+export interface AgentSkillContent {
+	id: number;
+	name: string;
+	body: string;
+	/** 付いているファイル(スクリプトなど)の数。あれば、読んだときにサンドボックスに置く */
+	fileCount: number;
 }
 
 /** エージェントのチャンネルに投稿された、Gatewayからのメッセージ */
@@ -395,7 +420,11 @@ export interface RelayDeps {
 	/** このサーバーで、Discordに1つ上げられるファイルの大きさ(バイト) */
 	uploadLimit(): Promise<number>;
 	/** サーバーのスキルを、名前で読む。なければnull */
-	readSkill(name: string): Promise<{ name: string; body: string } | null>;
+	readSkill(name: string): Promise<AgentSkillContent | null>;
+	/** スキルに付いたファイル(スクリプトなど)。位置は、スキルのフォルダから */
+	readSkillFiles(
+		skillId: number,
+	): Promise<{ path: string; content: Uint8Array }[]>;
 	/** 本人のGitHub */
 	github: RelayGitHub;
 	sleep(ms: number): Promise<void>;
@@ -1156,7 +1185,12 @@ export class SessionRelay {
 				result = await this.sendFiles(client, sessionId, event.input);
 				break;
 			case READ_SKILL_TOOL:
-				result = await this.readSkill(event.name, event.input);
+				result = await this.readSkill(
+					client,
+					sessionId,
+					event.name,
+					event.input,
+				);
 				break;
 			case CREATE_PULL_REQUEST_TOOL:
 				// 本人に確認を求めたら、答えは、ボタンが押されたときに返す
@@ -1477,9 +1511,13 @@ export class SessionRelay {
 
 	/**
 	 * read_skillの道具: サーバーのスキルの本文を返す。作業の様子に「スキルを読む」の行を書く。
-	 * 一覧を渡した後に、ほかの人が消したり名前を変えたりしていることがある
+	 * 一覧を渡した後に、ほかの人が消したり名前を変えたりしていることがある。
+	 * ファイル(スクリプトなど)が付いたスキルは、ファイルをサンドボックスの /mnt/session/uploads/skills/<名前>/ に置き、
+	 * 本文の ${CLAUDE_SKILL_DIR}(Claude Codeでスキルのフォルダを指す書き方)を、その場所に置き換えて返す
 	 */
 	private async readSkill(
+		client: Anthropic,
+		sessionId: string,
 		toolName: string,
 		input: Record<string, unknown>,
 	): Promise<{ text: string; error: boolean }> {
@@ -1493,10 +1531,67 @@ export class SessionRelay {
 				error: true,
 			};
 		}
+		const intro = `スキル「${skill.name}」の本文です。この手順に従ってください。`;
+		if (skill.fileCount === 0) {
+			return { text: `${intro}\n\n${skill.body}`, error: false };
+		}
+		const directory = `${UPLOADS_DIR}/${SKILLS_MOUNT_DIR}/${skill.name}`;
+		try {
+			await this.mountSkillFiles(client, sessionId, skill);
+		} catch (error) {
+			log("skill_mount_failed", this.state, error);
+			return {
+				text: `スキル「${skill.name}」のファイルを、サンドボックスに置けませんでした。`,
+				error: true,
+			};
+		}
+		const body = skill.body.replaceAll(SKILL_DIR_VARIABLE, directory);
 		return {
-			text: `スキル「${skill.name}」の本文です。この手順に従ってください。\n\n${skill.body}`,
+			text: `${intro}このスキルのファイルは ${directory}/ に置いてあります(読み取り専用。書き換えるときは /workspace に写してから使ってください)。\n\n${body}`,
 			error: false,
 		};
+	}
+
+	/**
+	 * スキルのファイルを、本人のAnthropicのアカウントに上げて、サンドボックスに置く(添付ファイルと同じ)。
+	 * このセッションで置いたファイルは、置き直さない(途中で失敗したら、次に読んだときに残りを置く)
+	 */
+	private async mountSkillFiles(
+		client: Anthropic,
+		sessionId: string,
+		skill: AgentSkillContent,
+	): Promise<void> {
+		const { state } = this;
+		const directory = `/${SKILLS_MOUNT_DIR}/${skill.name}/`;
+		// すべて置いてあれば、ファイルの中身(1つのスキルで5MBまで)をD1から読まない
+		const mounted = state.mountedSkillFiles.filter((path) =>
+			path.startsWith(directory),
+		);
+		if (mounted.length >= skill.fileCount) {
+			return;
+		}
+		const files = await this.deps.readSkillFiles(skill.id);
+		for (const file of files) {
+			const mountPath = `${directory}${file.path}`;
+			if (state.mountedSkillFiles.includes(mountPath)) {
+				continue;
+			}
+			const uploaded = await client.files.upload({
+				file: await toFile(file.content, file.path.split("/").at(-1)),
+			});
+			const resource = await client.beta.sessions.resources.add(sessionId, {
+				type: "file",
+				file_id: uploaded.id,
+				mount_path: mountPath,
+			});
+			state.mountedSkillFiles.push(mountPath);
+			// 置いたファイルは、セッション用の写しになるので、上げた元のファイルは消す
+			if (resource.file_id !== uploaded.id) {
+				await client.files.delete(uploaded.id).catch((error: unknown) => {
+					log("upload_cleanup_failed", state, error);
+				});
+			}
+		}
 	}
 
 	/**
