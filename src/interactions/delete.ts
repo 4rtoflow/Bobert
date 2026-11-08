@@ -1,11 +1,13 @@
 import type { APIInteractionResponse } from "discord-api-types/v10";
 import { agentClient, retireAgentResources } from "../agent/managed";
+import { deleteAgentVault } from "../agent/secrets";
 import {
 	type AgentChannel,
 	type AgentResources,
 	agentChannelsOf,
 	deleteAgentRecordsOf,
 	getAgentResources,
+	getAgentVault,
 } from "../agent/store";
 import { agentSessionStub, gatewayStub } from "../agent/stubs";
 import { DELETE_AGENTS_NOTE, DELETE_GITHUB_NOTE } from "../agent/texts";
@@ -82,7 +84,9 @@ export async function confirmDelete(
 ): Promise<APIInteractionResponse> {
 	const channels = await agentChannelsOf(env.DB, userId);
 	const resources = await getAgentResources(env.DB, userId);
-	const hasAgents = channels.length > 0 || resources !== null;
+	const vaultId = await getAgentVault(env.DB, userId);
+	const hasAgents =
+		channels.length > 0 || resources !== null || vaultId !== null;
 	const credential = hasAgents
 		? await loadCredential(env, userId, "anthropic")
 		: null;
@@ -92,7 +96,9 @@ export async function confirmDelete(
 	await deleteUserMemory(env.DB, userId);
 	logEvent("interactions", "user_data_deleted", { userId });
 	if (hasAgents) {
-		ctx.waitUntil(removeAgents(env, userId, channels, resources, credential));
+		ctx.waitUntil(
+			removeAgents(env, userId, channels, resources, vaultId, credential),
+		);
 	}
 	if (github !== null) {
 		ctx.waitUntil(revokeGitHubAuthorization(env, userId, github));
@@ -108,7 +114,7 @@ export async function confirmDelete(
 }
 
 /**
- * 本人のエージェントのセッションとチャンネルを消し、本人のアカウントに作った環境を消して、エージェントの設定をアーカイブする。
+ * 本人のエージェントのセッションとチャンネルを消し、本人のアカウントに作った環境と、秘密を預けたvaultを消して、エージェントの設定をアーカイブする。
  * 失敗しても、キーと設定はもう消してあるので、記録を残すだけにする
  */
 async function removeAgents(
@@ -116,6 +122,7 @@ async function removeAgents(
 	userId: string,
 	channels: readonly AgentChannel[],
 	resources: AgentResources | null,
+	vaultId: string | null,
 	credential: AnthropicCredential | null,
 ): Promise<void> {
 	for (const channel of channels) {
@@ -128,6 +135,17 @@ async function removeAgents(
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
+	}
+	// エージェントに渡す秘密は、vaultごと消す
+	if (vaultId !== null && credential !== null) {
+		await deleteAgentVault(agentClient(credential), vaultId).catch(
+			(error: unknown) => {
+				logEvent("agent", "vault_cleanup_failed", {
+					userId,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			},
+		);
 	}
 	if (resources !== null && credential !== null) {
 		await retireAgentResources(agentClient(credential), resources).catch(

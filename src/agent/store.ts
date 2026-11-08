@@ -3,6 +3,7 @@
  * - agent_users: 利用者ごとに、本人のAnthropicのアカウントに作ったエージェントの設定と環境
  * - agent_channels: エージェントのチャンネル(セッションを終えても、チャンネルを消すまで残す)
  * - agent_counters: 人ごと・サーバーごとの、チャンネルの番号
+ * - agent_vaults: 利用者ごとに、本人のアカウントに作った、エージェントに渡す秘密のvault
  */
 
 /** 本人のAnthropicのアカウントに作った、Managed Agentsのエージェントの設定と環境 */
@@ -271,5 +272,33 @@ export async function deleteAgentRecordsOf(
 		db.prepare("DELETE FROM agent_channels WHERE owner_id = ?").bind(userId),
 		db.prepare("DELETE FROM agent_users WHERE user_id = ?").bind(userId),
 		db.prepare("DELETE FROM agent_counters WHERE user_id = ?").bind(userId),
+		db.prepare("DELETE FROM agent_vaults WHERE user_id = ?").bind(userId),
 	]);
+}
+
+/** 本人のアカウントに作った、エージェントに渡す秘密のvault。なければnull */
+export async function getAgentVault(
+	db: D1Database,
+	userId: string,
+): Promise<string | null> {
+	const row = await db
+		.prepare("SELECT vault_id FROM agent_vaults WHERE user_id = ?")
+		.bind(userId)
+		.first<{ vault_id: string }>();
+	return row?.vault_id ?? null;
+}
+
+export async function saveAgentVault(
+	db: D1Database,
+	userId: string,
+	vaultId: string,
+	now = Date.now(),
+): Promise<void> {
+	await db
+		.prepare(
+			`INSERT INTO agent_vaults (user_id, vault_id, created_at) VALUES (?, ?, ?)
+			ON CONFLICT (user_id) DO UPDATE SET vault_id = excluded.vault_id, created_at = excluded.created_at`,
+		)
+		.bind(userId, vaultId, now)
+		.run();
 }

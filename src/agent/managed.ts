@@ -17,6 +17,7 @@ import {
 } from "../respond/model";
 import { describeLlmError } from "../respond/replies";
 import type { UserSettings } from "../store/users";
+import type { AgentSecret } from "./secrets";
 import {
 	type AgentResources,
 	getAgentResources,
@@ -317,12 +318,16 @@ export interface AgentSkill {
 export function sessionConfig(
 	skills: readonly AgentSkill[],
 	repository: SessionRepository | null = null,
+	secrets: readonly AgentSecret[] = [],
 ): {
 	system: string;
 	tools: AgentTool[];
 	skills: Anthropic.Beta.Agents.BetaManagedAgentsSkillParams[];
 } {
-	const system = agentSystemPrompt(repository);
+	const system = [
+		agentSystemPrompt(repository),
+		...(secrets.length === 0 ? [] : ["", secretListText(secrets)]),
+	].join("\n");
 	const tools = [
 		...AGENT_TOOLS,
 		...(repository === null
@@ -360,6 +365,17 @@ export function sessionConfig(
 		],
 		skills: DOCUMENT_SKILLS,
 	};
+}
+
+/** 本人が預けた秘密があるときに、共通の指示の後ろに足す前置き(値は渡さない) */
+export const AGENT_SECRET_LIST_INTRO =
+	"次の環境変数に、利用者が登録した秘密が入っています。値はダミーの文字列で、書かれたホストへ送るリクエストのヘッダーに入れたときだけ、本物に差し替わります。値を表示したり、ほかの場所へ送ったりしないでください。";
+
+function secretListText(secrets: readonly AgentSecret[]): string {
+	return [
+		AGENT_SECRET_LIST_INTRO,
+		...secrets.map((secret) => `- \`${secret.name}\`: ${secret.url}`),
+	].join("\n");
 }
 
 /** エージェントの設定と環境の名前。本人がClaude Consoleで見て、Bobertが作ったものだと分かるようにする */
@@ -417,6 +433,8 @@ export interface SessionPlan {
 	skills: readonly AgentSkill[];
 	/** つなぐGitHubのリポジトリと、本人のトークン。つながなければnull */
 	repository: (SessionRepository & { token: string }) | null;
+	/** つなぐvaultと、そこにある本人の秘密(指示に名前と送り先を書く)。秘密がなければnull */
+	vault?: { vaultId: string; secrets: readonly AgentSecret[] } | null;
 }
 
 /** 始めたセッション */
@@ -439,7 +457,8 @@ export async function startSession(
 ): Promise<StartedSession> {
 	let resources = await getAgentResources(db, userId);
 	const { repository } = plan;
-	const config = sessionConfig(plan.skills, repository);
+	const vault = plan.vault ?? null;
+	const config = sessionConfig(plan.skills, repository, vault?.secrets ?? []);
 	for (let attempt = 0; ; attempt++) {
 		if (resources === null) {
 			resources = await createAgentResources(client, plan.model.id);
@@ -455,6 +474,7 @@ export async function startSession(
 				},
 				environment_id: resources.environmentId,
 				title: plan.title,
+				...(vault === null ? {} : { vault_ids: [vault.vaultId] }),
 				...(repository === null
 					? {}
 					: {
