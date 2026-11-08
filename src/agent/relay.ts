@@ -130,6 +130,8 @@ export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 /** 添付ファイルを置く場所と、エージェントがファイルを出すときに置く場所(Managed Agentsの決まり) */
 const UPLOADS_DIR = "/mnt/session/uploads";
+/** スキルのファイルを、同時にいくつ置くか */
+const MOUNT_CONCURRENCY = 6;
 /** スキルのファイルを置く、UPLOADS_DIRの下のフォルダ(発言ごとのフォルダは、発言のIDなので重ならない) */
 const SKILLS_MOUNT_DIR = "skills";
 /** Claude Codeで、スキルのフォルダを指す書き方。サンドボックスに置いた場所に置き換える */
@@ -1563,34 +1565,60 @@ export class SessionRelay {
 	): Promise<void> {
 		const { state } = this;
 		const directory = `/${SKILLS_MOUNT_DIR}/${skill.name}/`;
-		// すべて置いてあれば、ファイルの中身(1つのスキルで5MBまで)をD1から読まない
+		// すべて置いてあれば、ファイルの中身(1つのスキルで10MBまで)をD1から読まない
 		const mounted = state.mountedSkillFiles.filter((path) =>
 			path.startsWith(directory),
 		);
 		if (mounted.length >= skill.fileCount) {
 			return;
 		}
-		const files = await this.deps.readSkillFiles(skill.id);
-		for (const file of files) {
-			const mountPath = `${directory}${file.path}`;
-			if (state.mountedSkillFiles.includes(mountPath)) {
-				continue;
+		const files = (await this.deps.readSkillFiles(skill.id)).filter(
+			(file) => !state.mountedSkillFiles.includes(`${directory}${file.path}`),
+		);
+		// ファイルが多いスキル(200個まで)でも待たせすぎないよう、いくつかずつ同時に置く。
+		// 置けた分は覚えておき、失敗したら、ほかの分が終わるのを待ってから知らせる
+		for (let start = 0; start < files.length; start += MOUNT_CONCURRENCY) {
+			const results = await Promise.allSettled(
+				files
+					.slice(start, start + MOUNT_CONCURRENCY)
+					.map((file) =>
+						this.mountSkillFile(
+							client,
+							sessionId,
+							`${directory}${file.path}`,
+							file,
+						),
+					),
+			);
+			const failed = results.find((result) => result.status === "rejected");
+			if (failed !== undefined) {
+				throw failed.reason;
 			}
-			const uploaded = await client.files.upload({
-				file: await toFile(file.content, file.path.split("/").at(-1)),
+		}
+	}
+
+	/** スキルのファイルを1つ、本人のAnthropicのアカウントに上げて、サンドボックスに置く */
+	private async mountSkillFile(
+		client: Anthropic,
+		sessionId: string,
+		mountPath: string,
+		file: { path: string; content: Uint8Array },
+	): Promise<void> {
+		const { state } = this;
+		const uploaded = await client.files.upload({
+			file: await toFile(file.content, file.path.split("/").at(-1)),
+		});
+		const resource = await client.beta.sessions.resources.add(sessionId, {
+			type: "file",
+			file_id: uploaded.id,
+			mount_path: mountPath,
+		});
+		state.mountedSkillFiles.push(mountPath);
+		// 置いたファイルは、セッション用の写しになるので、上げた元のファイルは消す
+		if (resource.file_id !== uploaded.id) {
+			await client.files.delete(uploaded.id).catch((error: unknown) => {
+				log("upload_cleanup_failed", state, error);
 			});
-			const resource = await client.beta.sessions.resources.add(sessionId, {
-				type: "file",
-				file_id: uploaded.id,
-				mount_path: mountPath,
-			});
-			state.mountedSkillFiles.push(mountPath);
-			// 置いたファイルは、セッション用の写しになるので、上げた元のファイルは消す
-			if (resource.file_id !== uploaded.id) {
-				await client.files.delete(uploaded.id).catch((error: unknown) => {
-					log("upload_cleanup_failed", state, error);
-				});
-			}
 		}
 	}
 

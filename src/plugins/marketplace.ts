@@ -62,9 +62,9 @@ const MAX_EXTRACTED_BYTES = 300 * 1024 * 1024;
 /** 一覧(marketplace.json)とSKILL.mdの大きさの上限 */
 export const MAX_TEXT_BYTES = 1024 * 1024;
 /** 1つのスキルに付けられるファイルの数と大きさ(SKILL.mdは数えない) */
-export const MAX_SKILL_FILES = 50;
+export const MAX_SKILL_FILES = 200;
 export const MAX_SKILL_FILE_BYTES = 1024 * 1024;
-export const MAX_SKILL_FILES_BYTES = 5 * 1024 * 1024;
+export const MAX_SKILL_FILES_BYTES = 10 * 1024 * 1024;
 
 const MARKETPLACE_PATH = ".claude-plugin/marketplace.json";
 const SKILL_FILE_NAME = "SKILL.md";
