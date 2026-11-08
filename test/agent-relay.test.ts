@@ -962,6 +962,38 @@ describe("スキル", () => {
 		});
 	});
 
+	it("ファイルが多くても、6つずつ同時に置き、すべて置く", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, upload, add } = fakeFileClient();
+		let inFlight = 0;
+		let most = 0;
+		upload.mockImplementation(async () => {
+			inFlight++;
+			most = Math.max(most, inFlight);
+			await new Promise((resolve) => setTimeout(resolve, 1));
+			inFlight--;
+			return { id: "file_up" };
+		});
+		const files = Array.from({ length: 13 }, (_, index) => ({
+			path: `rules/${String(index).padStart(2, "0")}.md`,
+			content: new Uint8Array([index]),
+		}));
+		const { relay } = relayOf(state, discord, client, {
+			readSkill: async () => ({ ...NAKAMABA, fileCount: files.length }),
+			readSkillFiles: async () => files,
+		});
+
+		await relay.handle(readSkillCall());
+
+		expect(upload).toHaveBeenCalledTimes(13);
+		expect(add).toHaveBeenCalledTimes(13);
+		expect(most).toBe(6);
+		expect([...state.mountedSkillFiles].sort()).toEqual(
+			files.map((file) => `/skills/nakamaba/${file.path}`),
+		);
+	});
+
 	it("同じセッションで読み直しても、置いたファイルは置き直さない(ファイルの中身も読み直さない)", async () => {
 		const state = newState();
 		const { discord } = fakeDiscord();

@@ -42,7 +42,12 @@ import {
 } from "./bobert-md";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
 import { KNOWLEDGE_CHANNEL_TYPES } from "./knowledge";
-import { SKILLS_COMMAND_NAME, SKILLS_FILE_OPTION } from "./skills";
+import {
+	SKILLS_COMMAND_NAME,
+	SKILLS_FILE_OPTION,
+	SKILLS_SKILL_OPTION,
+	SKILLS_SOURCE_OPTION,
+} from "./skills";
 
 /** サーバー内だけで使えるコマンドにする。DMでの会話は後回しにしているため */
 const GUILD_ONLY = {
@@ -105,6 +110,22 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 				name: SKILLS_FILE_OPTION,
 				description: "追加するSKILL.md。添付しなければ、一覧を出す",
 				required: false,
+			},
+			{
+				type: ApplicationCommandOptionType.String,
+				name: SKILLS_SOURCE_OPTION,
+				description:
+					"スキルを配っているGitHubのリポジトリ(例: vercel-labs/agent-skills)。npx skills add と同じ指定",
+				required: false,
+				max_length: 300,
+			},
+			{
+				type: ApplicationCommandOptionType.String,
+				name: SKILLS_SKILL_OPTION,
+				description:
+					"入れるスキルの名前(例: web-design-guidelines)。省くと、見つかったスキルから選ぶ",
+				required: false,
+				max_length: 100,
 			},
 		],
 	},
