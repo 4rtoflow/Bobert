@@ -33,6 +33,10 @@ import {
 } from "../memory/texts";
 import { COMPACT_COMMAND_NAME } from "../respond/compact-button";
 import {
+	AGENT_SECRETS_COMMAND_DESCRIPTION,
+	AGENT_SECRETS_COMMAND_NAME,
+} from "./agent-secrets";
+import {
 	BOBERTMD_COMMAND_DESCRIPTION,
 	BOBERTMD_COMMAND_NAME,
 } from "./bobert-md";
@@ -162,6 +166,11 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 		...GUILD_ONLY,
 		name: ENDAGENT_COMMAND_NAME,
 		description: ENDAGENT_COMMAND_DESCRIPTION,
+	},
+	{
+		...GUILD_ONLY,
+		name: AGENT_SECRETS_COMMAND_NAME,
+		description: AGENT_SECRETS_COMMAND_DESCRIPTION,
 	},
 	{
 		...GUILD_ONLY,

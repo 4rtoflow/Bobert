@@ -73,6 +73,7 @@ import {
 	repositorySelectMessage,
 	startWithoutRepositoryRow,
 } from "./repository-menu";
+import { vaultForSession } from "./secrets";
 import type { EndResult } from "./session-object";
 import {
 	type AgentChannel,
@@ -260,8 +261,11 @@ async function startAgent(
 	let repositoryResourceId: string | null;
 	try {
 		const skills = await listSkills(db, guildId);
+		// 本人が預けた秘密があれば、そのvaultをつなぐ(vaultはセッションを作るときにしかつなげない)
+		const vault = await vaultForSession(db, user.id, client);
 		const started = await startSession(db, user.id, client, {
 			skills,
+			vault,
 			model,
 			effort,
 			title: `#${name}`,

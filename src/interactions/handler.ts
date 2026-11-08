@@ -32,6 +32,13 @@ import {
 	COMPACT_COMMAND_NAME,
 } from "../respond/compact-button";
 import {
+	AGENT_SECRETS_COMMAND_NAME,
+	AGENT_SECRETS_ID_PREFIX,
+	agentSecretsCommand,
+	agentSecretsComponent,
+	submitAgentSecretModal,
+} from "./agent-secrets";
+import {
 	BOBERTMD_COMMAND_NAME,
 	BOBERTMD_MODAL_PREFIX,
 	bobertmdCommand,
@@ -250,6 +257,17 @@ async function route(
 					user.id,
 				);
 			}
+			if (
+				interaction.data.type === ApplicationCommandType.ChatInput &&
+				interaction.data.name === AGENT_SECRETS_COMMAND_NAME
+			) {
+				return agentSecretsCommand(
+					interaction as APIChatInputApplicationCommandInteraction,
+					env,
+					ctx,
+					user.id,
+				);
+			}
 			if (interaction.data.name === "delete") {
 				return deleteCommand(env, user.id);
 			}
@@ -314,6 +332,17 @@ async function route(
 					return response;
 				}
 			}
+			if (interaction.data.custom_id.startsWith(AGENT_SECRETS_ID_PREFIX)) {
+				const response = await agentSecretsComponent(
+					interaction,
+					env,
+					ctx,
+					user.id,
+				);
+				if (response) {
+					return response;
+				}
+			}
 			if (interaction.data.custom_id.startsWith(SKILLS_ID_PREFIX) && guildId) {
 				const response = await skillComponent(
 					interaction,
@@ -370,6 +399,17 @@ async function route(
 				guildId
 			) {
 				return submitBobertMd(interaction, env, ctx, guildId, actor);
+			}
+			if (interaction.data.custom_id.startsWith(AGENT_SECRETS_ID_PREFIX)) {
+				const response = await submitAgentSecretModal(
+					interaction,
+					env,
+					ctx,
+					user.id,
+				);
+				if (response) {
+					return response;
+				}
 			}
 			if (interaction.data.custom_id.startsWith(SKILLS_ID_PREFIX) && guildId) {
 				const response = await submitSkillModal(
