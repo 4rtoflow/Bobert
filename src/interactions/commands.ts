@@ -42,13 +42,7 @@ import {
 } from "./bobert-md";
 import { EXPLAIN_COMMAND_NAME } from "./explain";
 import { KNOWLEDGE_CHANNEL_TYPES } from "./knowledge";
-import {
-	REGSKILLS_COMMAND_NAME,
-	REGSKILLS_FILE_OPTION,
-	REGSKILLS_MARKETPLACE_OPTION,
-	REGSKILLS_PLUGIN_OPTION,
-	SKILLS_COMMAND_NAME,
-} from "./skills";
+import { SKILLS_COMMAND_NAME, SKILLS_FILE_OPTION } from "./skills";
 
 /** サーバー内だけで使えるコマンドにする。DMでの会話は後回しにしているため */
 const GUILD_ONLY = {
@@ -103,39 +97,16 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 	},
 	{
 		...GUILD_ONLY,
-		name: REGSKILLS_COMMAND_NAME,
-		description:
-			"スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書くか、プラグインから入れる",
+		name: SKILLS_COMMAND_NAME,
+		description: "このサーバーでAIが使うスキル(手順や知識)の一覧・追加・編集",
 		options: [
 			{
 				type: ApplicationCommandOptionType.Attachment,
-				name: REGSKILLS_FILE_OPTION,
-				description:
-					"登録するSKILL.md。添付しなければ、入力画面で名前・説明・本文を書く",
+				name: SKILLS_FILE_OPTION,
+				description: "追加するSKILL.md。添付しなければ、一覧を出す",
 				required: false,
-			},
-			{
-				type: ApplicationCommandOptionType.String,
-				name: REGSKILLS_PLUGIN_OPTION,
-				description:
-					"プラグインから入れるときの、プラグインの名前(例: nakamaba)",
-				required: false,
-				max_length: 100,
-			},
-			{
-				type: ApplicationCommandOptionType.String,
-				name: REGSKILLS_MARKETPLACE_OPTION,
-				description:
-					"プラグインを配っているGitHubのリポジトリ(例: 4rtoflow/Nakamaba)",
-				required: false,
-				max_length: 200,
 			},
 		],
-	},
-	{
-		...GUILD_ONLY,
-		name: SKILLS_COMMAND_NAME,
-		description: "このサーバーでAIが使うスキル(手順や知識)の一覧と編集",
 	},
 	{
 		...GUILD_ONLY,

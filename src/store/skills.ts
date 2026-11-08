@@ -414,7 +414,7 @@ function bytesOf(value: ArrayBuffer | ArrayLike<number>): Uint8Array {
 export type OverwriteSkillResult = "saved" | "added" | "limit";
 
 /**
- * 名前で、スキルの説明と本文を置き換える(/regskills で、置き換えると確かめたとき)。
+ * 名前で、スキルの説明と本文を置き換える(/skills で、置き換えると確かめたとき)。
  * 確かめている間に消されていたら、新しく足す(数の上限は確かめる)
  */
 export async function overwriteSkill(
