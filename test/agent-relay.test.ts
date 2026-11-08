@@ -126,6 +126,7 @@ function relayOf(
 		transcribe: async () => ({ text: "", language: null }),
 		uploadLimit: async () => 10 * 1024 * 1024,
 		readSkill: async () => null,
+		readSkillFiles: async () => [],
 		github: fakeGitHub(),
 		sleep: async () => {},
 		now: () => 1_000,
@@ -827,7 +828,12 @@ describe("スキル", () => {
 		const { relay } = relayOf(state, discord, client, {
 			readSkill: async (name) =>
 				name === "meeting-notes"
-					? { name, body: "決まったことと宿題に分けて書く" }
+					? {
+							id: 1,
+							name,
+							body: "決まったことと宿題に分けて書く",
+							fileCount: 0,
+						}
 					: null,
 		});
 		const call = event({
@@ -882,6 +888,142 @@ describe("スキル", () => {
 					is_error: true,
 				}),
 			],
+		});
+	});
+
+	/** ファイルが付いたスキル(Claude Codeのプラグインから入れたもの)。本文は、スキルのフォルダを${CLAUDE_SKILL_DIR}で指す */
+	const NAKAMABA = {
+		id: 7,
+		name: "nakamaba",
+		body: ["node ", "$", "{CLAUDE_SKILL_DIR}/scripts/nakamaba.mjs list"].join(
+			"",
+		),
+		fileCount: 2,
+	};
+	const NAKAMABA_FILES = [
+		{ path: "scripts/nakamaba.mjs", content: new Uint8Array([1, 2]) },
+		{ path: "templates/page.html", content: new Uint8Array([3]) },
+	];
+
+	function readSkillCall(name = "nakamaba") {
+		return event({
+			type: "agent.custom_tool_use",
+			name: "read_skill",
+			input: { name },
+		});
+	}
+
+	it("ファイルが付いたスキルは、ファイルをサンドボックスに置き、本文のスキルのフォルダを置き場所に置き換えて返す", async () => {
+		const state = newState();
+		const { discord, posts } = fakeDiscord();
+		const { client, send, upload, add, remove } = fakeFileClient();
+		const readSkillFiles = vi.fn(async () => NAKAMABA_FILES);
+		const { relay } = relayOf(state, discord, client, {
+			readSkill: async (name) => (name === "nakamaba" ? NAKAMABA : null),
+			readSkillFiles,
+		});
+		const call = readSkillCall();
+
+		await relay.handle(call);
+
+		expect(posts[0]?.content).toBe("-# スキルを読む: nakamaba");
+		expect(readSkillFiles).toHaveBeenCalledWith(7);
+		expect(upload).toHaveBeenCalledTimes(2);
+		expect(add).toHaveBeenNthCalledWith(1, "sesn_1", {
+			type: "file",
+			file_id: "file_up",
+			mount_path: "/skills/nakamaba/scripts/nakamaba.mjs",
+		});
+		expect(add).toHaveBeenNthCalledWith(2, "sesn_1", {
+			type: "file",
+			file_id: "file_up",
+			mount_path: "/skills/nakamaba/templates/page.html",
+		});
+		// 置いたファイルはセッション用の写しなので、上げた元のファイルは消す
+		expect(remove).toHaveBeenCalledTimes(2);
+		expect(state.mountedSkillFiles).toEqual([
+			"/skills/nakamaba/scripts/nakamaba.mjs",
+			"/skills/nakamaba/templates/page.html",
+		]);
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				{
+					type: "user.custom_tool_result",
+					custom_tool_use_id: (call as { id: string }).id,
+					content: [
+						{
+							type: "text",
+							text: "スキル「nakamaba」の本文です。この手順に従ってください。このスキルのファイルは /mnt/session/uploads/skills/nakamaba/ に置いてあります(読み取り専用。書き換えるときは /workspace に写してから使ってください)。\n\nnode /mnt/session/uploads/skills/nakamaba/scripts/nakamaba.mjs list",
+						},
+					],
+					is_error: false,
+				},
+			],
+		});
+	});
+
+	it("同じセッションで読み直しても、置いたファイルは置き直さない(ファイルの中身も読み直さない)", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, send, upload } = fakeFileClient();
+		const readSkillFiles = vi.fn(async () => NAKAMABA_FILES);
+		const { relay } = relayOf(state, discord, client, {
+			readSkill: async () => NAKAMABA,
+			readSkillFiles,
+		});
+
+		await relay.handle(readSkillCall());
+		await relay.handle(readSkillCall());
+
+		expect(upload).toHaveBeenCalledTimes(2);
+		expect(readSkillFiles).toHaveBeenCalledTimes(1);
+		expect(send).toHaveBeenLastCalledWith("sesn_1", {
+			events: [expect.objectContaining({ is_error: false })],
+		});
+	});
+
+	it("ファイルを置けなかったら、置けなかったことをエージェントに返し、次に読んだときに残りを置く", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, send, upload, add } = fakeFileClient();
+		upload
+			.mockResolvedValueOnce({ id: "file_up" })
+			.mockRejectedValueOnce(new Error("upload failed"));
+		const { relay } = relayOf(state, discord, client, {
+			readSkill: async () => NAKAMABA,
+			readSkillFiles: async () => NAKAMABA_FILES,
+		});
+
+		await relay.handle(readSkillCall());
+
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				expect.objectContaining({
+					content: [
+						{
+							type: "text",
+							text: "スキル「nakamaba」のファイルを、サンドボックスに置けませんでした。",
+						},
+					],
+					is_error: true,
+				}),
+			],
+		});
+		expect(state.mountedSkillFiles).toEqual([
+			"/skills/nakamaba/scripts/nakamaba.mjs",
+		]);
+
+		await relay.handle(readSkillCall());
+
+		// 置けていなかった2つ目だけを置く
+		expect(add).toHaveBeenCalledTimes(2);
+		expect(add).toHaveBeenLastCalledWith("sesn_1", {
+			type: "file",
+			file_id: "file_up",
+			mount_path: "/skills/nakamaba/templates/page.html",
+		});
+		expect(send).toHaveBeenLastCalledWith("sesn_1", {
+			events: [expect.objectContaining({ is_error: false })],
 		});
 	});
 });

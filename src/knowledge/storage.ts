@@ -1,12 +1,22 @@
 import type { ForgottenKnowledgeFile } from "../store/knowledge";
+import { deleteKnowledgeVectors } from "./vectors";
 
 /**
- * 知識のファイルのうち、D1の外(R2)に置くもの(仕様: docs/spec/architecture.md「知識チャンネル」)。
- * PowerPointをPDFにしたものを置き、AIがPDFのまま読むときに渡す。ほかの形式は、元のファイルをDiscordのURLで渡すので置かない
+ * 知識のファイルのうち、D1の外に置くもの(仕様: docs/spec/architecture.md「知識チャンネル」)。
+ * R2には、PowerPointをPDFにしたものを置き、AIがPDFのまま読むときに渡す(ほかの形式は、元のファイルをDiscordのURLで渡す)。
+ * Vectorizeには、中を探すためのベクトルを入れる(src/knowledge/vectors.ts)
  */
 
 /** 知識のファイルを置くR2のバケット。テストでは偽物に差し替える */
 export type KnowledgeFilesBucket = Pick<R2Bucket, "get" | "put" | "delete">;
+
+/** 知識のファイルを消すときに、一緒に消すものの置き場所 */
+export interface KnowledgeStorage {
+	/** PowerPointをPDFにしたもの(R2) */
+	knowledgeFiles: Pick<R2Bucket, "delete">;
+	/** 中を探すためのベクトル(Vectorize) */
+	vectors: { deleteByIds(ids: string[]): Promise<unknown> };
+}
 
 /**
  * AIにPDFのまま渡す大きさの上限。DiscordのURLがないので、中身をbase64にして渡す(約1.33倍になる)。
@@ -34,19 +44,20 @@ export async function saveKnowledgePdf(
 }
 
 /**
- * 消したか、知識に加えないことにしたファイルの、R2に置いたもの(PowerPointをPDFにしたもの)を消す。
+ * 消したか、知識に加えないことにしたファイルの、D1の外に置いたもの(R2のPDFと、Vectorizeのベクトル)を消す。
  * ないものを消しても、失敗にはならない
  */
 export async function forgetKnowledgeFiles(
-	bucket: Pick<R2Bucket, "delete">,
+	storage: KnowledgeStorage,
 	files: readonly ForgottenKnowledgeFile[],
 ): Promise<void> {
 	const keys = files
 		.filter((file) => file.format === "pptx")
 		.map((file) => knowledgePdfKey(file.id));
 	for (let i = 0; i < keys.length; i += MAX_DELETE_KEYS) {
-		await bucket.delete(keys.slice(i, i + MAX_DELETE_KEYS));
+		await storage.knowledgeFiles.delete(keys.slice(i, i + MAX_DELETE_KEYS));
 	}
+	await deleteKnowledgeVectors(storage.vectors, files);
 }
 
 /**

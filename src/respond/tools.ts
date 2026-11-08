@@ -640,9 +640,10 @@ export function readSkillTool(
 			}
 			reads.calls++;
 			const name = typeof input.name === "string" ? input.name.trim() : "";
-			// 一覧を渡した後に、ほかの人が消したり名前を変えたりしていることがある
+			// 一覧を渡した後に、ほかの人が消したり名前を変えたりしていることがある。
+			// ファイルが付いたスキルは、エージェントだけで使うので、ここでは読ませない(一覧にも入れていない)
 			const skill = await findSkillByName(db, guildId, name);
-			if (skill === null) {
+			if (skill === null || skill.fileCount > 0) {
 				return `「${name}」というスキルはありません。一覧にある名前で指定してください。`;
 			}
 			if (!reads.names.includes(skill.name)) {

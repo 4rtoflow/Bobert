@@ -18,7 +18,7 @@ import {
 import { prepareGitHubWrite, runGitHubRead } from "../github/operations";
 import type { AnthropicCredential } from "../llm/anthropic";
 import { logEvent } from "../log";
-import { findSkillByName } from "../store/skills";
+import { findSkillByName, listSkillFiles } from "../store/skills";
 import { loadCredential } from "../store/users";
 import { transcribeAudio } from "../voice/voice";
 import { agentClient, deleteSession } from "./managed";
@@ -464,6 +464,8 @@ export class AgentSession extends DurableObject<Env> {
 				}
 				return skill;
 			},
+			readSkillFiles: (skillId) =>
+				listSkillFiles(this.env.DB, state.guildId, skillId),
 			github: {
 				findRepository: (fullName, minValidityMs) =>
 					findAllowedRepository(

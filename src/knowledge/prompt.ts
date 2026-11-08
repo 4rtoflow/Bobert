@@ -5,7 +5,10 @@ import {
 	listReadyKnowledgeFiles,
 } from "../store/knowledge";
 import { loadMemberNames } from "../store/messages";
-import { KNOWLEDGE_LIST_INTRO } from "./texts";
+import {
+	KNOWLEDGE_LIST_INTRO,
+	SEARCH_KNOWLEDGE_FILES_TOOL_NAME,
+} from "./texts";
 
 /**
  * AIへの指示に入れる、知識のファイルの一覧(仕様: docs/spec/architecture.md「知識チャンネル」)。
@@ -39,6 +42,27 @@ export async function loadKnowledgeList(
 	if (files.length === 0) {
 		return null;
 	}
+	const names = await loadKnowledgeNames(db, guildId, files);
+	return {
+		block: knowledgeListBlock(files, names.channel, names.author, total),
+		listed: files.length,
+	};
+}
+
+/** 知識のファイルの、チャンネルの名前と、送った人の名前の読み方 */
+export interface KnowledgeNames {
+	/** チャンネルの今の名前。分からなければnull */
+	channel: (channelId: string) => string | null;
+	/** 送った人の、最後に分かった名前(なければ、送ったときの名前) */
+	author: (file: KnowledgeFile) => string;
+}
+
+/** ファイルのチャンネルと、送った人の名前を読む */
+export async function loadKnowledgeNames(
+	db: D1Database,
+	guildId: string,
+	files: readonly KnowledgeFile[],
+): Promise<KnowledgeNames> {
 	const channels = await loadChannels(db, [
 		...new Set(files.map((file) => file.channelId)),
 	]);
@@ -46,14 +70,18 @@ export async function loadKnowledgeList(
 		...new Set(files.map((file) => file.authorId)),
 	]);
 	return {
-		block: knowledgeListBlock(
-			files,
-			(channelId) => channels.get(channelId)?.name ?? null,
-			(file) => names.get(file.authorId) ?? file.authorName,
-			total,
-		),
-		listed: files.length,
+		channel: (channelId) => channels.get(channelId)?.name ?? null,
+		author: (file) => names.get(file.authorId) ?? file.authorName,
 	};
+}
+
+/** ファイルの見出し(例: 「k12: #資料「規約.pdf」(2026-11-06、Alice)」)。一覧と、探す道具の結果で使う */
+export function knowledgeFileHeading(
+	file: KnowledgeFile,
+	channelName: (channelId: string) => string | null,
+	authorName: (file: KnowledgeFile) => string,
+): string {
+	return `k${file.id}: #${channelName(file.channelId) ?? "(名前の分からないチャンネル)"}「${file.filename}」(${formatJstDate(file.postedAt)}、${authorName(file)})`;
 }
 
 /**
@@ -72,12 +100,12 @@ export function knowledgeListBlock(
 		"<knowledge_files>",
 		...files.map(
 			(file) =>
-				`- k${file.id}: #${channelName(file.channelId) ?? "(名前の分からないチャンネル)"}「${file.filename}」(${formatJstDate(file.postedAt)}、${authorName(file)}) ${file.summary ?? ""}`,
+				`- ${knowledgeFileHeading(file, channelName, authorName)} ${file.summary ?? ""}`,
 		),
 		"</knowledge_files>",
 		...(total > files.length
 			? [
-					`(新しい${files.length}件だけを載せています。ほかに、それより前のファイルが${total - files.length}件あります)`,
+					`(新しい${files.length}件だけを載せています。ほかに、それより前のファイルが${total - files.length}件あります。${SEARCH_KNOWLEDGE_FILES_TOOL_NAME}の道具で探せます)`,
 				]
 			: []),
 	].join("\n");
