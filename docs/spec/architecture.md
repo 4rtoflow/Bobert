@@ -686,12 +686,13 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
   - エージェントが作ったファイルは、Bobertが受け持つ道具(`send_files`)で出す。エージェントは、ファイルを`/mnt/session/outputs/`に置き、名前を指定して呼ぶ。Bobertは、セッションのファイルの一覧(`scope_id`で絞る)から名前で探し、読み出してチャンネルに添付する。置いてから一覧に出るまで数秒かかることがあるので、見つからなければ1.5秒ずつ待って、5回まで読み直す。
   - Bobertが受け持つ道具を呼ぶと、セッションは答えを待って止まる(`requires_action`)。Bobertは、道具の呼び出しを受け取ったときにすぐ答えるので、止まった知らせが届いても、待っているのが答えた道具だけなら、イベントの流れを閉じない。
 - **スキル:** サーバーのスキルは、AnthropicのSkills APIを使わず、Bobertが受け持つ道具(`read_skill`)で渡す。セッションを始めるときに、スキルの名前と説明の一覧を指示に足し、本文は、道具で読まれるたびにD1から返す。Skills APIを使うと、スキルを本人のワークスペースに置くことになり、そのワークスペースのキーを持つ人なら誰でも読んだり消したりできるため。Anthropicが用意した文書のスキル(`xlsx`、`docx`、`pptx`、`pdf`)は、セッションのスキルとして渡す。
-  - **プラグインから入れたスキル:** `/regskills`の`plugin`と`marketplace`で、Claude Codeのプラグインの一覧(GitHubのリポジトリの`.claude-plugin/marketplace.json`)から入れる(画面と文言は[Botの振る舞い](behavior.md)の「スキル」を参照)。
+  - **`npx skills add`と同じ指定から入れたスキル(#107):** `/skills`の`source`と`skill`で、GitHubのリポジトリから入れる(画面と文言は[Botの振る舞い](behavior.md)の「スキル」を参照)。リポジトリは、プラグインと同じくtar.gz(`codeload.github.com`)で読む(`src/plugins/skill-source.ts`)。探す場所は`npx skills`の決まりのうち、根の`SKILL.md`と、`skills/`、`.claude/skills/`、`.agents/skills/`の下(3段まで)。根に`SKILL.md`があるとリポジトリ全体がスキルになるので、読んで残すファイルは合計50MBまでにする(超えたら、大きすぎるとして扱う)。選ぶメニューと置き換えの確認の間は、入手元をD1(`pending_source_skills`)に置き、同じコミットを読み直す。入手元は`skills`の`source_repository`と`source_commit`に入れ、`source_plugin`は空にする。
+  - **プラグイン(#108):** Claude Codeのプラグインは、スキルとは別に`/plugins`で入れる(画面と文言は[Botの振る舞い](behavior.md)の「プラグイン」を参照)。2026-11-07から11-08までは`/regskills`の`plugin`と`marketplace`で、スキルとして入れていた(#100)。下の読み方と上限は、`source`のスキルにも共通する。
     - GitHubのAPIは使わず、リポジトリをtar.gz(`codeload.github.com`)でまとめて読む。認証なしのAPIは1時間60回までで、Workersの出口は多くの利用者で共有するため。tar.gzは流しながら読み、一覧と、プラグインの`skills/`の下のファイルだけを残す。git archiveは名前の順に並ぶので、一覧(`.claude-plugin/`)はふつう先に来る。一覧より前にプラグインのファイルがあったら、同じコミットを読み直す。
-    - コミットは、tar.gzの先頭のpaxのヘッダー(git archiveが入れる`comment`)から読む。置き換えるかを確かめた後は、このコミットを読み直す(確かめたときと同じものを入れるため)。
-    - 上限: tar.gzは30MB(展開して300MB)まで、一覧とSKILL.mdは1MBまで、1つのスキルのファイルは50個・合計5MB・1つ1MBまで。Workersのメモリーと時間に収めるため。上限を超えたかどうかは、流れの途中の印で見分ける(gzipの展開はWorkersの組み込みなので、止めたときのエラーが別のエラーに作り直されるため)。
-    - ファイルは、D1(`skill_files`)に、1ファイル1行で保存する(D1の1行は2MBまで)。入手元は、`skills`の`source_repository`、`source_plugin`、`source_commit`に入れる。プラグインから入れ直したときだけ書き換え、`/skills`の編集やファイルでの置き換えでは変えない。
-    - ファイルが付いたスキルは、エージェントだけで使う。エージェントが`read_skill`で読んだときに、本人のキーでFiles APIに上げ、セッションの資源として`/mnt/session/uploads/skills/<名前>/<位置>`に置く(添付ファイルと同じく、置いたら上げた元のファイルは消す)。上げるのは、読まれたスキルの分だけ。置いた場所はチャンネルの状態(`mountedSkillFiles`)に覚えておき、同じセッションでは置き直さない。
+    - コミットは、tar.gzの先頭のpaxのヘッダー(git archiveが入れる`comment`)から読む。`source`で選ぶメニューや置き換えの確認を出した後は、このコミットを読み直す(確かめたときと同じものを入れるため)。
+    - 上限: tar.gzは30MB(展開して300MB)まで、一覧とSKILL.mdは1MBまで、1つのスキルのファイルは200個・合計10MB・1つ1MBまで(2026-11-08に50個・5MBから上げた。よく使われるスキルにも、ファイルが50個を超えるものがあるため)。Workersのメモリーと時間に収めるため。上限を超えたかどうかは、流れの途中の印で見分ける(gzipの展開はWorkersの組み込みなので、止めたときのエラーが別のエラーに作り直されるため)。
+    - プラグインは、D1の`plugins`(1プラグインにつき1行。一覧のリポジトリ、コミット、入れた人)、`plugin_skills`(スキル)、`plugin_files`(ファイル。1ファイル1行。D1の1行は2MBまで)に保存する。「更新」では、一覧のリポジトリの最新の版を読み直し、スキルとファイルをまとめて入れ替える。`source`のスキルのファイルは`skill_files`に、入手元は`skills`の`source_repository`と`source_commit`に入れる。2026-11-08までに`/regskills`で入れたプラグインのスキルは、マイグレーション(`0027_plugins.sql`)で`plugins`に移した。
+    - ファイルが付いたスキルは、エージェントだけで使う。エージェントが`read_skill`で読んだときに、本人のキーでFiles APIに上げ、セッションの資源として`/mnt/session/uploads/skills/<名前>/<位置>`(プラグインのスキルは`/mnt/session/uploads/plugins/<プラグイン名>/skills/<スキル名>/<位置>`)に置く(添付ファイルと同じく、置いたら上げた元のファイルは消す)。上げるのは、読まれたスキルの分だけ。待たせすぎないよう、6つずつ同時に置く。置いた場所はチャンネルの状態(`mountedSkillFiles`)に覚えておき、同じセッションでは置き直さない。 プラグインのスキルは、エージェントに「<プラグイン名>:<スキル名>」の名前で、サーバーのスキルの後ろに並べて渡す(`src/agent/agent-skills.ts`)。サーバーのスキルと名前がぶつからない。
     - 本文の`${CLAUDE_SKILL_DIR}`(Claude Codeでスキルのフォルダを指す書き方)は、置いた場所に置き換える。`${CLAUDE_PLUGIN_ROOT}`(プラグインのフォルダ)には対応しない。スキルのフォルダの外のファイルは入れないため。SKILL.mdの`allowed-tools`などは使わない(実行の許可は、ほかのコマンドと同じく、Anthropic側の判断に従う)。
     - 誰でも登録できるスキルに、スクリプトが付くことになる。今もスキルの本文で、エージェントに何でも頼めるので、信頼の前提は変わらない。代わりに、スキルの画面に入手元とコミットを出し、入れたことをログに残す。
 - **秘密:** 本人が`/agentsecrets`で登録した秘密は、Managed Agentsのvaultに、環境変数(`environment_variable`)の資格情報として預ける([#99](https://github.com/4rtoflow/Bobert/issues/99))。
@@ -700,7 +701,7 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
   - セッションを作るときに、秘密があれば`vault_ids`でつなぎ、指示に名前と送り先を書く。vaultは作るときにしかつなげないので、登録した秘密は、次のセッションから使える。vaultを読めなくても、秘密なしでセッションを始める。
   - vaultはワークスペース単位で、同じワークスペースの開発者は、自分のセッションにつないで使える(値は読めない)。そのことを一覧の画面に書く。
   - 1つのvaultに置けるのは20個まで(Managed Agentsの上限)。
-  - Nakamabaは、`NAKAMABA_AUTHORIZATION`(Authorizationヘッダーの値そのもの)と`NAKAMABA_ADMIN_URL`で認証できる(4rtoflow/Nakamaba#2)。スクリプトの中で値を組み立て直すと、ダミーの文字列が変わって差し替えられないため、Basic認証の値はBobertが組み立てて預ける。
+  - 値は、本人が入れたものをそのまま預ける。スクリプトの中で値を組み立て直すと(たとえばbase64にすると)、ダミーの文字列が変わって差し替えられないので、ヘッダーにそのまま入れる形の値にする。
   - `/delete`では、vaultごと削除する。
 - **GitHub:** 運営者が登録した、Bobert用のGitHub App(`bobert-agent-app`。持ち主は4rtoflowの組織)で、本人のGitHubと連携する。本人は、連携するときに、Bobertに触らせるリポジトリをGitHubの画面で選ぶ。
   - **連携:** 「GitHubと連携」のボタンを押したときに、連携のリンクを作る(10分で使えなくなる。OpenRouterとの連携と同じ)。リンクの先は、GitHubの承認の画面(OAuthのWebアプリケーションフロー。PKCEを付ける)。承認の後、まだアプリをどこにも入れていなければ、同じ`state`で、アプリを入れる画面(リポジトリを選ぶ画面)へ進める。アプリには「Request user authorization (OAuth) during installation」を付けてあるので、入れ終わると、GitHubがcodeを付けてコールバック(`/oauth/github/callback`)に戻す。連携の途中の状態は、D1(`github_link_states`)に置く。

@@ -42,7 +42,7 @@ export interface SkillSummary {
 
 /** プラグインから入れたスキルの入手元 */
 export interface SkillSource {
-	/** プラグインの一覧(マーケットプレイス)のGitHubのリポジトリ(例: 4rtoflow/Nakamaba) */
+	/** プラグインの一覧(マーケットプレイス)のGitHubのリポジトリ(例: anthropics/claude-plugins-official) */
 	repository: string;
 	/** プラグインの名前 */
 	plugin: string;
@@ -50,7 +50,7 @@ export interface SkillSource {
 	commit: string;
 }
 
-/** スキルに付いたファイル。位置は、スキルのフォルダから(例: scripts/nakamaba.mjs) */
+/** スキルに付いたファイル。位置は、スキルのフォルダから(例: scripts/run.sh) */
 export interface SkillFileData {
 	path: string;
 	content: Uint8Array;
@@ -414,7 +414,7 @@ function bytesOf(value: ArrayBuffer | ArrayLike<number>): Uint8Array {
 export type OverwriteSkillResult = "saved" | "added" | "limit";
 
 /**
- * 名前で、スキルの説明と本文を置き換える(/regskills で、置き換えると確かめたとき)。
+ * 名前で、スキルの説明と本文を置き換える(/skills で、置き換えると確かめたとき)。
  * 確かめている間に消されていたら、新しく足す(数の上限は確かめる)
  */
 export async function overwriteSkill(
@@ -517,84 +517,92 @@ export async function deletePendingSkill(
 	await db.prepare("DELETE FROM pending_skills WHERE id = ?").bind(id).run();
 }
 
-/** プラグインから入れるときに、置き換えるかを確かめている間の入手元(読み直すコミット) */
-export interface PendingPlugin {
+/** source(npx skills add と同じ指定)で入れるときに、選んでもらっているか、置き換えるかを確かめている間の入手元 */
+export interface PendingSource {
 	repository: string;
-	plugin: string;
+	/** 探すフォルダ(根なら空) */
+	path: string;
 	commit: string;
+	/** 置き換えるかを確かめているスキルの名前。選んでもらっている間はnull */
+	skillName: string | null;
 }
 
-/**
- * プラグインから入れるスキルを置き換えるかを確かめている間の入手元を保存し、そのIDを返す。
- * 同じ人が同じサーバーで確かめていた、前の内容は消す(SKILL.mdの置き換えと合わせて、1つだけ残す)
- */
-export async function savePendingPlugin(
+/** sourceの入手元を保存し、そのIDを返す。同じ人が同じサーバーで確かめていた、前の内容は消す(1つだけ残す) */
+export async function savePendingSource(
 	db: D1Database,
 	guildId: string,
 	userId: string,
-	pending: PendingPlugin,
+	pending: PendingSource,
 	now = Date.now(),
 ): Promise<number> {
-	const [, , inserted] = await db.batch<{ id: number }>([
-		...deletePendingStatements(db, guildId, userId),
+	const statements = deletePendingStatements(db, guildId, userId);
+	const results = await db.batch<{ id: number }>([
+		...statements,
 		db
 			.prepare(
-				`INSERT INTO pending_plugin_skills (guild_id, user_id, repository, plugin, commit_sha, created_at)
-				VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+				`INSERT INTO pending_source_skills (guild_id, user_id, repository, path, commit_sha, skill_name, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
 			)
 			.bind(
 				guildId,
 				userId,
 				pending.repository,
-				pending.plugin,
+				pending.path,
 				pending.commit,
+				pending.skillName,
 				now,
 			),
 	]);
-	const id = inserted?.results[0]?.id;
+	const id = results[statements.length]?.results[0]?.id;
 	if (id === undefined) {
-		throw new Error("pending plugin was not saved");
+		throw new Error("pending source was not saved");
 	}
 	return id;
 }
 
-/** プラグインから入れるときに、確かめている間の入手元。消えていたら、またはほかの人のものならnull */
-export async function getPendingPlugin(
+/** sourceの入手元。消えていたら(済ませたか、次に確かめたら)、またはほかの人のものならnull */
+export async function getPendingSource(
 	db: D1Database,
 	guildId: string,
 	userId: string,
 	id: number,
-): Promise<PendingPlugin | null> {
+): Promise<PendingSource | null> {
 	if (!isSkillId(id)) {
 		return null;
 	}
 	const row = await db
 		.prepare(
-			"SELECT repository, plugin, commit_sha FROM pending_plugin_skills WHERE id = ? AND guild_id = ? AND user_id = ?",
+			"SELECT repository, path, commit_sha, skill_name FROM pending_source_skills WHERE id = ? AND guild_id = ? AND user_id = ?",
 		)
 		.bind(id, guildId, userId)
-		.first<{ repository: string; plugin: string; commit_sha: string }>();
+		.first<{
+			repository: string;
+			path: string;
+			commit_sha: string;
+			skill_name: string | null;
+		}>();
 	return row === null
 		? null
 		: {
 				repository: row.repository,
-				plugin: row.plugin,
+				path: row.path,
 				commit: row.commit_sha,
+				skillName: row.skill_name,
 			};
 }
 
-/** 置き換えを済ませた、プラグインの入手元を消す */
-export async function deletePendingPlugin(
+/** 済ませた、sourceの入手元を消す */
+export async function deletePendingSource(
 	db: D1Database,
 	id: number,
 ): Promise<void> {
 	await db
-		.prepare("DELETE FROM pending_plugin_skills WHERE id = ?")
+		.prepare("DELETE FROM pending_source_skills WHERE id = ?")
 		.bind(id)
 		.run();
 }
 
-/** 同じ人が同じサーバーで、置き換えるかを確かめていた内容を消す文(SKILL.mdとプラグインの両方) */
+/** 同じ人が同じサーバーで、置き換えるかを確かめていた内容を消す文(SKILL.mdとsourceの両方) */
 function deletePendingStatements(
 	db: D1Database,
 	guildId: string,
@@ -602,12 +610,12 @@ function deletePendingStatements(
 ): D1PreparedStatement[] {
 	return [
 		db
-			.prepare("DELETE FROM pending_skills WHERE guild_id = ? AND user_id = ?")
+			.prepare(
+				"DELETE FROM pending_source_skills WHERE guild_id = ? AND user_id = ?",
+			)
 			.bind(guildId, userId),
 		db
-			.prepare(
-				"DELETE FROM pending_plugin_skills WHERE guild_id = ? AND user_id = ?",
-			)
+			.prepare("DELETE FROM pending_skills WHERE guild_id = ? AND user_id = ?")
 			.bind(guildId, userId),
 	];
 }

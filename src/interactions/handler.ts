@@ -74,6 +74,12 @@ import {
 	selectModel,
 	submitCustomModel,
 } from "./model";
+import {
+	PLUGINS_COMMAND_NAME,
+	PLUGINS_ID_PREFIX,
+	pluginComponent,
+	pluginsCommand,
+} from "./plugins";
 import { PROMPT_MODAL_ID, promptCommand, submitPrompt } from "./prompt";
 import { settingsCommand } from "./settings";
 import {
@@ -86,8 +92,6 @@ import {
 	typeSafeKeyModal,
 } from "./setup";
 import {
-	REGSKILLS_COMMAND_NAME,
-	regskillsCommand,
 	SKILLS_COMMAND_NAME,
 	SKILLS_ID_PREFIX,
 	skillComponent,
@@ -216,24 +220,34 @@ async function route(
 			if (interaction.data.name === MEMORY_COMMAND_NAME && guildId) {
 				return memoryCommand(env, user.id, guildId);
 			}
-			if (interaction.data.name === SKILLS_COMMAND_NAME && guildId) {
-				return skillsCommand(env, guildId);
-			}
-			if (interaction.data.name === BOBERTMD_COMMAND_NAME && guildId) {
-				return bobertmdCommand(env, guildId);
-			}
 			if (
 				interaction.data.type === ApplicationCommandType.ChatInput &&
-				interaction.data.name === REGSKILLS_COMMAND_NAME &&
+				interaction.data.name === SKILLS_COMMAND_NAME &&
 				guildId
 			) {
-				return regskillsCommand(
+				return skillsCommand(
 					interaction as APIChatInputApplicationCommandInteraction,
 					env,
 					ctx,
 					guildId,
 					actor,
 				);
+			}
+			if (
+				interaction.data.type === ApplicationCommandType.ChatInput &&
+				interaction.data.name === PLUGINS_COMMAND_NAME &&
+				guildId
+			) {
+				return pluginsCommand(
+					interaction as APIChatInputApplicationCommandInteraction,
+					env,
+					ctx,
+					guildId,
+					actor,
+				);
+			}
+			if (interaction.data.name === BOBERTMD_COMMAND_NAME && guildId) {
+				return bobertmdCommand(env, guildId);
 			}
 			if (interaction.data.name === "settings") {
 				return settingsCommand(interaction, env, ctx, user.id, guildId);
@@ -338,6 +352,18 @@ async function route(
 					env,
 					ctx,
 					user.id,
+				);
+				if (response) {
+					return response;
+				}
+			}
+			if (interaction.data.custom_id.startsWith(PLUGINS_ID_PREFIX) && guildId) {
+				const response = await pluginComponent(
+					interaction,
+					env,
+					ctx,
+					guildId,
+					actor,
 				);
 				if (response) {
 					return response;

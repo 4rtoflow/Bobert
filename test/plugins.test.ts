@@ -309,7 +309,7 @@ describe("プラグインを読む", () => {
 
 	it("ファイルの数か大きさが上限を超えたスキルは、ファイルを残さずに印を付ける", async () => {
 		const many: Record<string, string> = {};
-		for (let index = 0; index < 51; index++) {
+		for (let index = 0; index < 201; index++) {
 			many[`plugins/nakamaba/skills/nakamaba/data/${index}.txt`] = "x";
 		}
 		mockGitHub({ [ARCHIVE_URL]: await tarGz(nakamabaFiles(many)) });

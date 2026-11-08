@@ -17,12 +17,12 @@ import { readSkillTool, type SkillReads } from "../src/respond/tools";
 import {
 	addSkill,
 	countSkills,
-	deletePendingPlugin,
 	deletePendingSkill,
+	deletePendingSource,
 	deleteSkill,
 	findSkillByName,
-	getPendingPlugin,
 	getPendingSkill,
+	getPendingSource,
 	getSkill,
 	installSkills,
 	listSkillFiles,
@@ -31,8 +31,8 @@ import {
 	overwriteSkill,
 	type SkillContent,
 	type SkillSource,
-	savePendingPlugin,
 	savePendingSkill,
+	savePendingSource,
 	updateSkill,
 } from "../src/store/skills";
 import { saveCredential, updateUserSettings } from "../src/store/users";
@@ -588,12 +588,13 @@ describe("プラグインから入れたスキルの保存(D1)", () => {
 		expect(results).toEqual([]);
 	});
 
-	it("置き換えるかを確かめている間の入手元は、SKILL.mdの内容と合わせて、人ごと・サーバーごとに1つだけ残す", async () => {
+	it("source で選んでいる間の入手元は、SKILL.mdの内容と合わせて、人ごと・サーバーごとに1つだけ残す", async () => {
 		const guildId = newGuild();
 		const pending = {
-			repository: SOURCE.repository,
-			plugin: SOURCE.plugin,
+			repository: "vercel-labs/agent-skills",
+			path: "skills/",
 			commit: SOURCE.commit,
+			skillName: null,
 		};
 
 		const skillFirst = await savePendingSkill(
@@ -602,24 +603,32 @@ describe("プラグインから入れたスキルの保存(D1)", () => {
 			ALICE.id,
 			MEETING_NOTES,
 		);
-		const plugin = await savePendingPlugin(env.DB, guildId, ALICE.id, pending);
+		const source = await savePendingSource(env.DB, guildId, ALICE.id, pending);
 
 		expect(await getPendingSkill(env.DB, guildId, ALICE.id, skillFirst)).toBe(
 			null,
 		);
-		expect(await getPendingPlugin(env.DB, guildId, ALICE.id, plugin)).toEqual(
+		expect(await getPendingSource(env.DB, guildId, ALICE.id, source)).toEqual(
 			pending,
 		);
-		expect(await getPendingPlugin(env.DB, guildId, BOB.id, plugin)).toBe(null);
+		expect(await getPendingSource(env.DB, guildId, BOB.id, source)).toBe(null);
 
 		await savePendingSkill(env.DB, guildId, ALICE.id, MEETING_NOTES);
-		expect(await getPendingPlugin(env.DB, guildId, ALICE.id, plugin)).toBe(
+		expect(await getPendingSource(env.DB, guildId, ALICE.id, source)).toBe(
 			null,
 		);
 
-		const again = await savePendingPlugin(env.DB, guildId, ALICE.id, pending);
-		await deletePendingPlugin(env.DB, again);
-		expect(await getPendingPlugin(env.DB, guildId, ALICE.id, again)).toBe(null);
+		const again = await savePendingSource(env.DB, guildId, ALICE.id, {
+			...pending,
+			skillName: "web-design-guidelines",
+		});
+		expect(
+			await getPendingSource(env.DB, guildId, ALICE.id, again),
+		).toMatchObject({
+			skillName: "web-design-guidelines",
+		});
+		await deletePendingSource(env.DB, again);
+		expect(await getPendingSource(env.DB, guildId, ALICE.id, again)).toBe(null);
 	});
 });
 

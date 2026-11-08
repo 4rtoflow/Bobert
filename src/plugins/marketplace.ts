@@ -22,7 +22,7 @@ export interface PluginSkill {
 	directory: string;
 	/** SKILL.mdの中身。読めなければnull */
 	file: SkillFile | null;
-	/** SKILL.md以外のファイル。位置は、スキルのフォルダから(例: scripts/nakamaba.mjs) */
+	/** SKILL.md以外のファイル。位置は、スキルのフォルダから(例: scripts/run.sh) */
 	files: PluginFile[];
 	/** ファイルの数か大きさが、上限を超えた(超えたスキルのファイルは残さない) */
 	tooManyFiles: boolean;
@@ -60,11 +60,11 @@ export const MAX_ARCHIVE_BYTES = 30 * 1024 * 1024;
 /** 展開した大きさの上限(読み飛ばすファイルも数える)。圧縮しやすいファイルで、時間を使い切らないようにする */
 const MAX_EXTRACTED_BYTES = 300 * 1024 * 1024;
 /** 一覧(marketplace.json)とSKILL.mdの大きさの上限 */
-const MAX_TEXT_BYTES = 1024 * 1024;
+export const MAX_TEXT_BYTES = 1024 * 1024;
 /** 1つのスキルに付けられるファイルの数と大きさ(SKILL.mdは数えない) */
-export const MAX_SKILL_FILES = 50;
+export const MAX_SKILL_FILES = 200;
 export const MAX_SKILL_FILE_BYTES = 1024 * 1024;
-export const MAX_SKILL_FILES_BYTES = 5 * 1024 * 1024;
+export const MAX_SKILL_FILES_BYTES = 10 * 1024 * 1024;
 
 const MARKETPLACE_PATH = ".claude-plugin/marketplace.json";
 const SKILL_FILE_NAME = "SKILL.md";
@@ -189,7 +189,7 @@ function loaded(
 
 /** 一覧から探したプラグインの、スキルの置き場所 */
 type Resolution =
-	/** 一覧と同じリポジトリの中。skillsDirは、リポジトリの根からの位置(例: plugins/nakamaba/skills/) */
+	/** 一覧と同じリポジトリの中。skillsDirは、リポジトリの根からの位置(例: plugins/code-review/skills/) */
 	| { kind: "local"; skillsDir: string }
 	/** 別のGitHubのリポジトリ */
 	| {
@@ -238,7 +238,7 @@ function resolvePlugin(content: Uint8Array, plugin: string): Resolution {
 
 /**
  * プラグインの配り方(source)から、スキルの置き場所を決める。
- * 一覧と同じリポジトリのフォルダ(「./plugins/nakamaba」。metadata.pluginRootがあれば、「./」で始まらない位置の前に付ける)と、
+ * 一覧と同じリポジトリのフォルダ(「./plugins/code-review」。metadata.pluginRootがあれば、「./」で始まらない位置の前に付ける)と、
  * GitHubのリポジトリ(github、GitHubのURLのurlとgit-subdir)に対応する。npmなどには対応しない
  */
 function sourceOf(source: unknown, pluginRoot: string): Resolution {
@@ -342,14 +342,14 @@ async function readSkills(
 		: result;
 }
 
-type ArchiveRead =
+export type ArchiveRead =
 	| { status: "ok"; commit: string | null }
 	| { status: "unreadable"; repository: RepositoryRef }
 	| { status: "too-large"; repository: RepositoryRef }
 	| { status: "github-error" };
 
 /** リポジトリのtar.gzを読む。位置は、先頭の「リポジトリ名-版/」を除いて渡す */
-async function readArchive(
+export async function readArchive(
 	repository: RepositoryRef,
 	ref: string,
 	visitor: {
@@ -514,7 +514,7 @@ class SkillCollector {
 }
 
 /** SKILL.mdを読む。UTF-8でないか、名前と説明がなければnull */
-function readSkillText(content: Uint8Array): SkillFile | null {
+export function readSkillText(content: Uint8Array): SkillFile | null {
 	try {
 		// ignoreBOMをfalseにすると、先頭のBOMは外れる
 		const text = new TextDecoder("utf-8", {

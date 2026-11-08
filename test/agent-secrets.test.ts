@@ -3,7 +3,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sessionConfig, startSession } from "../src/agent/managed";
 import {
-	basicAuthorization,
 	isValidSecretName,
 	parseSecretUrl,
 	vaultForSession,
@@ -216,12 +215,6 @@ describe("/agentsecrets", () => {
 								custom_id: "agentsecrets:add",
 								label: "追加",
 							},
-							{
-								type: ComponentType.Button,
-								style: ButtonStyle.Secondary,
-								custom_id: "agentsecrets:add-basic",
-								label: "Basic認証で追加",
-							},
 						],
 					},
 				],
@@ -230,24 +223,16 @@ describe("/agentsecrets", () => {
 		expect(await getAgentVault(env.DB, user.id)).toBe(null);
 	});
 
-	it("ボタンを押すと、それぞれの入力画面を開く", async () => {
+	it("「追加」を押すと、名前・値・送り先の入力画面を開く(Basic認証の入力画面はない)", async () => {
 		const user = await newUser("anthropic");
 
 		const add = await sendInteraction(press(user, "agentsecrets:add"));
-		const basic = await sendInteraction(press(user, "agentsecrets:add-basic"));
 
 		expect(add.type).toBe(InteractionResponseType.Modal);
 		expect(add.data.title).toBe("秘密を追加する");
 		expect(
 			add.data.components.map((field: { label: string }) => field.label),
 		).toEqual(["名前", "値", "送り先"]);
-		expect(basic.data.title).toBe("Basic認証の秘密を追加する");
-		expect(
-			basic.data.components.map((field: { label: string }) => field.label),
-		).toEqual(["名前", "ユーザー名", "パスワード", "送り先"]);
-		expect(basic.data.components[2].description).toBe(
-			"Bobertが「Basic …」の形にして預ける",
-		);
 	});
 
 	it("追加すると、vaultを作って、送り先のホストのヘッダーにだけ差し替わる秘密として預け、一覧に出す", async () => {
@@ -301,29 +286,6 @@ describe("/agentsecrets", () => {
 		});
 	});
 
-	it("Basic認証では、ユーザー名とパスワードを「Basic …」の形にして預ける", async () => {
-		const user = await newUser("anthropic");
-		const { calls } = mockVaultApis();
-
-		await sendInteraction(
-			submit(user, "agentsecrets:basic-modal", {
-				name: "NAKAMABA_AUTHORIZATION",
-				username: "alice",
-				password: "pässword",
-				url: "https://admin.example.com",
-			}),
-		);
-
-		const body = credentialRequests(calls)[0]?.body as {
-			auth: { secret_value: string };
-		};
-		expect(body.auth.secret_value).toBe(
-			basicAuthorization("alice", "pässword"),
-		);
-		// UTF-8のバイトをbase64にする(Nakamabaのスクリプトの作り方と同じ)
-		expect(body.auth.secret_value).toBe("Basic YWxpY2U6cMOkc3N3b3Jk");
-	});
-
 	it("同じ名前と、20個を超える秘密は預けない", async () => {
 		const user = await newUser("anthropic");
 		const { calls, vaults } = mockVaultApis();
@@ -372,7 +334,7 @@ describe("/agentsecrets", () => {
 		);
 
 		expect(badName.data.content).toBe(
-			"名前は、英大文字、数字、_ だけで、先頭は英大文字にしてください。例: `NAKAMABA_AUTHORIZATION`",
+			"名前は、英大文字、数字、_ だけで、先頭は英大文字にしてください。例: `WEATHER_API_KEY`",
 		);
 		expect(badUrl.data.content).toBe(
 			"送り先は、https:// で始まるURLにしてください。",
@@ -470,7 +432,7 @@ describe("/agentsecrets", () => {
 
 describe("秘密の決まり", () => {
 	it("名前は英大文字、数字、_ で、先頭は英大文字(40文字まで)", () => {
-		expect(isValidSecretName("NAKAMABA_AUTHORIZATION")).toBe(true);
+		expect(isValidSecretName("WEATHER_API_KEY")).toBe(true);
 		expect(isValidSecretName("A1")).toBe(true);
 		for (const name of ["", "_A", "1A", "a", "A-B", "A".repeat(41)]) {
 			expect(isValidSecretName(name)).toBe(false);
@@ -478,9 +440,9 @@ describe("秘密の決まり", () => {
 	});
 
 	it("送り先は、ポートのないhttpsのURL。頭(https://ホスト)とホストを返す", () => {
-		expect(parseSecretUrl(" https://admin.example.com/path?q=1 ")).toEqual({
-			url: "https://admin.example.com",
-			host: "admin.example.com",
+		expect(parseSecretUrl(" https://api.example.com/path?q=1 ")).toEqual({
+			url: "https://api.example.com",
+			host: "api.example.com",
 		});
 		for (const url of [
 			"http://a.example.com",
@@ -497,13 +459,13 @@ describe("セッションに渡す", () => {
 		const { system } = sessionConfig([], null, [
 			{
 				id: "vcrd_1",
-				name: "NAKAMABA_AUTHORIZATION",
-				url: "https://admin.example.com",
+				name: "WEATHER_API_KEY",
+				url: "https://api.example.com",
 			},
 		]);
 
 		expect(system).toContain(
-			"\n\n次の環境変数に、利用者が登録した秘密が入っています。値はダミーの文字列で、書かれたホストへ送るリクエストのヘッダーに入れたときだけ、本物に差し替わります。値を表示したり、ほかの場所へ送ったりしないでください。\n- `NAKAMABA_AUTHORIZATION`: https://admin.example.com",
+			"\n\n次の環境変数に、利用者が登録した秘密が入っています。値はダミーの文字列で、書かれたホストへ送るリクエストのヘッダーに入れたときだけ、本物に差し替わります。値を表示したり、ほかの場所へ送ったりしないでください。\n- `WEATHER_API_KEY`: https://api.example.com",
 		);
 		expect(sessionConfig([], null, []).system).not.toContain("秘密");
 	});
@@ -514,11 +476,10 @@ describe("セッションと /delete", () => {
 		const user = await newUser("anthropic");
 		const { calls } = mockVaultApis();
 		await sendInteraction(
-			submit(user, "agentsecrets:basic-modal", {
-				name: "NAKAMABA_AUTHORIZATION",
-				username: "alice",
-				password: "pw",
-				url: "https://admin.example.com",
+			submit(user, "agentsecrets:add-modal", {
+				name: "WEATHER_API_KEY",
+				value: "sk-weather",
+				url: "https://api.example.com",
 			}),
 		);
 		const client = new Anthropic({ apiKey: "key-anthropic" });
@@ -540,13 +501,13 @@ describe("セッションと /delete", () => {
 							id: "vcrd_2",
 							type: "vault_credential",
 							archived_at: null,
-							metadata: { url: "https://admin.example.com" },
+							metadata: { url: "https://api.example.com" },
 							auth: {
 								type: "environment_variable",
-								secret_name: "NAKAMABA_AUTHORIZATION",
+								secret_name: "WEATHER_API_KEY",
 								networking: {
 									type: "limited",
-									allowed_hosts: ["admin.example.com"],
+									allowed_hosts: ["api.example.com"],
 								},
 								injection_location: { header: true, body: false },
 							},
@@ -579,11 +540,9 @@ describe("セッションと /delete", () => {
 		)?.body as { vault_ids: string[]; agent: { system: string } };
 		expect(body.vault_ids).toEqual(["vlt_1"]);
 		expect(body.agent.system).toContain(
-			"- `NAKAMABA_AUTHORIZATION`: https://admin.example.com",
+			"- `WEATHER_API_KEY`: https://api.example.com",
 		);
-		expect(JSON.stringify(body)).not.toContain(
-			basicAuthorization("alice", "pw"),
-		);
+		expect(JSON.stringify(body)).not.toContain("sk-weather");
 	});
 
 	it("秘密がなければ、vaultをつながない", async () => {

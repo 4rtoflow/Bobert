@@ -31,12 +31,12 @@ import { type MessageEdit, respondLater } from "../interactions/deferred";
 import { logEvent } from "../log";
 import { createGitHubAuthLink } from "../oauth/github";
 import { LLM_ERROR_TEXT } from "../respond/replies";
-import { listSkills } from "../store/skills";
 import {
 	type Credential,
 	getUserSettings,
 	loadCredential,
 } from "../store/users";
+import { listAgentSkills } from "./agent-skills";
 import { firstMessage } from "./first-message";
 import {
 	agentClient,
@@ -260,7 +260,8 @@ async function startAgent(
 	let sessionId: string;
 	let repositoryResourceId: string | null;
 	try {
-		const skills = await listSkills(db, guildId);
+		// サーバーのスキルと、プラグインのスキル(「<プラグイン名>:<スキル名>」)を合わせて渡す
+		const skills = await listAgentSkills(db, guildId);
 		// 本人が預けた秘密があれば、そのvaultをつなぐ(vaultはセッションを作るときにしかつなげない)
 		const vault = await vaultForSession(db, user.id, client);
 		const started = await startSession(db, user.id, client, {

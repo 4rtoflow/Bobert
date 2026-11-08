@@ -16,19 +16,11 @@ import {
 	deleteSkill,
 	findSkillByName,
 	getSkill,
-	installSkills,
-	listSkillFiles,
 	MAX_SKILLS,
 	type SkillContent,
 	updateSkill,
 } from "../src/store/skills";
-import {
-	COMMIT,
-	marketplaceJson,
-	NAKAMABA_SKILL,
-	nakamabaFiles,
-	tarGz,
-} from "./archive-fixtures";
+import { COMMIT, tarGz } from "./archive-fixtures";
 import { ALICE, BOB } from "./fixtures";
 import {
 	type FetchCall,
@@ -61,9 +53,9 @@ const NOT_FOUND =
 const SAVE_FAILED =
 	"スキルを保存できませんでした。少し待ってから、もう一度試してください。";
 const DRAFT_ATTACHED =
-	"書いた内容を添付します。直してから `/regskills` に添付すると、登録できます。";
+	"書いた内容を添付します。直してから `/skills` の file に添付すると、登録できます。";
 const PENDING_GONE =
-	"この置き換えは、もう使えません。もう一度 `/regskills` から登録してください。";
+	"この置き換えは、もう使えません。もう一度 `/skills` から登録してください。";
 const ADDED = "スキル「meeting-notes」を追加しました。次の返答から使います。";
 const SAVED = "スキル「meeting-notes」を保存しました。次の返答から使います。";
 
@@ -123,11 +115,11 @@ function skillsCommand(guildId: string) {
 	});
 }
 
-/** /regskills。fileSizeを渡すと、その大きさのSKILL.mdを添付する */
+/** /skills の file にSKILL.mdを添付する(fileSizeは、その大きさ) */
 function regskills(guildId: string, fileSize?: number) {
 	return inGuild(guildId, InteractionType.ApplicationCommand, {
 		id: "2",
-		name: "regskills",
+		name: "skills",
 		type: 1,
 		...(fileSize === undefined
 			? {}
@@ -283,54 +275,50 @@ async function seedFull(guildId: string) {
 	}
 }
 
-describe("/skills と /regskills のコマンド", () => {
-	it("コマンドの一覧と/helpに出る", () => {
+describe("/skills のコマンド", () => {
+	it("コマンドの一覧と/helpに出る(/regskills はない)", () => {
 		expect(COMMANDS).toContainEqual(
 			expect.objectContaining({
 				name: "skills",
-				description: "このサーバーでAIが使うスキル(手順や知識)の一覧と編集",
-			}),
-		);
-		expect(COMMANDS).toContainEqual(
-			expect.objectContaining({
-				name: "regskills",
 				description:
-					"スキル(手順や知識)の登録。SKILL.mdを添付するか、入力画面で書くか、プラグインから入れる",
+					"このサーバーでAIが使うスキル(手順や知識)の一覧・追加・編集",
 				options: [
 					{
 						type: 11,
 						name: "file",
-						description:
-							"登録するSKILL.md。添付しなければ、入力画面で名前・説明・本文を書く",
+						description: "追加するSKILL.md。添付しなければ、一覧を出す",
 						required: false,
 					},
 					{
 						type: 3,
-						name: "plugin",
+						name: "source",
 						description:
-							"プラグインから入れるときの、プラグインの名前(例: nakamaba)",
+							"スキルを配っているGitHubのリポジトリ(例: vercel-labs/agent-skills)。npx skills add と同じ指定",
+						required: false,
+						max_length: 300,
+					},
+					{
+						type: 3,
+						name: "skill",
+						description:
+							"入れるスキルの名前(例: web-design-guidelines)。省くと、見つかったスキルから選ぶ",
 						required: false,
 						max_length: 100,
-					},
-					{
-						type: 3,
-						name: "marketplace",
-						description:
-							"プラグインを配っているGitHubのリポジトリ(例: 4rtoflow/Nakamaba)",
-						required: false,
-						max_length: 200,
 					},
 				],
 			}),
 		);
+		expect(COMMANDS.some((command) => command.name === "regskills")).toBe(
+			false,
+		);
 		expect(helpText()).toContain(
-			"- `/regskills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。一覧と編集は `/skills` で行います。",
+			"- `/skills` で登録したスキル(手順や知識)を、AIが必要に応じて読んで使います。",
 		);
 	});
 });
 
 describe("/skills", () => {
-	it("スキルがなければ「登録されたスキル: なし」とだけ、本人にだけ見せる(ボタンもメニューもない)", async () => {
+	it("スキルがなければ「登録されたスキル: なし」と「追加」のボタンだけを、本人にだけ見せる(メニューはない)", async () => {
 		const response = await sendInteraction(skillsCommand(newGuild()));
 
 		expect(response).toEqual({
@@ -338,7 +326,19 @@ describe("/skills", () => {
 			data: {
 				flags: MessageFlags.Ephemeral,
 				content: "**登録されたスキル**: なし",
-				components: [],
+				components: [
+					{
+						type: ComponentType.ActionRow,
+						components: [
+							{
+								type: ComponentType.Button,
+								style: ButtonStyle.Primary,
+								custom_id: "skills:add",
+								label: "追加",
+							},
+						],
+					},
+				],
 			},
 		});
 	});
@@ -371,6 +371,17 @@ describe("/skills", () => {
 			].join("\n"),
 		);
 		expect(response.data.components).toEqual([
+			{
+				type: ComponentType.ActionRow,
+				components: [
+					{
+						type: ComponentType.Button,
+						style: ButtonStyle.Primary,
+						custom_id: "skills:add",
+						label: "追加",
+					},
+				],
+			},
 			{
 				type: ComponentType.ActionRow,
 				components: [
@@ -424,12 +435,12 @@ describe("/skills", () => {
 	});
 });
 
-describe("/regskills(添付なし)", () => {
+describe("/skills の「追加」", () => {
 	it("入力画面を開く。送ると登録し、本人にだけ見えるメッセージに結果を書く", async () => {
 		const guildId = newGuild();
 		const calls = mockDiscord();
 
-		const modal = await sendInteraction(regskills(guildId));
+		const modal = await sendInteraction(pressButton(guildId, "skills:add"));
 		const response = await sendInteraction(
 			submitWritten(guildId, "skills:register-modal", MEETING_NOTES),
 		);
@@ -526,7 +537,7 @@ describe("/regskills(添付なし)", () => {
 		await seedFull(guildId);
 		const calls = mockDiscord();
 
-		const command = await sendInteraction(regskills(guildId));
+		const command = await sendInteraction(pressButton(guildId, "skills:add"));
 		await sendInteraction(
 			submitWritten(guildId, "skills:register-modal", MEETING_NOTES),
 		);
@@ -572,7 +583,7 @@ describe("/regskills(添付なし)", () => {
 	});
 });
 
-describe("/regskills(SKILL.mdを添付)", () => {
+describe("/skills の file(SKILL.mdを添付)", () => {
 	it("添付したSKILL.mdを読んで確かめ、登録してから、結果を書く", async () => {
 		const guildId = newGuild();
 		const calls = mockDiscord(FILE);
@@ -1059,40 +1070,46 @@ describe("削除", () => {
 	});
 });
 
-describe("/regskills(プラグインから入れる)", () => {
+describe("/skills の source(npx skills add と同じ指定)", () => {
 	const ARCHIVE_URL =
-		"https://codeload.github.com/4rtoflow/Nakamaba/tar.gz/HEAD";
-	const COMMIT_URL = `https://codeload.github.com/4rtoflow/Nakamaba/tar.gz/${COMMIT}`;
-	const INSTALLED_AGENT =
-		"プラグイン「nakamaba」から、スキル「nakamaba」を追加しました。ファイルが付いているので、エージェント(`/agent`)だけで使います。";
-	const SAVED_AGENT =
-		"プラグイン「nakamaba」から、スキル「nakamaba」を保存しました。ファイルが付いているので、エージェント(`/agent`)だけで使います。";
+		"https://codeload.github.com/vercel-labs/agent-skills/tar.gz/HEAD";
+	const COMMIT_URL = `https://codeload.github.com/vercel-labs/agent-skills/tar.gz/${COMMIT}`;
 	const GITHUB_FAILED =
 		"GitHubとのやり取りでエラーが起きました。少し待ってから、もう一度試してください。";
 
-	/** /regskills の欄(pluginとmarketplace。fileSizeを渡すと、その大きさのSKILL.mdも添付する) */
-	function regskillsWith(
+	function skillFile(name: string, description = `${name}の説明`): string {
+		return [
+			"---",
+			`name: ${name}`,
+			`description: ${description}`,
+			"---",
+			"本文",
+		].join("\n");
+	}
+
+	/** /skills の source と skill(fileSizeを渡すと、SKILL.mdも添付する) */
+	function fromSource(
 		guildId: string,
-		fields: { plugin?: string; marketplace?: string; fileSize?: number },
+		fields: { source?: string; skill?: string; fileSize?: number },
 		user?: APIUser,
 	) {
 		return inGuild(
 			guildId,
 			InteractionType.ApplicationCommand,
 			{
-				id: "2",
-				name: "regskills",
+				id: "1",
+				name: "skills",
 				type: 1,
 				options: [
 					...(fields.fileSize === undefined
 						? []
 						: [{ name: "file", type: 11, value: "700" }]),
-					...(fields.plugin === undefined
+					...(fields.source === undefined
 						? []
-						: [{ name: "plugin", type: 3, value: fields.plugin }]),
-					...(fields.marketplace === undefined
+						: [{ name: "source", type: 3, value: fields.source }]),
+					...(fields.skill === undefined
 						? []
-						: [{ name: "marketplace", type: 3, value: fields.marketplace }]),
+						: [{ name: "skill", type: 3, value: fields.skill }]),
 				],
 				...(fields.fileSize === undefined
 					? {}
@@ -1100,14 +1117,6 @@ describe("/regskills(プラグインから入れる)", () => {
 							resolved: { attachments: { "700": attachment(fields.fileSize) } },
 						}),
 			},
-			user,
-		);
-	}
-
-	function installNakamaba(guildId: string, user?: APIUser) {
-		return regskillsWith(
-			guildId,
-			{ plugin: "nakamaba", marketplace: "4rtoflow/Nakamaba" },
 			user,
 		);
 	}
@@ -1126,353 +1135,285 @@ describe("/regskills(プラグインから入れる)", () => {
 		});
 	}
 
-	function githubCalls(calls: FetchCall[]): string[] {
-		return calls
-			.filter((call) => call.url.hostname === "codeload.github.com")
-			.map((call) => call.url.toString());
+	async function repo(files: Record<string, string | Uint8Array>) {
+		return tarGz(files, { root: "agent-skills-HEAD" });
 	}
 
-	/** スキルが1つだけの、プラグインの一覧のリポジトリ */
-	async function singleSkill(
-		skillFile: string,
-		extra: Record<string, string | Uint8Array> = {},
+	function pickMenu(
+		guildId: string,
+		customId: string,
+		value: string,
+		user?: APIUser,
 	) {
-		return tarGz({
-			".claude-plugin/marketplace.json": marketplaceJson(),
-			"plugins/nakamaba/skills/nakamaba/SKILL.md": skillFile,
-			...extra,
-		});
+		return inGuild(
+			guildId,
+			InteractionType.MessageComponent,
+			{
+				custom_id: customId,
+				component_type: ComponentType.StringSelect,
+				values: [value],
+			},
+			user,
+		);
 	}
 
-	it("GitHubからプラグインのスキルを読み、入手元とファイルと一緒に登録してから、結果を書く", async () => {
+	it("スキルが1つなら、それを入れ、入手元を記録する。ファイルが付けば、エージェントだけで使うと書く", async () => {
 		const guildId = newGuild();
-		const calls = mockGitHub({ [ARCHIVE_URL]: await tarGz(nakamabaFiles()) });
-
-		const response = await sendInteraction(installNakamaba(guildId));
-
-		expect(response).toEqual({
-			type: InteractionResponseType.DeferredChannelMessageWithSource,
-			data: { flags: MessageFlags.Ephemeral },
+		const calls = mockGitHub({
+			[ARCHIVE_URL]: await repo({
+				"skills/web-design-guidelines/SKILL.md": skillFile(
+					"web-design-guidelines",
+				),
+				"skills/web-design-guidelines/rules.md": "rules",
+			}),
 		});
-		expect(githubCalls(calls)).toEqual([ARCHIVE_URL]);
-		expect(edits(calls)).toEqual([{ content: INSTALLED_AGENT }]);
-		const skill = await findSkillByName(env.DB, guildId, "nakamaba");
+
+		const response = await sendInteraction(
+			fromSource(guildId, { source: "vercel-labs/agent-skills" }),
+		);
+
+		expect(response.type).toBe(
+			InteractionResponseType.DeferredChannelMessageWithSource,
+		);
+		expect(edits(calls)).toEqual([
+			{
+				content:
+					"「vercel-labs/agent-skills」から、スキル「web-design-guidelines」を追加しました。ファイルが付いているので、エージェント(`/agent`)だけで使います。",
+				components: [],
+			},
+		]);
+		const skill = await findSkillByName(
+			env.DB,
+			guildId,
+			"web-design-guidelines",
+		);
 		expect(skill).toMatchObject({
-			name: "nakamaba",
-			description: "Nakamabaに載せるページを作り、公開・更新する。",
-			createdByName: "Alice",
 			fileCount: 1,
 			source: {
-				repository: "4rtoflow/Nakamaba",
-				plugin: "nakamaba",
+				repository: "vercel-labs/agent-skills",
+				plugin: "",
 				commit: COMMIT,
 			},
 		});
-		expect(await listSkillFiles(env.DB, guildId, skill?.id ?? 0)).toEqual([
-			{
-				path: "scripts/nakamaba.mjs",
-				content: new TextEncoder().encode("console.log('nakamaba');\n"),
-			},
-		]);
+
+		await sendInteraction(selectSkill(guildId, String(skill?.id)));
+		const screen = (edits(calls).at(-1) as { content: string }).content;
+		expect(screen.split("\n").at(-1)).toBe(
+			"-# 入手元: vercel-labs/agent-skills(5e13cf2)・ファイル1個",
+		);
 	});
 
-	it("リポジトリはURLでも指定できる。ファイルのないスキルは、次の返答から使うと書く", async () => {
+	it("skill で名前を指定すると、そのスキルだけを入れる(ファイルがなければ、次の返答から使う)", async () => {
 		const guildId = newGuild();
 		const calls = mockGitHub({
-			[ARCHIVE_URL]: await singleSkill(
-				["---", "name: nakamaba", "description: 説明", "---", "本文"].join(
-					"\n",
-				),
-			),
+			[ARCHIVE_URL]: await repo({
+				"skills/one/SKILL.md": skillFile("one"),
+				"skills/two/SKILL.md": skillFile("two"),
+			}),
 		});
 
 		await sendInteraction(
-			regskillsWith(guildId, {
-				plugin: "nakamaba",
-				marketplace: "https://github.com/4rtoflow/Nakamaba",
+			fromSource(guildId, {
+				source: "https://github.com/vercel-labs/agent-skills",
+				skill: "Two",
 			}),
 		);
 
-		expect(edits(calls)).toEqual([
-			{
-				content:
-					"プラグイン「nakamaba」から、スキル「nakamaba」を追加しました。次の返答から使います。",
-			},
-		]);
-		expect(await findSkillByName(env.DB, guildId, "nakamaba")).toMatchObject({
-			fileCount: 0,
-			source: { plugin: "nakamaba" },
-		});
+		expect((edits(calls)[0] as { content?: string })?.content).toBe(
+			"「vercel-labs/agent-skills」から、スキル「two」を追加しました。次の返答から使います。",
+		);
+		expect(await findSkillByName(env.DB, guildId, "one")).toBe(null);
 	});
 
-	it("ファイルが付いたスキルと付いていないスキルがあれば、付いているスキルだけエージェントで使うと書く", async () => {
-		const calls = mockGitHub({
-			[ARCHIVE_URL]: await tarGz(
-				nakamabaFiles({
-					"plugins/nakamaba/skills/page-rules/SKILL.md": [
-						"---",
-						"name: page-rules",
-						"description: ページの決まり",
-						"---",
-						"本文",
-					].join("\n"),
-				}),
-			),
-		});
-
-		await sendInteraction(installNakamaba(newGuild()));
-
-		expect(edits(calls)).toEqual([
-			{
-				content:
-					"プラグイン「nakamaba」から、スキル「nakamaba」「page-rules」を追加しました。次の返答から使います。ファイルが付いている「nakamaba」は、エージェント(`/agent`)だけで使います。",
-			},
-		]);
-	});
-
-	it("欄の組み合わせやリポジトリの形が違えば、GitHubを読まずに、本人にだけ理由を見せる", async () => {
+	it("複数あって skill を省くと、選ぶメニューを出し、選んだスキルを同じコミットで入れる", async () => {
 		const guildId = newGuild();
+		const archive = await repo({
+			"skills/one/SKILL.md": skillFile("one"),
+			"skills/two/SKILL.md": skillFile("two"),
+		});
+		const calls = mockGitHub({ [ARCHIVE_URL]: archive, [COMMIT_URL]: archive });
+
+		await sendInteraction(
+			fromSource(guildId, { source: "vercel-labs/agent-skills" }),
+		);
+		const [menu] = edits(calls) as {
+			content: string;
+			components: { components: { custom_id: string }[] }[];
+		}[];
+		const customId = menu?.components[0]?.components[0]?.custom_id ?? "";
+		const picked = await sendInteraction(pickMenu(guildId, customId, "two"));
+
+		expect(menu).toEqual({
+			content:
+				"「vercel-labs/agent-skills」には、スキルが2個あります。入れるスキルを選んでください。",
+			components: [
+				{
+					type: ComponentType.ActionRow,
+					components: [
+						{
+							type: ComponentType.StringSelect,
+							custom_id: customId,
+							placeholder: "入れるスキルを選ぶ",
+							options: [
+								{ label: "one", value: "one", description: "oneの説明" },
+								{ label: "two", value: "two", description: "twoの説明" },
+							],
+						},
+					],
+				},
+			],
+		});
+		expect(customId).toMatch(/^skills:pick:\d+$/);
+		expect(picked.type).toBe(InteractionResponseType.DeferredMessageUpdate);
+		expect(edits(calls).at(-1)).toEqual({
+			content:
+				"「vercel-labs/agent-skills」から、スキル「two」を追加しました。次の返答から使います。",
+			components: [],
+		});
+		expect(await findSkillByName(env.DB, guildId, "two")).not.toBe(null);
+		// 同じ選ぶメニューは、もう使えない
+		await sendInteraction(pickMenu(guildId, customId, "one"));
+		expect(followups(calls).at(-1)).toEqual({
+			content: PENDING_GONE,
+			flags: MessageFlags.Ephemeral,
+		});
+	});
+
+	it("26個以上あれば、最初の25個を出し、ほかは skill で指定するよう書く", async () => {
+		const files: Record<string, string> = {};
+		for (let index = 0; index < 26; index++) {
+			const name = `skill-${String(index).padStart(2, "0")}`;
+			files[`skills/${name}/SKILL.md`] = skillFile(name);
+		}
+		const calls = mockGitHub({ [ARCHIVE_URL]: await repo(files) });
+
+		await sendInteraction(
+			fromSource(newGuild(), { source: "vercel-labs/agent-skills" }),
+		);
+
+		const [menu] = edits(calls) as {
+			content: string;
+			components: { components: { options: unknown[] }[] }[];
+		}[];
+		expect(menu?.content).toBe(
+			"「vercel-labs/agent-skills」には、スキルが26個あります。入れるスキルを選んでください。\n-# 最初の25個を出しています。ほかのスキルは、skill で名前を指定して入れてください。",
+		);
+		expect(menu?.components[0]?.components[0]?.options).toHaveLength(25);
+	});
+
+	it("同じ名前があれば、置き換えるかを確かめ、「置き換える」で同じコミットを読み直して置き換える", async () => {
+		const guildId = newGuild();
+		await seed(guildId, { ...MEETING_NOTES, name: "one", body: "古い本文" });
+		const archive = await repo({ "skills/one/SKILL.md": skillFile("one") });
+		const calls = mockGitHub({ [ARCHIVE_URL]: archive, [COMMIT_URL]: archive });
+
+		await sendInteraction(
+			fromSource(guildId, { source: "vercel-labs/agent-skills" }),
+		);
+		const [question] = edits(calls);
+		await sendInteraction(pressButton(guildId, overwriteButtonId(question)));
+
+		expect(question).toEqual({
+			content:
+				"「one」という名前のスキルは、すでにあります。「vercel-labs/agent-skills」の内容で置き換えますか?",
+			components: [overwriteRow(overwriteButtonId(question))],
+		});
+		expect(overwriteButtonId(question)).toMatch(
+			/^skills:overwrite-source:\d+$/,
+		);
+		expect(edits(calls).at(-1)).toEqual({
+			content:
+				"「vercel-labs/agent-skills」から、スキル「one」を保存しました。次の返答から使います。",
+			components: [],
+		});
+		expect(await findSkillByName(env.DB, guildId, "one")).toMatchObject({
+			body: "本文",
+			source: { repository: "vercel-labs/agent-skills" },
+		});
+	});
+
+	it("欄の組み合わせや source の形が違えば、GitHubを読まずに、本人にだけ理由を見せる", async () => {
 		const calls = mockGitHub({});
-		const cases: [Parameters<typeof regskillsWith>[1], string][] = [
+		const cases: [Parameters<typeof fromSource>[1], string][] = [
 			[
-				{ plugin: "nakamaba" },
-				"プラグインから入れるときは、pluginとmarketplaceの両方を指定してください。例: plugin `nakamaba`、marketplace `4rtoflow/Nakamaba`",
+				{ source: "vercel-labs/agent-skills", fileSize: 100 },
+				"SKILL.mdの添付と、sourceの指定は、別々に行ってください。",
 			],
 			[
-				{ marketplace: "4rtoflow/Nakamaba" },
-				"プラグインから入れるときは、pluginとmarketplaceの両方を指定してください。例: plugin `nakamaba`、marketplace `4rtoflow/Nakamaba`",
+				{ skill: "web-design-guidelines" },
+				"skill を使うときは、source も指定してください。例: source `vercel-labs/agent-skills`、skill `web-design-guidelines`",
 			],
 			[
-				{ plugin: "nakamaba", marketplace: "4rtoflow/Nakamaba", fileSize: 100 },
-				"SKILL.mdの添付と、プラグインからの登録は、別々に行ってください。",
-			],
-			[
-				{ plugin: "nakamaba", marketplace: "Nakamaba" },
-				"marketplaceは、GitHubのリポジトリを`持ち主/名前`の形で指定してください。例: `4rtoflow/Nakamaba`",
+				{ source: "agent-skills" },
+				"source は、GitHubのリポジトリを `持ち主/名前` かURLで指定してください。例: `vercel-labs/agent-skills`",
 			],
 		];
 
 		for (const [fields, content] of cases) {
-			expect(await sendInteraction(regskillsWith(guildId, fields))).toEqual({
+			expect(await sendInteraction(fromSource(newGuild(), fields))).toEqual({
 				type: InteractionResponseType.ChannelMessageWithSource,
 				data: { flags: MessageFlags.Ephemeral, content },
 			});
 		}
-		expect(githubCalls(calls)).toEqual([]);
+		expect(
+			calls.some((call) => call.url.hostname === "codeload.github.com"),
+		).toBe(false);
 	});
 
-	it("リポジトリやプラグインに問題があれば、登録せずに理由を書く", async () => {
-		const skill = (frontMatter: string[], body = "本文") =>
-			["---", ...frontMatter, "---", body].join("\n");
-		const cases: [Uint8Array | Response | undefined, string][] = [
+	it("スキルが見つからないとき、名前で指定したスキルがないとき、リポジトリを読めないときは、理由を書く", async () => {
+		const cases: [
+			Uint8Array | Response | undefined,
+			string | undefined,
+			string,
+		][] = [
+			[
+				await repo({ "README.md": "x" }),
+				undefined,
+				"「vercel-labs/agent-skills」に、スキル(SKILL.md)が見つかりませんでした。",
+			],
+			[
+				await repo({
+					"skills/one/SKILL.md": skillFile("one"),
+					"skills/two/SKILL.md": skillFile("two"),
+				}),
+				"web-design",
+				"「vercel-labs/agent-skills」に、「web-design」という名前のスキルはありません。入れられるスキル: `one`、`two`",
+			],
 			[
 				undefined,
-				"GitHubのリポジトリ「4rtoflow/Nakamaba」を読めませんでした。公開されているか、名前が合っているかを確かめてください。",
+				undefined,
+				"GitHubのリポジトリ「vercel-labs/agent-skills」を読めませんでした。公開されているか、名前が合っているかを確かめてください。",
 			],
-			[
-				new Response("x", {
-					headers: { "Content-Length": String(31 * 1024 * 1024) },
-				}),
-				"GitHubのリポジトリ「4rtoflow/Nakamaba」が大きすぎるため、読めませんでした(30MBまで)。",
-			],
-			[
-				await tarGz({ "README.md": "x" }),
-				"「4rtoflow/Nakamaba」の、プラグインの一覧(`.claude-plugin/marketplace.json`)がないか、読めませんでした。",
-			],
-			[
-				await tarGz({
-					".claude-plugin/marketplace.json": marketplaceJson([
-						{ name: "other", source: "./other" },
-						{ name: "more", source: "./more" },
-					]),
-				}),
-				"「4rtoflow/Nakamaba」に、「nakamaba」という名前のプラグインはありません。入れられるプラグイン: `other`、`more`",
-			],
-			[
-				await tarGz({
-					".claude-plugin/marketplace.json": marketplaceJson([
-						{
-							name: "nakamaba",
-							source: { source: "npm", package: "nakamaba" },
-						},
-					]),
-				}),
-				"プラグイン「nakamaba」は、GitHubのリポジトリ以外(npmなど)から配られているため、入れられません。",
-			],
-			[
-				await tarGz({ ".claude-plugin/marketplace.json": marketplaceJson() }),
-				"プラグイン「nakamaba」には、スキルがありません。",
-			],
-			[
-				await singleSkill("# 冒頭に名前と説明がない"),
-				"プラグインのスキル「nakamaba」を登録できませんでした。\nSKILL.mdを読めませんでした。",
-			],
-			[
-				await singleSkill(skill(["name: Nakamaba_Tool", "description: 説明"])),
-				"プラグインのスキル「nakamaba_tool」を登録できませんでした。\n名前は、英小文字、数字、ハイフンだけで、64文字までにしてください。例: `meeting-notes`",
-			],
-			[
-				await singleSkill(
-					skill(["name: nakamaba", `description: ${"あ".repeat(1025)}`]),
-				),
-				"プラグインのスキル「nakamaba」を登録できませんでした。\n説明(description)は1024文字までにしてください。",
-			],
-			[
-				await singleSkill(NAKAMABA_SKILL, {
-					"plugins/nakamaba/skills/nakamaba/big.bin": new Uint8Array(
-						1024 * 1024 + 1,
-					),
-				}),
-				"スキル「nakamaba」のファイルが多すぎるか、大きすぎます(1つのスキルで50個・合計5MB・1つ1MBまで)。",
-			],
-			[new Response("error", { status: 503 }), GITHUB_FAILED],
+			[new Response("error", { status: 503 }), undefined, GITHUB_FAILED],
 		];
-
-		for (const [archive, content] of cases) {
+		for (const [archive, skill, content] of cases) {
 			vi.restoreAllMocks();
-			const guildId = newGuild();
 			const calls = mockGitHub(
 				archive === undefined ? {} : { [ARCHIVE_URL]: archive },
 			);
 
-			await sendInteraction(installNakamaba(guildId));
+			await sendInteraction(
+				fromSource(newGuild(), {
+					source: "vercel-labs/agent-skills",
+					...(skill === undefined ? {} : { skill }),
+				}),
+			);
 
 			expect(edits(calls)).toEqual([{ content }]);
-			expect(await findSkillByName(env.DB, guildId, "nakamaba")).toBe(null);
 		}
 	});
 
-	it("足すと20個を超えるなら、上限を伝える", async () => {
-		const guildId = newGuild();
-		await seedFull(guildId);
-		const calls = mockGitHub({ [ARCHIVE_URL]: await tarGz(nakamabaFiles()) });
-
-		await sendInteraction(installNakamaba(guildId));
-
-		expect(edits(calls)).toEqual([
-			{
-				content:
-					"スキルは20個までです。プラグイン「nakamaba」のスキル(1個)を足すと、上限を超えます。使っていないスキルを削除してから追加してください。",
-			},
-		]);
-	});
-
-	it("同じ名前があれば、置き換えるかを確かめる。「置き換える」を押すと、同じコミットを読み直して置き換える", async () => {
-		const guildId = newGuild();
-		const seeded = await seed(guildId, {
-			...MEETING_NOTES,
-			name: "nakamaba",
-			body: "古い本文",
+	it("SKILL.mdに問題があれば、リポジトリの名前を添えて、今の理由の文を書く", async () => {
+		const calls = mockGitHub({
+			[ARCHIVE_URL]: await repo({ "skills/bad/SKILL.md": "名前と説明がない" }),
 		});
-		const archive = await tarGz(nakamabaFiles());
-		const calls = mockGitHub({ [ARCHIVE_URL]: archive, [COMMIT_URL]: archive });
 
-		await sendInteraction(installNakamaba(guildId));
-		const [question] = edits(calls);
-		const pressed = await sendInteraction(
-			pressButton(guildId, overwriteButtonId(question)),
-		);
-
-		expect(question).toEqual({
-			content:
-				"「nakamaba」という名前のスキルは、すでにあります。プラグイン「nakamaba」(4rtoflow/Nakamaba)の内容で置き換えますか?",
-			components: [overwriteRow(overwriteButtonId(question))],
-		});
-		expect(overwriteButtonId(question)).toMatch(
-			/^skills:overwrite-plugin:\d+$/,
-		);
-		expect(pressed).toEqual({
-			type: InteractionResponseType.DeferredMessageUpdate,
-		});
-		expect(githubCalls(calls)).toEqual([ARCHIVE_URL, COMMIT_URL]);
-		expect(edits(calls).at(-1)).toEqual({
-			content: SAVED_AGENT,
-			components: [],
-		});
-		expect(await getSkill(env.DB, guildId, seeded.id)).toMatchObject({
-			description: "Nakamabaに載せるページを作り、公開・更新する。",
-			createdByName: "bob",
-			editedByName: "Alice",
-			fileCount: 1,
-			source: { commit: COMMIT },
-		});
-	});
-
-	it("古い「置き換える」ボタンや、ほかの人の確かめているボタンは使えない(画面はそのまま)", async () => {
-		const guildId = newGuild();
-		await seed(guildId, {
-			...MEETING_NOTES,
-			name: "nakamaba",
-			body: "古い本文",
-		});
-		await seed(guildId);
-		const archive = await tarGz(nakamabaFiles());
-		const calls = mockGitHub({ [ARCHIVE_URL]: archive });
-
-		await sendInteraction(installNakamaba(guildId));
-		const [question] = edits(calls);
-		// 同じ人が、SKILL.mdの添付で、別の置き換えを確かめ始めた(前の確かめは消える)
-		vi.restoreAllMocks();
-		const discord = mockDiscord(FILE);
-		await sendInteraction(regskills(guildId, 100));
-		await sendInteraction(pressButton(guildId, overwriteButtonId(question)));
 		await sendInteraction(
-			pressButton(guildId, overwriteButtonId(question), BOB),
+			fromSource(newGuild(), { source: "vercel-labs/agent-skills" }),
 		);
 
-		expect(followups(discord)).toEqual([
-			{ content: PENDING_GONE, flags: MessageFlags.Ephemeral },
-			{ content: PENDING_GONE, flags: MessageFlags.Ephemeral },
-		]);
-		expect((await findSkillByName(env.DB, guildId, "nakamaba"))?.body).toBe(
-			"古い本文",
+		expect((edits(calls)[0] as { content?: string })?.content).toBe(
+			"「vercel-labs/agent-skills」のスキル「bad」を登録できませんでした。\nSKILL.mdを読めませんでした。",
 		);
-	});
-
-	it("一覧では、ファイルが付いたスキルの名前の後ろに「(エージェント用)」を付ける", async () => {
-		const guildId = newGuild();
-		await seed(guildId);
-		await installSkills(
-			env.DB,
-			guildId,
-			[
-				{
-					content: {
-						name: "nakamaba",
-						description: "Nakamabaに載せるページを作る",
-						body: "本文",
-					},
-					files: [{ path: "run.mjs", content: new Uint8Array([1]) }],
-				},
-			],
-			{ repository: "4rtoflow/Nakamaba", plugin: "nakamaba", commit: COMMIT },
-			{ id: BOB.id, name: "bob" },
-			{ overwrite: false },
-		);
-
-		const response = await sendInteraction(skillsCommand(guildId));
-
-		expect(response.data.content).toBe(
-			[
-				"**登録されたスキル**",
-				`- \`meeting-notes\`: ${MEETING_NOTES.description}`,
-				"- `nakamaba`(エージェント用): Nakamabaに載せるページを作る",
-			].join("\n"),
-		);
-	});
-
-	it("スキルの画面に、入手元(リポジトリ、プラグイン、コミット)と、付いているファイルの数を書く", async () => {
-		const guildId = newGuild();
-		const calls = mockGitHub({ [ARCHIVE_URL]: await tarGz(nakamabaFiles()) });
-		await sendInteraction(installNakamaba(guildId));
-		const skill = await findSkillByName(env.DB, guildId, "nakamaba");
-
-		await sendInteraction(selectSkill(guildId, String(skill?.id)));
-
-		const content = (edits(calls).at(-1) as { content: string }).content;
-		expect(content.split("\n").slice(2)).toEqual([
-			expect.stringMatching(/^-# 登録: Alice\(\d{4}-\d{2}-\d{2}\)$/),
-			"-# 入手元: 4rtoflow/Nakamaba のプラグイン「nakamaba」(5e13cf2)・ファイル1個",
-		]);
 	});
 });
