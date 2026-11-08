@@ -468,7 +468,7 @@ export async function savePendingSkill(
 	content: SkillContent,
 	now = Date.now(),
 ): Promise<number> {
-	const [, , inserted] = await db.batch<{ id: number }>([
+	const [, , , inserted] = await db.batch<{ id: number }>([
 		...deletePendingStatements(db, guildId, userId),
 		db
 			.prepare(
@@ -535,7 +535,7 @@ export async function savePendingPlugin(
 	pending: PendingPlugin,
 	now = Date.now(),
 ): Promise<number> {
-	const [, , inserted] = await db.batch<{ id: number }>([
+	const [, , , inserted] = await db.batch<{ id: number }>([
 		...deletePendingStatements(db, guildId, userId),
 		db
 			.prepare(
@@ -594,13 +594,103 @@ export async function deletePendingPlugin(
 		.run();
 }
 
-/** 同じ人が同じサーバーで、置き換えるかを確かめていた内容を消す文(SKILL.mdとプラグインの両方) */
+/** source(npx skills add と同じ指定)で入れるときに、選んでもらっているか、置き換えるかを確かめている間の入手元 */
+export interface PendingSource {
+	repository: string;
+	/** 探すフォルダ(根なら空) */
+	path: string;
+	commit: string;
+	/** 置き換えるかを確かめているスキルの名前。選んでもらっている間はnull */
+	skillName: string | null;
+}
+
+/** sourceの入手元を保存し、そのIDを返す。同じ人が同じサーバーで確かめていた、前の内容は消す(1つだけ残す) */
+export async function savePendingSource(
+	db: D1Database,
+	guildId: string,
+	userId: string,
+	pending: PendingSource,
+	now = Date.now(),
+): Promise<number> {
+	const statements = deletePendingStatements(db, guildId, userId);
+	const results = await db.batch<{ id: number }>([
+		...statements,
+		db
+			.prepare(
+				`INSERT INTO pending_source_skills (guild_id, user_id, repository, path, commit_sha, skill_name, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+			)
+			.bind(
+				guildId,
+				userId,
+				pending.repository,
+				pending.path,
+				pending.commit,
+				pending.skillName,
+				now,
+			),
+	]);
+	const id = results[statements.length]?.results[0]?.id;
+	if (id === undefined) {
+		throw new Error("pending source was not saved");
+	}
+	return id;
+}
+
+/** sourceの入手元。消えていたら(済ませたか、次に確かめたら)、またはほかの人のものならnull */
+export async function getPendingSource(
+	db: D1Database,
+	guildId: string,
+	userId: string,
+	id: number,
+): Promise<PendingSource | null> {
+	if (!isSkillId(id)) {
+		return null;
+	}
+	const row = await db
+		.prepare(
+			"SELECT repository, path, commit_sha, skill_name FROM pending_source_skills WHERE id = ? AND guild_id = ? AND user_id = ?",
+		)
+		.bind(id, guildId, userId)
+		.first<{
+			repository: string;
+			path: string;
+			commit_sha: string;
+			skill_name: string | null;
+		}>();
+	return row === null
+		? null
+		: {
+				repository: row.repository,
+				path: row.path,
+				commit: row.commit_sha,
+				skillName: row.skill_name,
+			};
+}
+
+/** 済ませた、sourceの入手元を消す */
+export async function deletePendingSource(
+	db: D1Database,
+	id: number,
+): Promise<void> {
+	await db
+		.prepare("DELETE FROM pending_source_skills WHERE id = ?")
+		.bind(id)
+		.run();
+}
+
+/** 同じ人が同じサーバーで、置き換えるかを確かめていた内容を消す文(SKILL.md、プラグイン、sourceのすべて) */
 function deletePendingStatements(
 	db: D1Database,
 	guildId: string,
 	userId: string,
 ): D1PreparedStatement[] {
 	return [
+		db
+			.prepare(
+				"DELETE FROM pending_source_skills WHERE guild_id = ? AND user_id = ?",
+			)
+			.bind(guildId, userId),
 		db
 			.prepare("DELETE FROM pending_skills WHERE guild_id = ? AND user_id = ?")
 			.bind(guildId, userId),

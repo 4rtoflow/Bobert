@@ -20,6 +20,7 @@ import {
 	type SkillContent,
 	updateSkill,
 } from "../src/store/skills";
+import { COMMIT, tarGz } from "./archive-fixtures";
 import { ALICE, BOB } from "./fixtures";
 import {
 	type FetchCall,
@@ -287,6 +288,22 @@ describe("/skills のコマンド", () => {
 						name: "file",
 						description: "追加するSKILL.md。添付しなければ、一覧を出す",
 						required: false,
+					},
+					{
+						type: 3,
+						name: "source",
+						description:
+							"スキルを配っているGitHubのリポジトリ(例: vercel-labs/agent-skills)。npx skills add と同じ指定",
+						required: false,
+						max_length: 300,
+					},
+					{
+						type: 3,
+						name: "skill",
+						description:
+							"入れるスキルの名前(例: web-design-guidelines)。省くと、見つかったスキルから選ぶ",
+						required: false,
+						max_length: 100,
 					},
 				],
 			}),
@@ -1050,5 +1067,353 @@ describe("削除", () => {
 		});
 		expect(await getSkill(env.DB, guildId, seeded.id)).toBe(null);
 		expect(again.data.content).toBe(NOT_FOUND);
+	});
+});
+
+describe("/skills の source(npx skills add と同じ指定)", () => {
+	const ARCHIVE_URL =
+		"https://codeload.github.com/vercel-labs/agent-skills/tar.gz/HEAD";
+	const COMMIT_URL = `https://codeload.github.com/vercel-labs/agent-skills/tar.gz/${COMMIT}`;
+	const GITHUB_FAILED =
+		"GitHubとのやり取りでエラーが起きました。少し待ってから、もう一度試してください。";
+
+	function skillFile(name: string, description = `${name}の説明`): string {
+		return [
+			"---",
+			`name: ${name}`,
+			`description: ${description}`,
+			"---",
+			"本文",
+		].join("\n");
+	}
+
+	/** /skills の source と skill(fileSizeを渡すと、SKILL.mdも添付する) */
+	function fromSource(
+		guildId: string,
+		fields: { source?: string; skill?: string; fileSize?: number },
+		user?: APIUser,
+	) {
+		return inGuild(
+			guildId,
+			InteractionType.ApplicationCommand,
+			{
+				id: "1",
+				name: "skills",
+				type: 1,
+				options: [
+					...(fields.fileSize === undefined
+						? []
+						: [{ name: "file", type: 11, value: "700" }]),
+					...(fields.source === undefined
+						? []
+						: [{ name: "source", type: 3, value: fields.source }]),
+					...(fields.skill === undefined
+						? []
+						: [{ name: "skill", type: 3, value: fields.skill }]),
+				],
+				...(fields.fileSize === undefined
+					? {}
+					: {
+							resolved: { attachments: { "700": attachment(fields.fileSize) } },
+						}),
+			},
+			user,
+		);
+	}
+
+	/** DiscordのAPIとGitHub(codeload)の偽物。GitHubは、URLごとにtar.gzを返す(なければ404) */
+	function mockGitHub(archives: Record<string, Uint8Array | Response>) {
+		return mockFetch((call) => {
+			if (call.url.hostname !== "codeload.github.com") {
+				return Response.json({});
+			}
+			const archive = archives[call.url.toString()];
+			if (archive === undefined) {
+				return new Response("Not Found", { status: 404 });
+			}
+			return archive instanceof Response ? archive : new Response(archive);
+		});
+	}
+
+	async function repo(files: Record<string, string | Uint8Array>) {
+		return tarGz(files, { root: "agent-skills-HEAD" });
+	}
+
+	function pickMenu(
+		guildId: string,
+		customId: string,
+		value: string,
+		user?: APIUser,
+	) {
+		return inGuild(
+			guildId,
+			InteractionType.MessageComponent,
+			{
+				custom_id: customId,
+				component_type: ComponentType.StringSelect,
+				values: [value],
+			},
+			user,
+		);
+	}
+
+	it("スキルが1つなら、それを入れ、入手元を記録する。ファイルが付けば、エージェントだけで使うと書く", async () => {
+		const guildId = newGuild();
+		const calls = mockGitHub({
+			[ARCHIVE_URL]: await repo({
+				"skills/web-design-guidelines/SKILL.md": skillFile(
+					"web-design-guidelines",
+				),
+				"skills/web-design-guidelines/rules.md": "rules",
+			}),
+		});
+
+		const response = await sendInteraction(
+			fromSource(guildId, { source: "vercel-labs/agent-skills" }),
+		);
+
+		expect(response.type).toBe(
+			InteractionResponseType.DeferredChannelMessageWithSource,
+		);
+		expect(edits(calls)).toEqual([
+			{
+				content:
+					"「vercel-labs/agent-skills」から、スキル「web-design-guidelines」を追加しました。ファイルが付いているので、エージェント(`/agent`)だけで使います。",
+				components: [],
+			},
+		]);
+		const skill = await findSkillByName(
+			env.DB,
+			guildId,
+			"web-design-guidelines",
+		);
+		expect(skill).toMatchObject({
+			fileCount: 1,
+			source: {
+				repository: "vercel-labs/agent-skills",
+				plugin: "",
+				commit: COMMIT,
+			},
+		});
+
+		await sendInteraction(selectSkill(guildId, String(skill?.id)));
+		const screen = (edits(calls).at(-1) as { content: string }).content;
+		expect(screen.split("\n").at(-1)).toBe(
+			"-# 入手元: vercel-labs/agent-skills(5e13cf2)・ファイル1個",
+		);
+	});
+
+	it("skill で名前を指定すると、そのスキルだけを入れる(ファイルがなければ、次の返答から使う)", async () => {
+		const guildId = newGuild();
+		const calls = mockGitHub({
+			[ARCHIVE_URL]: await repo({
+				"skills/one/SKILL.md": skillFile("one"),
+				"skills/two/SKILL.md": skillFile("two"),
+			}),
+		});
+
+		await sendInteraction(
+			fromSource(guildId, {
+				source: "https://github.com/vercel-labs/agent-skills",
+				skill: "Two",
+			}),
+		);
+
+		expect((edits(calls)[0] as { content?: string })?.content).toBe(
+			"「vercel-labs/agent-skills」から、スキル「two」を追加しました。次の返答から使います。",
+		);
+		expect(await findSkillByName(env.DB, guildId, "one")).toBe(null);
+	});
+
+	it("複数あって skill を省くと、選ぶメニューを出し、選んだスキルを同じコミットで入れる", async () => {
+		const guildId = newGuild();
+		const archive = await repo({
+			"skills/one/SKILL.md": skillFile("one"),
+			"skills/two/SKILL.md": skillFile("two"),
+		});
+		const calls = mockGitHub({ [ARCHIVE_URL]: archive, [COMMIT_URL]: archive });
+
+		await sendInteraction(
+			fromSource(guildId, { source: "vercel-labs/agent-skills" }),
+		);
+		const [menu] = edits(calls) as {
+			content: string;
+			components: { components: { custom_id: string }[] }[];
+		}[];
+		const customId = menu?.components[0]?.components[0]?.custom_id ?? "";
+		const picked = await sendInteraction(pickMenu(guildId, customId, "two"));
+
+		expect(menu).toEqual({
+			content:
+				"「vercel-labs/agent-skills」には、スキルが2個あります。入れるスキルを選んでください。",
+			components: [
+				{
+					type: ComponentType.ActionRow,
+					components: [
+						{
+							type: ComponentType.StringSelect,
+							custom_id: customId,
+							placeholder: "入れるスキルを選ぶ",
+							options: [
+								{ label: "one", value: "one", description: "oneの説明" },
+								{ label: "two", value: "two", description: "twoの説明" },
+							],
+						},
+					],
+				},
+			],
+		});
+		expect(customId).toMatch(/^skills:pick:\d+$/);
+		expect(picked.type).toBe(InteractionResponseType.DeferredMessageUpdate);
+		expect(edits(calls).at(-1)).toEqual({
+			content:
+				"「vercel-labs/agent-skills」から、スキル「two」を追加しました。次の返答から使います。",
+			components: [],
+		});
+		expect(await findSkillByName(env.DB, guildId, "two")).not.toBe(null);
+		// 同じ選ぶメニューは、もう使えない
+		await sendInteraction(pickMenu(guildId, customId, "one"));
+		expect(followups(calls).at(-1)).toEqual({
+			content: PENDING_GONE,
+			flags: MessageFlags.Ephemeral,
+		});
+	});
+
+	it("26個以上あれば、最初の25個を出し、ほかは skill で指定するよう書く", async () => {
+		const files: Record<string, string> = {};
+		for (let index = 0; index < 26; index++) {
+			const name = `skill-${String(index).padStart(2, "0")}`;
+			files[`skills/${name}/SKILL.md`] = skillFile(name);
+		}
+		const calls = mockGitHub({ [ARCHIVE_URL]: await repo(files) });
+
+		await sendInteraction(
+			fromSource(newGuild(), { source: "vercel-labs/agent-skills" }),
+		);
+
+		const [menu] = edits(calls) as {
+			content: string;
+			components: { components: { options: unknown[] }[] }[];
+		}[];
+		expect(menu?.content).toBe(
+			"「vercel-labs/agent-skills」には、スキルが26個あります。入れるスキルを選んでください。\n-# 最初の25個を出しています。ほかのスキルは、skill で名前を指定して入れてください。",
+		);
+		expect(menu?.components[0]?.components[0]?.options).toHaveLength(25);
+	});
+
+	it("同じ名前があれば、置き換えるかを確かめ、「置き換える」で同じコミットを読み直して置き換える", async () => {
+		const guildId = newGuild();
+		await seed(guildId, { ...MEETING_NOTES, name: "one", body: "古い本文" });
+		const archive = await repo({ "skills/one/SKILL.md": skillFile("one") });
+		const calls = mockGitHub({ [ARCHIVE_URL]: archive, [COMMIT_URL]: archive });
+
+		await sendInteraction(
+			fromSource(guildId, { source: "vercel-labs/agent-skills" }),
+		);
+		const [question] = edits(calls);
+		await sendInteraction(pressButton(guildId, overwriteButtonId(question)));
+
+		expect(question).toEqual({
+			content:
+				"「one」という名前のスキルは、すでにあります。「vercel-labs/agent-skills」の内容で置き換えますか?",
+			components: [overwriteRow(overwriteButtonId(question))],
+		});
+		expect(overwriteButtonId(question)).toMatch(
+			/^skills:overwrite-source:\d+$/,
+		);
+		expect(edits(calls).at(-1)).toEqual({
+			content:
+				"「vercel-labs/agent-skills」から、スキル「one」を保存しました。次の返答から使います。",
+			components: [],
+		});
+		expect(await findSkillByName(env.DB, guildId, "one")).toMatchObject({
+			body: "本文",
+			source: { repository: "vercel-labs/agent-skills" },
+		});
+	});
+
+	it("欄の組み合わせや source の形が違えば、GitHubを読まずに、本人にだけ理由を見せる", async () => {
+		const calls = mockGitHub({});
+		const cases: [Parameters<typeof fromSource>[1], string][] = [
+			[
+				{ source: "vercel-labs/agent-skills", fileSize: 100 },
+				"SKILL.mdの添付と、sourceの指定は、別々に行ってください。",
+			],
+			[
+				{ skill: "web-design-guidelines" },
+				"skill を使うときは、source も指定してください。例: source `vercel-labs/agent-skills`、skill `web-design-guidelines`",
+			],
+			[
+				{ source: "agent-skills" },
+				"source は、GitHubのリポジトリを `持ち主/名前` かURLで指定してください。例: `vercel-labs/agent-skills`",
+			],
+		];
+
+		for (const [fields, content] of cases) {
+			expect(await sendInteraction(fromSource(newGuild(), fields))).toEqual({
+				type: InteractionResponseType.ChannelMessageWithSource,
+				data: { flags: MessageFlags.Ephemeral, content },
+			});
+		}
+		expect(
+			calls.some((call) => call.url.hostname === "codeload.github.com"),
+		).toBe(false);
+	});
+
+	it("スキルが見つからないとき、名前で指定したスキルがないとき、リポジトリを読めないときは、理由を書く", async () => {
+		const cases: [
+			Uint8Array | Response | undefined,
+			string | undefined,
+			string,
+		][] = [
+			[
+				await repo({ "README.md": "x" }),
+				undefined,
+				"「vercel-labs/agent-skills」に、スキル(SKILL.md)が見つかりませんでした。",
+			],
+			[
+				await repo({
+					"skills/one/SKILL.md": skillFile("one"),
+					"skills/two/SKILL.md": skillFile("two"),
+				}),
+				"web-design",
+				"「vercel-labs/agent-skills」に、「web-design」という名前のスキルはありません。入れられるスキル: `one`、`two`",
+			],
+			[
+				undefined,
+				undefined,
+				"GitHubのリポジトリ「vercel-labs/agent-skills」を読めませんでした。公開されているか、名前が合っているかを確かめてください。",
+			],
+			[new Response("error", { status: 503 }), undefined, GITHUB_FAILED],
+		];
+		for (const [archive, skill, content] of cases) {
+			vi.restoreAllMocks();
+			const calls = mockGitHub(
+				archive === undefined ? {} : { [ARCHIVE_URL]: archive },
+			);
+
+			await sendInteraction(
+				fromSource(newGuild(), {
+					source: "vercel-labs/agent-skills",
+					...(skill === undefined ? {} : { skill }),
+				}),
+			);
+
+			expect(edits(calls)).toEqual([{ content }]);
+		}
+	});
+
+	it("SKILL.mdに問題があれば、リポジトリの名前を添えて、今の理由の文を書く", async () => {
+		const calls = mockGitHub({
+			[ARCHIVE_URL]: await repo({ "skills/bad/SKILL.md": "名前と説明がない" }),
+		});
+
+		await sendInteraction(
+			fromSource(newGuild(), { source: "vercel-labs/agent-skills" }),
+		);
+
+		expect((edits(calls)[0] as { content?: string })?.content).toBe(
+			"「vercel-labs/agent-skills」のスキル「bad」を登録できませんでした。\nSKILL.mdを読めませんでした。",
+		);
 	});
 });

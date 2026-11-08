@@ -17,16 +17,33 @@ import {
 	TextInputStyle,
 } from "../discord/constants";
 import { logEvent } from "../log";
+import {
+	MAX_ARCHIVE_BYTES,
+	MAX_SKILL_FILE_BYTES,
+	MAX_SKILL_FILES,
+	MAX_SKILL_FILES_BYTES,
+	type PluginSkill,
+	repositoryName,
+} from "../plugins/marketplace";
+import {
+	loadSkillSource,
+	parseSkillSource,
+	type SkillSource as SourceRef,
+} from "../plugins/skill-source";
 import { formatJstDate } from "../respond/time";
 import {
 	addSkill,
 	countCharacters,
 	countSkills,
 	deletePendingSkill,
+	deletePendingSource,
 	deleteSkill,
 	findSkillByName,
 	getPendingSkill,
+	getPendingSource,
 	getSkill,
+	type InstallingSkill,
+	installSkills,
 	isValidSkillName,
 	listSkills,
 	MAX_BODY_LENGTH,
@@ -39,6 +56,7 @@ import {
 	type SkillEditor,
 	type SkillSummary,
 	savePendingSkill,
+	savePendingSource,
 	updateSkill,
 } from "../store/skills";
 import {
@@ -55,6 +73,9 @@ export const SKILLS_COMMAND_NAME = "skills";
 
 /** /skills の、追加するSKILL.mdを添付する欄の名前 */
 export const SKILLS_FILE_OPTION = "file";
+/** /skills の、npx skills add と同じ指定で入れるときの欄の名前(GitHubのリポジトリと、スキルの名前) */
+export const SKILLS_SOURCE_OPTION = "source";
+export const SKILLS_SKILL_OPTION = "skill";
 
 /**
  * /skills の、ボタン、セレクトメニュー、モーダルのIDの頭。
@@ -66,6 +87,8 @@ export const SKILLS_ID_PREFIX = "skills:";
 const Action = {
 	Select: "select",
 	Add: "add",
+	Pick: "pick",
+	OverwriteSource: "overwrite-source",
 	Edit: "edit",
 	Replace: "replace",
 	Delete: "delete",
@@ -126,6 +149,16 @@ const DRAFT_ATTACHED =
 	"書いた内容を添付します。直してから `/skills` の file に添付すると、登録できます。";
 const PENDING_GONE =
 	"この置き換えは、もう使えません。もう一度 `/skills` から登録してください。";
+const FILE_AND_SOURCE =
+	"SKILL.mdの添付と、sourceの指定は、別々に行ってください。";
+const SKILL_WITHOUT_SOURCE =
+	"skill を使うときは、source も指定してください。例: source `vercel-labs/agent-skills`、skill `web-design-guidelines`";
+const INVALID_SOURCE =
+	"source は、GitHubのリポジトリを `持ち主/名前` かURLで指定してください。例: `vercel-labs/agent-skills`";
+const GITHUB_FAILED =
+	"GitHubとのやり取りでエラーが起きました。少し待ってから、もう一度試してください。";
+/** 選ぶメニューに出せる数(Discordの上限) */
+const MAX_PICK_OPTIONS = 25;
 
 /**
  * /skills: スキルの一覧・追加・編集(仕様: docs/spec/behavior.md「スキル」)。
@@ -140,6 +173,36 @@ export async function skillsCommand(
 	editor: SkillEditor,
 ): Promise<APIInteractionResponse> {
 	const attachment = attachedFile(interaction);
+	const sourceInput = stringOption(interaction, SKILLS_SOURCE_OPTION);
+	const skillInput = stringOption(interaction, SKILLS_SKILL_OPTION);
+	if (sourceInput !== undefined || skillInput !== undefined) {
+		if (attachment !== undefined) {
+			return ephemeral(FILE_AND_SOURCE);
+		}
+		if (sourceInput === undefined) {
+			return ephemeral(SKILL_WITHOUT_SOURCE);
+		}
+		const source = parseSkillSource(sourceInput);
+		if (source === null) {
+			return ephemeral(INVALID_SOURCE);
+		}
+		// GitHubからリポジトリを読むので、保留にしてから結果を書く
+		return respondLater(
+			ctx,
+			interaction,
+			editor.id,
+			"reply",
+			() =>
+				installFromSource(
+					env.DB,
+					guildId,
+					source,
+					skillInput === undefined ? null : normalizeSkillName(skillInput),
+					editor,
+				),
+			{ content: SAVE_FAILED },
+		);
+	}
 	if (attachment === undefined) {
 		return {
 			type: InteractionResponseType.ChannelMessageWithSource,
@@ -257,6 +320,28 @@ export async function skillComponent(
 			log("skill_deleted", { userId: editor.id, guildId, skill: name });
 			return updateMessage(`スキル「${name}」を削除しました。`);
 		}
+		case Action.Pick: {
+			if (interaction.data.component_type !== ComponentType.StringSelect) {
+				return null;
+			}
+			const name = interaction.data.values[0] ?? "";
+			return updateOrReplyLater(
+				ctx,
+				interaction,
+				editor.id,
+				() => pickFromSource(env.DB, guildId, Number(target), name, editor),
+				{ content: SAVE_FAILED },
+			);
+		}
+		case Action.OverwriteSource:
+			// 確かめたときと同じコミットを読み直して置き換える。置き換えられないときは、確かめる画面を残して理由を見せる
+			return updateOrReplyLater(
+				ctx,
+				interaction,
+				editor.id,
+				() => overwriteFromSource(env.DB, guildId, Number(target), editor),
+				{ content: SAVE_FAILED },
+			);
 		case Action.Overwrite: {
 			// 置き換えられないときは、確かめる画面(書いた内容の添付)を残したまま、理由を見せる
 			const id = Number(target);
@@ -419,6 +504,327 @@ function overwriteRow(
 			},
 		],
 	};
+}
+
+/**
+ * /skills の source(npx skills add と同じ指定)から、スキルを入れる(#107。仕様: docs/spec/behavior.md「スキル」)。
+ * skillで名前を指定すればそのスキルを、指定がなく1つだけならそれを入れる。複数あれば、選ぶメニューを出す
+ */
+async function installFromSource(
+	db: D1Database,
+	guildId: string,
+	source: SourceRef,
+	skillName: string | null,
+	editor: SkillEditor,
+): Promise<MessageEdit> {
+	const name = repositoryName(source.repository);
+	const loaded = await loadFromSource(source);
+	if ("problem" in loaded) {
+		return { content: loaded.problem };
+	}
+	const { commit, skills } = loaded;
+	if (skillName !== null || skills.length === 1) {
+		const skill =
+			skillName === null
+				? skills[0]
+				: skills.find((candidate) => nameOf(candidate) === skillName);
+		if (skill === undefined) {
+			return { content: skillNotFound(name, skillName ?? "", skills) };
+		}
+		return installOne(db, guildId, source, commit, skill, editor, false);
+	}
+	const pendingId = await savePendingSource(db, guildId, editor.id, {
+		repository: name,
+		path: source.path,
+		commit,
+		skillName: null,
+	});
+	const options = skills.slice(0, MAX_PICK_OPTIONS);
+	return {
+		content: [
+			`「${name}」には、スキルが${skills.length}個あります。入れるスキルを選んでください。`,
+			...(skills.length > MAX_PICK_OPTIONS
+				? [
+						`-# 最初の${MAX_PICK_OPTIONS}個を出しています。ほかのスキルは、skill で名前を指定して入れてください。`,
+					]
+				: []),
+		].join("\n"),
+		components: [
+			{
+				type: ComponentType.ActionRow,
+				components: [
+					{
+						type: ComponentType.StringSelect,
+						custom_id: idOf(Action.Pick, pendingId),
+						placeholder: "入れるスキルを選ぶ",
+						options: options.map((skill) => {
+							const description =
+								skill.file === null
+									? ""
+									: optionDescription(skill.file.description);
+							return {
+								label: nameOf(skill).slice(0, 100),
+								value: nameOf(skill).slice(0, 100),
+								...(description !== "" ? { description } : {}),
+							};
+						}),
+					},
+				],
+			},
+		],
+	};
+}
+
+/** 選ぶメニューでスキルを選んだとき。選んでもらったときと同じコミットを読み直して入れる */
+async function pickFromSource(
+	db: D1Database,
+	guildId: string,
+	pendingId: number,
+	skillName: string,
+	editor: SkillEditor,
+): Promise<DeferredResult> {
+	const pending = await getPendingSource(db, guildId, editor.id, pendingId);
+	const source = pending === null ? null : pendingSourceRef(pending);
+	if (pending === null || source === null) {
+		return { reply: { content: PENDING_GONE } };
+	}
+	const loaded = await loadFromSource(source, pending.commit);
+	if ("problem" in loaded) {
+		return { reply: { content: loaded.problem } };
+	}
+	const skill = loaded.skills.find(
+		(candidate) => nameOf(candidate) === skillName,
+	);
+	if (skill === undefined) {
+		return {
+			reply: {
+				content: skillNotFound(pending.repository, skillName, loaded.skills),
+			},
+		};
+	}
+	await deletePendingSource(db, pendingId);
+	// 入れられなかったときも、選ぶメニューは外す(選び直すには、/skills からやり直す)
+	return {
+		update: {
+			components: [],
+			...(await installOne(
+				db,
+				guildId,
+				source,
+				loaded.commit,
+				skill,
+				editor,
+				false,
+			)),
+		},
+	};
+}
+
+/** source のスキルを置き換えると確かめたとき。確かめたときと同じコミットを読み直して置き換える */
+async function overwriteFromSource(
+	db: D1Database,
+	guildId: string,
+	pendingId: number,
+	editor: SkillEditor,
+): Promise<DeferredResult> {
+	const pending = await getPendingSource(db, guildId, editor.id, pendingId);
+	const source = pending === null ? null : pendingSourceRef(pending);
+	if (pending === null || source === null || pending.skillName === null) {
+		return { reply: { content: PENDING_GONE } };
+	}
+	const loaded = await loadFromSource(source, pending.commit);
+	if ("problem" in loaded) {
+		return { reply: { content: loaded.problem } };
+	}
+	const skill = loaded.skills.find(
+		(candidate) => nameOf(candidate) === pending.skillName,
+	);
+	if (skill === undefined) {
+		return {
+			reply: {
+				content: skillNotFound(
+					pending.repository,
+					pending.skillName,
+					loaded.skills,
+				),
+			},
+		};
+	}
+	const result = await installOne(
+		db,
+		guildId,
+		source,
+		loaded.commit,
+		skill,
+		editor,
+		true,
+	);
+	if (result.components === undefined) {
+		// 上限などで置き換えられなかった(結果の文だけが返る)
+		return { reply: { content: result.content ?? SAVE_FAILED } };
+	}
+	await deletePendingSource(db, pendingId);
+	return { update: result };
+}
+
+/**
+ * スキルを1つ入れる。同じ名前があれば、overwriteでなければ、置き換えるかを確かめる(コミットを保存する)。
+ * 入れられたときと、置き換えるかを確かめるときは、componentsを付けて返す(付いていなければ、入れられなかった理由)
+ */
+async function installOne(
+	db: D1Database,
+	guildId: string,
+	source: SourceRef,
+	commit: string,
+	skill: PluginSkill,
+	editor: SkillEditor,
+	overwrite: boolean,
+): Promise<MessageEdit> {
+	const name = repositoryName(source.repository);
+	const prepared = preparedSkill(name, skill);
+	if (typeof prepared === "string") {
+		return { content: prepared };
+	}
+	const result = await installSkills(
+		db,
+		guildId,
+		[prepared],
+		{ repository: name, plugin: "", commit },
+		editor,
+		{ overwrite },
+	);
+	if (result.result === "limit") {
+		return { content: LIMIT_REACHED };
+	}
+	if (result.result === "duplicate") {
+		const pendingId = await savePendingSource(db, guildId, editor.id, {
+			repository: name,
+			path: source.path,
+			commit,
+			skillName: prepared.content.name,
+		});
+		return {
+			content: `「${prepared.content.name}」という名前のスキルは、すでにあります。「${name}」の内容で置き換えますか?`,
+			components: [overwriteRow(idOf(Action.OverwriteSource, pendingId))],
+		};
+	}
+	log(overwrite ? "skill_updated" : "skill_added", {
+		userId: editor.id,
+		guildId,
+		skill: prepared.content.name,
+		via: "source",
+		repository: name,
+		commit,
+	});
+	const usage =
+		prepared.files.length > 0
+			? "ファイルが付いているので、エージェント(`/agent`)だけで使います。"
+			: "次の返答から使います。";
+	return {
+		content: `「${name}」から、スキル「${prepared.content.name}」を${overwrite ? "保存" : "追加"}しました。${usage}`,
+		components: [],
+	};
+}
+
+/** GitHubから source のスキルを探す。見つからないときは、本人に見せる理由を返す */
+async function loadFromSource(
+	source: SourceRef,
+	ref?: string,
+): Promise<{ commit: string; skills: PluginSkill[] } | { problem: string }> {
+	const name = repositoryName(source.repository);
+	const load = await loadSkillSource(source, ref);
+	switch (load.status) {
+		case "unreadable":
+			return {
+				problem: `GitHubのリポジトリ「${name}」を読めませんでした。公開されているか、名前が合っているかを確かめてください。`,
+			};
+		case "too-large":
+			return {
+				problem: `GitHubのリポジトリ「${name}」が大きすぎるため、読めませんでした(${MAX_ARCHIVE_BYTES / (1024 * 1024)}MBまで)。`,
+			};
+		case "no-skills":
+			return {
+				problem: `「${name}」に、スキル(SKILL.md)が見つかりませんでした。`,
+			};
+		case "github-error":
+			return { problem: GITHUB_FAILED };
+	}
+	// 同じ名前のスキルが2つあれば、先に見つかった方を使う
+	const skills = load.skills.filter(
+		(skill, index) =>
+			load.skills.findIndex((other) => nameOf(other) === nameOf(skill)) ===
+			index,
+	);
+	return { commit: load.commit, skills };
+}
+
+/** 入れるスキルを、決まり(名前の規則、長さとファイルの上限)で確かめる。合わなければ、理由の文 */
+function preparedSkill(
+	repository: string,
+	skill: PluginSkill,
+): InstallingSkill | string {
+	if (skill.file === null) {
+		return `「${repository}」のスキル「${nameOf(skill)}」を登録できませんでした。\nSKILL.mdを読めませんでした。`;
+	}
+	const content = { ...skill.file, name: normalizeSkillName(skill.file.name) };
+	const problem = problemOf(content);
+	if (problem !== null) {
+		return `「${repository}」のスキル「${content.name}」を登録できませんでした。\n${problem}`;
+	}
+	if (skill.tooManyFiles) {
+		return `スキル「${content.name}」のファイルが多すぎるか、大きすぎます(1つのスキルで${MAX_SKILL_FILES}個・合計${MAX_SKILL_FILES_BYTES / (1024 * 1024)}MB・1つ${MAX_SKILL_FILE_BYTES / (1024 * 1024)}MBまで)。`;
+	}
+	return { content, files: skill.files };
+}
+
+/** スキルの名前。SKILL.mdを読めなければ、フォルダの名前 */
+function nameOf(skill: PluginSkill): string {
+	return skill.file === null
+		? skill.directory
+		: normalizeSkillName(skill.file.name);
+}
+
+/** 名前で指定したスキルがないときの文。入れられるスキルの名前を、1通に収まるまで並べる */
+function skillNotFound(
+	repository: string,
+	skillName: string,
+	skills: readonly PluginSkill[],
+): string {
+	const text = `「${repository}」に、「${skillName}」という名前のスキルはありません。`;
+	let list = "";
+	for (const [index, skill] of skills.entries()) {
+		const next = `${list}${index === 0 ? "" : "、"}\`${nameOf(skill)}\``;
+		if (`${text}入れられるスキル: ${next}、…`.length > MESSAGE_LENGTH) {
+			list = `${list}、…`;
+			break;
+		}
+		list = next;
+	}
+	return list === "" ? text : `${text}入れられるスキル: ${list}`;
+}
+
+/** 保存した入手元を、読み直すための指定に戻す */
+function pendingSourceRef(pending: {
+	repository: string;
+	path: string;
+}): SourceRef | null {
+	const source = parseSkillSource(pending.repository);
+	return source === null ? null : { ...source, path: pending.path };
+}
+
+/** /skills の、文字を入れる欄の値。前後の空白を除き、空なら(入れていなければ)undefined */
+function stringOption(
+	interaction: APIChatInputApplicationCommandInteraction,
+	name: string,
+): string | undefined {
+	const option = interaction.data.options?.find(
+		(candidate) => candidate.name === name,
+	);
+	if (option?.type !== ApplicationCommandOptionType.String) {
+		return undefined;
+	}
+	const value = option.value.normalize("NFKC").trim();
+	return value === "" ? undefined : value;
 }
 
 /** 登録できなかった理由に、書いた内容を添付したことを書き添え、書いた内容をSKILL.mdにして添付する */
@@ -643,7 +1049,7 @@ function skillScreen(skill: Skill): MessageEdit {
 		source === null
 			? []
 			: [
-					`-# 入手元: ${source.repository} のプラグイン「${source.plugin}」(${source.commit.slice(0, 7)})${skill.fileCount > 0 ? `・ファイル${skill.fileCount}個` : ""}`,
+					`-# 入手元: ${source.plugin === "" ? `${source.repository}(${source.commit.slice(0, 7)})` : `${source.repository} のプラグイン「${source.plugin}」(${source.commit.slice(0, 7)})`}${skill.fileCount > 0 ? `・ファイル${skill.fileCount}個` : ""}`,
 				];
 	return {
 		content: [
