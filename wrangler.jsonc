@@ -27,18 +27,37 @@
 		]
 	},
 	// Discord Gatewayへの常時接続を持つDurable Objectと、/importの進み具合を見張るDurable Object、
-	// エージェントのチャンネルごとに、Managed Agentsのセッションとのやり取りを受け持つDurable Object
+	// エージェントのチャンネルごとに、Managed Agentsのセッションとのやり取りを受け持つDurable Object、
+	// 知識チャンネルのPowerPointをPDFにするコンテナ(下のcontainers)を動かすDurable Object
 	"durable_objects": {
 		"bindings": [
 			{ "name": "GATEWAY", "class_name": "Gateway" },
 			{ "name": "IMPORT_PROGRESS", "class_name": "ImportProgress" },
-			{ "name": "AGENT_SESSION", "class_name": "AgentSession" }
+			{ "name": "AGENT_SESSION", "class_name": "AgentSession" },
+			{ "name": "KNOWLEDGE_CONVERTER", "class_name": "KnowledgeConverter" }
 		]
 	},
 	"migrations": [
 		{ "tag": "v1", "new_sqlite_classes": ["Gateway"] },
 		{ "tag": "v2", "new_sqlite_classes": ["ImportProgress"] },
-		{ "tag": "v3", "new_sqlite_classes": ["AgentSession"] }
+		{ "tag": "v3", "new_sqlite_classes": ["AgentSession"] },
+		{ "tag": "v4", "new_sqlite_classes": ["KnowledgeConverter"] }
+	],
+	// 知識チャンネルのPowerPointをPDFにするコンテナ(Gotenberg。LibreOfficeでOfficeのファイルをPDFにするHTTPのサーバー)。
+	// 外には公開せず、Workerからだけ呼ぶ。Docker Hubのイメージを、版を固定して使う(デプロイにDockerは要らない)。
+	// 4GiB(standard-1)にしている。1GiB(basic)では、80枚のスライドを変換したときに、約700MiBまで使ったため
+	// (仕様: docs/spec/architecture.md「知識チャンネル」)
+	"containers": [
+		{
+			"class_name": "KnowledgeConverter",
+			"image": "docker.io/gotenberg/gotenberg:9.1.0-libreoffice",
+			"instance_type": "standard-1",
+			"max_instances": 1
+		}
+	],
+	// 知識チャンネルのPowerPointを変換したPDF(AIがPDFのまま読むときに渡す)
+	"r2_buckets": [
+		{ "binding": "KNOWLEDGE_FILES", "bucket_name": "bobert-knowledge-dev" }
 	],
 	"queues": {
 		"producers": [
@@ -106,13 +125,26 @@
 				"bindings": [
 					{ "name": "GATEWAY", "class_name": "Gateway" },
 					{ "name": "IMPORT_PROGRESS", "class_name": "ImportProgress" },
-					{ "name": "AGENT_SESSION", "class_name": "AgentSession" }
+					{ "name": "AGENT_SESSION", "class_name": "AgentSession" },
+					{ "name": "KNOWLEDGE_CONVERTER", "class_name": "KnowledgeConverter" }
 				]
 			},
 			"migrations": [
 				{ "tag": "v1", "new_sqlite_classes": ["Gateway"] },
 				{ "tag": "v2", "new_sqlite_classes": ["ImportProgress"] },
-				{ "tag": "v3", "new_sqlite_classes": ["AgentSession"] }
+				{ "tag": "v3", "new_sqlite_classes": ["AgentSession"] },
+				{ "tag": "v4", "new_sqlite_classes": ["KnowledgeConverter"] }
+			],
+			"containers": [
+				{
+					"class_name": "KnowledgeConverter",
+					"image": "docker.io/gotenberg/gotenberg:9.1.0-libreoffice",
+					"instance_type": "standard-1",
+					"max_instances": 1
+				}
+			],
+			"r2_buckets": [
+				{ "binding": "KNOWLEDGE_FILES", "bucket_name": "bobert-knowledge" }
 			],
 			"queues": {
 				"producers": [

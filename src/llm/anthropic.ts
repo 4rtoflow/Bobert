@@ -211,14 +211,27 @@ function toolResultBlock(
 function fileBlock(
 	file: ChatFile,
 ): Anthropic.ImageBlockParam | Anthropic.DocumentBlockParam {
-	return file.type === "image"
-		? { type: "image", source: { type: "url", url: file.url } }
-		: {
-				type: "document",
-				source: { type: "url", url: file.url },
-				title: file.filename,
-			};
+	if (file.type === "image") {
+		return { type: "image", source: { type: "url", url: file.url } };
+	}
+	// 中身ごと渡すPDF(data URL。知識チャンネルのPowerPointをPDFにしたもの)は、base64で渡す
+	const inline = INLINE_PDF.exec(file.url);
+	return {
+		type: "document",
+		source:
+			inline === null
+				? { type: "url", url: file.url }
+				: {
+						type: "base64",
+						media_type: "application/pdf",
+						data: inline[1] ?? "",
+					},
+		title: file.filename,
+	};
 }
+
+/** 中身ごと渡すPDFのdata URL(OpenRouterは、そのまま受け付ける) */
+const INLINE_PDF = /^data:application\/pdf;base64,(.*)$/s;
 
 /** ファイルを受け付けなかったときの失敗か(400と413) */
 function filesRejected(error: unknown): boolean {

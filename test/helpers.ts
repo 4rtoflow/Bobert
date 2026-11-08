@@ -491,6 +491,7 @@ export function fakeIngestDeps(botUserId: string) {
 		knowledgeLater: async (fileIds) => {
 			knowledge.push(...fileIds);
 		},
+		knowledgeFiles: env.KNOWLEDGE_FILES,
 	};
 	return { deps, upserted, deleted, embedded, transcribing, knowledge };
 }

@@ -18,6 +18,7 @@ import type { QueueMessage } from "./queue/messages";
 export { AgentSession } from "./agent/session-object";
 export { Gateway } from "./gateway/gateway";
 export { ImportProgress } from "./import/progress-object";
+export { KnowledgeConverter } from "./knowledge/converter";
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {

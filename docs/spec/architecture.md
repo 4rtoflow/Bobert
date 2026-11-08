@@ -43,6 +43,8 @@ Discordは、通常のメッセージやメンションをGateway(常時接続�
 | 知識チャンネルのファイルを文字にした内容と、要約の保存        | D1                                     |
 | 検索用のデータ化(埋め込み)と、音声メッセージの文字起こし      | Workers AI                             |
 | 知識チャンネルのファイルを文字(Markdown)にする                | Workers AI(Markdown変換)               |
+| 知識チャンネルのPowerPointをPDFにする                         | Containers(Gotenberg)                  |
+| 知識チャンネルのPowerPointをPDFにしたものの保存               | R2                                     |
 | `/import`の進み具合の表示(5秒おきの書き換え)                  | Durable Object(サーバーごとに1つ)      |
 | エージェントのセッションとのやり取り                          | Durable Object(チャンネルごとに1つ)    |
 - Workersの有料プラン(月$5)を使う。無料プランはCPU時間が1リクエストあたり10msしかなく、足りない可能性が高い。
@@ -572,13 +574,14 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
 ## 知識チャンネル
 
 サーバー管理者が`/knowledge`で指定したチャンネル(知識チャンネル)に送られたファイルを、文字にしてD1に保存し、送った人のキーで要約して、返答のたびに一覧をAIに渡す。AIは、関係するファイルがあれば、道具で中身を読む。「意味で検索」の道具と違い、どんなファイルがあるかを、AIが探そうと判断しなくても知っている。決めた経緯は[issue #96](https://github.com/4rtoflow/Bobert/issues/96)を参照。画面と文言、AIへの指示の文面は[Botの振る舞い](behavior.md)の「知識チャンネル」、費用は[LLM利用コスト](llm-cost.md)の「知識チャンネルの費用」を参照。
-- **段階:** 3つのPRに分ける。1つ目は、指定と、PDF、Word、Excel、CSV、テキストの要約と読み取り(いまはここまで)。2つ目は、PowerPointを、Cloudflare Containersで動かすGotenberg(LibreOfficeでOfficeのファイルをPDFにするHTTPのサーバー)でPDFにして、R2に保存し、同じように文字にする。3つ目は、文字にした内容を区切ってベクトルにし、ファイルの中を意味で探す道具を足す(一覧に載らない古いファイルも見つけられるようにする)。
+- **段階:** 3つのPRに分ける。1つ目は、指定と、PDF、Word、Excel、CSV、テキストの要約と読み取り。2つ目は、PowerPointを、Cloudflare Containersで動かすGotenberg(LibreOfficeでOfficeのファイルをPDFにするHTTPのサーバー)でPDFにして、R2に保存し、同じように文字にする(いまはここまで)。3つ目は、文字にした内容を区切ってベクトルにし、ファイルの中を意味で探す道具を足す(一覧に載らない古いファイルも見つけられるようにする)。
 - **保存(D1):**
   - `knowledge_channels`: 知識チャンネルと、指定した人と日時。スレッドとフォーラムの投稿は指定せず、親のチャンネルの指定に従う。
   - `knowledge_files`: 知識チャンネルに送られた添付ファイルごとに1行。サーバー、知識チャンネル(スレッドの中のファイルなら親のチャンネル)、ファイルのあるチャンネル、メッセージ、添付ファイルのID、ファイル名、形式、大きさ、送った人と名前、送った日時、状態、要約を置く。AIに見せるID(`k12`)は、この行の番号。
   - `knowledge_texts`: 文字にした内容を、3万文字(UTF-16の長さ)ずつに区切って置く。D1は、1行2MBまで、1つのSQL文は100KBまでのため(3万文字なら、UTF-8で1文字3バイトでも90KB)。区切りごとに、全体のどこからどこまでかを置き、読む道具は要る分だけを読む。
   - 状態は、受け付けた(`pending`)、文字にした(`converted`)、知識に入った(`ready`)、知識に加えなかった(`rejected`)の4つ。一覧に載せ、読めるのは、知識に入ったものだけ。知識に加えなかったファイルも、同じ添付ファイルで二度知らせないよう、記録を残す(文字にした内容は消す)。
   - 添付ファイルは、DiscordのURLにある添付ファイルのIDで見分ける(ファイルを読む道具と同じ)。
+  - PowerPointをPDFにしたものは、R2(`KNOWLEDGE_FILES`。開発用は`bobert-knowledge-dev`、本番は`bobert-knowledge`)に、`pdf/<知識のファイルのID>.pdf`の名前で置く。AIがPDFのまま読むときに渡すため(ほかの形式は、元のファイルをDiscordのURLで渡すので置かない)。
 - **受け付け:** メッセージを保存する処理(保存用のQueue)で、知識チャンネルとその中のスレッドのメッセージを見つける。指定した後に送られた、受け付ける形式のファイルを記録し、文字にして要約する仕事(`knowledge`)を、1ファイルに1つずつ、応答用のQueue(RESPOND_QUEUE)に入れる。
   - 知識チャンネルは共有チャンネルにしか指定できないので、そのメッセージは必ず保存されている。スレッドが知識チャンネルの中かは、チャンネルの記録の親で見分ける。
   - 同じ添付ファイルは、二度記録しない(作成と編集の通知が両方届いたときや、読み直したメッセージを保存し直したとき)。どのファイルがあるかは、保存したメッセージの版で決める。処理のやり直しで、古い版が後から届いても、外したファイルを加え直さないため。
@@ -589,6 +592,7 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
   2. 大きさを確かめる(20MBまで)。
   3. ファイルを読み、文字にする。保存したURLは約24時間で切れるので、期限が近ければ、メッセージを読み直して取り直す(ファイルを読む道具と同じ)。
      - PDF、Word、Excelは、Workers AIのMarkdown変換(`env.AI.toMarkdown`)で文字にする。PDFの情報(作った日時など)は入れず、PDFとWordに埋め込まれた画像は文字にしない(画像の変換はAIのモデルを使い、運営者の費用がかかることがあるため)。
+     - PowerPointは、Markdown変換が対応していないので、コンテナのGotenbergでPDFにしてから、PDFと同じく文字にする。PDFにしたものは、R2に置く(下の「コンテナ」を参照)。Gotenbergが読めないと答えたら(400。壊れたファイルなど)、読めないものとして扱う。
      - CSVとテキストは、ファイルを読む道具と同じく、UTF-8かShift_JISで読む。ExcelのCSVはShift_JISのことがあり、Markdown変換に渡すと文字化けするおそれがあるため(Markdown変換はCSVにも対応しているが、使わない)。
      - Markdown変換が変換できなかったファイル(`format`が`error`)と、見出しと空白しかない(文字のない、スキャンしたPDFなど)ものは、読めないものとして扱う。
   4. 文字にした内容を保存し、送った人のキーで、Claude Haiku 5.5に要約させる。Anthropicのキーがあれば直接、なければOpenRouter経由で呼ぶ(記憶のまとめと同じ)。思考の深さは`low`。要約は、改行を空白にし、200文字までにする。
@@ -596,15 +600,20 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
   - レート制限、混雑、原因の分からないAIの失敗、Workers AIやDiscordのCDNの障害など、やり直せば通るかもしれない失敗は、Queueで60秒待ってからやり直す(1つの仕事を試すのは、合わせて3回)。最後の回でも失敗したら、知らせて終える。文字にした後に失敗したときは、次の回は要約から始める(読み直しと変換をやり直さない)。
   - 処理の途中で、メッセージが消されたり、知識チャンネルが解除されたり、編集でファイルが外されたりしたら、結果を保存せずに終える(知らせない)。CDNが404を返したとき(ファイルが消えていた)も同じ。
   - 知らせる返信は、ファイルのメッセージへの返信にして、送った人に通知する。送れなかったとき(権限がない、メッセージが消えたなど)は、ログに残すだけにする。
+- **コンテナ(PowerPointをPDFにする):** WorkersではLibreOfficeを動かせない(JavaScriptとWebAssemblyしか動かず、メモリも128MBまで)ため、Cloudflare ContainersでGotenbergを動かし、Workerから`@cloudflare/containers`の`Container`(Durable Object。`KnowledgeConverter`)で呼ぶ。外の関数サーバーや変換のAPIサービスは使わない(下の「検討した他の案」を参照)。
+  - イメージは、Docker Hubの`gotenberg/gotenberg`のLibreOffice版を、版を固定して使う(`9.1.0-libreoffice`)。レジストリのイメージを指定するので、デプロイにDockerは要らない。日本語を含むNoto CJKのフォントが入っている。メイリオや游ゴシックはないので、別のフォントで表示され、改行の位置など見た目が少し変わることがある。
+  - 大きさは`standard-1`(メモリ4GiB、vCPU 1/2)。手元のDockerで、メモリを1GiB(`basic`)に絞って試したところ、80枚のスライドを、動き出してすぐに変換したときに、約700MiBまで使った(2026-11-07)。画像の多いファイルでは1GiBでは足りなくなるおそれがあるため。
+  - 1つだけ動かし(`max_instances`は1)、どの変換も同じものに送る。最後に使ってから1分で止める(`sleepAfter`。止まるまで課金されるため、既定の10分より短くする)。外のネットワークには出さない(ファイルの中のリンク先などを読みに行かせないため)。Gotenbergの時間の上限は、既定の30秒から120秒に延ばす。
+  - 止まっていれば、変換を頼んだときに動き出す(数秒かかる)。変換は裏の仕事なので、動き出すのが遅くても、返答は待たせない。動き出せなかったときなどは、ほかの障害と同じく、Queueでやり直す。
 - **AIへの渡し方:** 返答のたびに、知識に入ったファイルを新しい順に50件まで読み、一覧をスキルの一覧の次に入れる。サーバーで同じ部分なので、人ごとに変わる部分(本人の指示、記憶)より前に置き、キャッシュを効かせる。
   - 1行の形は`- k12: #資料「規約.pdf」(2026-11-06、Alice) 要約`。チャンネルの名前は、今の名前(スレッドの中のファイルなら、スレッドの名前)。送った人の名前は、最後に分かった名前(なければ、送ったときの名前)。日付は日本時間。
   - 載せきれないファイルがあれば、その数を書き添える。古いファイルは、3つ目のPRの探す道具で見つけられるようにする。
   - 使う場面は、メンションへの返答と「Bobertに聞く」。道具を使えないモデルには、一覧も道具も渡さない。
 - **読む道具(`read_knowledge_file`):** 一覧のIDを指定して、文字にした内容を、1回で5万文字まで返す(ファイルを読む道具のテキストと同じ形)。続きの位置(`offset`)を指定して読める。
-  - PDFは、PDFを読めるモデルなら、PDFのまま読める(`as_pdf`)。ファイルを読む道具と同じく、DiscordのURLで渡し、期限が近ければメッセージを読み直して取り直す。PDFを読めないモデルには、`as_pdf`の欄を渡さない。
+  - PDFとPowerPointは、PDFを読めるモデルなら、PDFのまま読める(`as_pdf`)。PDFは、ファイルを読む道具と同じく、DiscordのURLで渡し、期限が近ければメッセージを読み直して取り直す。PowerPointは、R2に置いたPDFを中身ごと(base64で)渡す。AnthropicにはPDFの文書(`source`の`type`が`base64`)として、OpenRouterには`data:`のURLとして渡す。10MBを超えるものは渡さず、文字にした内容を読むようAIに返す(AIのプロバイダの、1回のリクエストの大きさの上限に収めるため)。PDFを読めないモデルには、`as_pdf`の欄を渡さない。
   - 読めるのは、そのサーバーの、知識に入ったファイルだけ。一覧を渡した後に消されたファイルは、ないことをAIに返す。
   - 道具の呼び出しの上限(合計100回)には数えず、ファイルを読む道具と合わせて、1回の返答で10回まで。
-- **削除の連動:** メッセージが削除されたら、そのファイルの知識を消す。編集で添付ファイルが外されたら、外されたファイルの分を消す。チャンネル(と中のスレッド)が削除されたときと、共有しなくなったときは、指定を外し、そのチャンネルの知識を消す。`/knowledge`で解除したときも消す。
+- **削除の連動:** メッセージが削除されたら、そのファイルの知識を消す。編集で添付ファイルが外されたら、外されたファイルの分を消す。チャンネル(と中のスレッド)が削除されたときと、共有しなくなったときは、指定を外し、そのチャンネルの知識を消す。`/knowledge`で解除したときも消す。PowerPointをPDFにしたもの(R2)も、知識のファイルと一緒に消す。知識に加えないことにしたときも消す。
   - `/delete`では消さない。Bobertがサーバーから外されても残す(Bobert.mdと同じく、サーバーのものとして扱うため)。
 - **ログ:** 受け付けた数、知識に加えなかった理由、形式、大きさ、文字にするのと要約にかかった時間、要約のトークン数を残す。返答では、一覧に載せた数と、読んだファイルのIDを残す。ファイル名、中身、要約は残さない(ファイルを読む道具と同じ)。
 
@@ -752,6 +761,9 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
 | PDFやWord、Excelを、Workers AIで文字(Markdown)にして渡す                              | ―        | グラフやスキャンしたPDFを読めないため。PDFはそのまま渡す形にした(Word、Excelは、まだ読まない)                                              |
 | 知識チャンネルのファイルを、要約せずに、全部の中身を毎回AIに渡す                      | ―        | ファイルが増えるほど、全員の返答の費用が大きくなるため。要約の一覧を渡し、必要なときに中身を読む形にした                                   |
 | 知識チャンネルの要約に、本人が`/model`で選んだモデルを使う                            | ―        | 高いモデルを選んでいる人の費用が増え、要約の質もばらつくため。記憶のまとめと同じく、Claude Haiku 5.5にした                                 |
+| PowerPointを、外の関数サーバー(Cloud Runなど)や、変換のAPIサービスでPDFにする         | ―        | 別のアカウントと支払い、認証が増え、ファイルがCloudflareの外に出るため。Cloudflare Containersにした                                        |
+| PowerPointを変換するコンテナを、1GiB(basic)にする                                     | ―        | 80枚のスライドの変換で約700MiBまで使い、画像の多いファイルでは足りなくなるおそれがあるため                                                 |
+| PowerPointのPDFを、WorkerのURLで公開して、AIのプロバイダに読みに来てもらう            | ―        | 公開のURLと署名の仕組みが要るため。中身ごと(base64で)渡す形にした                                                                          |
 | 見つけたメッセージの前後のファイルは、AIが時系列で読む道具で探す                      | ―        | 道具の呼び出しが1回増えるため。意味で検索の結果に入れる形にした                                                                            |
 | 会話の中のメンションに、ユーザーIDも書き添える                                        | ―        | 毎回の入力が増えるため。メンションするときだけ、道具で調べる形にした                                                                       |
 | AIが書いた「@名前」を、Bobertがメンションに置き換える                                 | ―        | 名前の区切りが分からず、同じ名前の人も区別できないため                                                                                     |
@@ -765,5 +777,6 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
 - Discord: [Gateway](https://docs.discord.com/developers/events/gateway) / [Opcodes and Status Codes](https://docs.discord.com/developers/topics/opcodes-and-status-codes) / [Webhook Events](https://docs.discord.com/developers/events/webhook-events) / [Receiving and Responding](https://docs.discord.com/developers/interactions/receiving-and-responding) / [You might not need a privileged intent](https://docs.discord.com/developers/gateway/you-might-not-need-a-privileged-intent)
 - Cloudflare: [What are Durable Objects?](https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/) / [Durable ObjectsのWebSocket](https://developers.cloudflare.com/durable-objects/best-practices/websockets/) / [Durable Objectsの料金](https://developers.cloudflare.com/durable-objects/platform/pricing/) / [Durable Objectの配置](https://developers.cloudflare.com/durable-objects/reference/data-location/) / [Workersの制限](https://developers.cloudflare.com/workers/platform/limits/) / [Workersの料金](https://developers.cloudflare.com/workers/platform/pricing/) / [Workersの対応言語](https://developers.cloudflare.com/workers/languages/) / [Vectorizeの料金](https://developers.cloudflare.com/vectorize/platform/pricing/) / [Workers AIの料金](https://developers.cloudflare.com/workers-ai/platform/pricing/) / [D1 Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/)
 - Anthropic: [TypeScript SDK](https://github.com/anthropics/anthropic-sdk-typescript) / [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
-- Cloudflare(2026-11時点): [Workers AIのMarkdown変換](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/) / [対応する形式](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/supported-formats/) / [変換の設定](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/) / [Bindingでの使い方](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/usage/binding/)
+- Cloudflare(2026-11時点): [Containers](https://developers.cloudflare.com/containers/) / [Containersの設定](https://developers.cloudflare.com/containers/configuration/wrangler/) / [Containersのイメージ](https://developers.cloudflare.com/containers/guides/image-management/) / [Containersの制限と大きさ](https://developers.cloudflare.com/containers/platform/limits/) / [Containerのクラス](https://developers.cloudflare.com/containers/api/container-class/) / [Workers AIのMarkdown変換](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/) / [対応する形式](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/supported-formats/) / [変換の設定](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/) / [Bindingでの使い方](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/usage/binding/)
+- Gotenberg(2026-11時点): [インストール](https://gotenberg.dev/docs/getting-started/installation) / [LibreOfficeでの変換](https://gotenberg.dev/docs/libreoffice/convert) / [設定](https://gotenberg.dev/docs/configuration)
 - 関連する仕様: [LLM利用コスト](llm-cost.md) / [Botの振る舞い](behavior.md)

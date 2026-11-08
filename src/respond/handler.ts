@@ -561,6 +561,7 @@ export async function answer(
 								env.DB,
 								guildId,
 								history,
+								env.KNOWLEDGE_FILES,
 								fileReads,
 								knowledgeReads,
 								support,

@@ -8,6 +8,7 @@ import {
 	ButtonStyle,
 	ChannelType,
 } from "../discord/constants";
+import { forgetKnowledgeFiles } from "../knowledge/storage";
 import {
 	KNOWLEDGE_CHANNEL_OPTION,
 	KNOWLEDGE_LIST_EMPTY,
@@ -116,7 +117,8 @@ export function knowledgeComponent(
 			const current = await getKnowledgeChannel(env.DB, channelId);
 			if (current !== null && current.guildId === guildId) {
 				const files = await removeKnowledgeChannel(env.DB, channelId);
-				log("unset", { userId, guildId, channelId, files });
+				await forgetKnowledgeFiles(env.KNOWLEDGE_FILES, files);
+				log("unset", { userId, guildId, channelId, files: files.length });
 			}
 			return { content: knowledgeUnset(channelId), components: [] };
 		},

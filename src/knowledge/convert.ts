@@ -1,5 +1,6 @@
 import { decodeText } from "../respond/attachments";
 import type { KnowledgeFormat } from "../store/knowledge";
+import type { PdfConversion } from "./converter";
 import {
 	isMarkdownFormat,
 	MARKDOWN_TYPES,
@@ -10,28 +11,51 @@ import {
 /**
  * 知識チャンネルのファイルを、文字にする(仕様: docs/spec/architecture.md「知識チャンネル」)。
  * PDF、Word、Excelは、Workers AIのMarkdown変換(toMarkdown)で文字にする。
+ * PowerPointは、コンテナのGotenbergでPDFにしてから、PDFと同じく文字にする(Markdown変換はPowerPointに対応していないため)。
  * CSVとテキストは、ファイルを読む道具と同じく、UTF-8かShift_JISで読む(ExcelのCSVは、Shift_JISのことがあるため)
  */
 
-/** 文字にした結果 */
+/** 文字にした結果。PowerPointは、AIがPDFのまま読めるよう、PDFにしたもの(pdf)も返す */
 export type Conversion =
-	| { kind: "text"; text: string }
+	| { kind: "text"; text: string; pdf?: Uint8Array }
 	/** 文字にできない(壊れている、パスワード付き、文字がないなど)。detailは、ログに残す短い理由 */
 	| { kind: "unreadable"; detail: string };
 
 /** Workers AIの、文字(Markdown)への変換。テストでは偽物に差し替える */
 export type MarkdownConverter = Pick<Ai, "toMarkdown">;
 
+/** 文字にするのに使うもの。テストでは偽物に差し替える */
+export interface ConversionDeps {
+	ai: MarkdownConverter;
+	/** PowerPointをPDFにする(コンテナのGotenberg) */
+	powerPointToPdf: (bytes: Uint8Array) => Promise<PdfConversion>;
+}
+
 /**
- * ファイルを文字にする。文字にできないファイル(Workers AIが変換できなかったものや、文字がないもの)は、unreadableで返す。
- * Workers AIの障害など、やり直せば変わるかもしれない失敗は、例外のままにする(Queueでやり直す)
+ * ファイルを文字にする。文字にできないファイル(Workers AIやGotenbergが変換できなかったものや、文字がないもの)は、
+ * unreadableで返す。Workers AIやコンテナの障害など、やり直せば変わるかもしれない失敗は、例外のままにする(Queueでやり直す)
  */
 export async function convertKnowledgeFile(
-	ai: MarkdownConverter,
+	deps: ConversionDeps,
 	format: KnowledgeFormat,
 	bytes: Uint8Array,
 	filename: string,
 ): Promise<Conversion> {
+	if (format === "pptx") {
+		const pdf = await deps.powerPointToPdf(bytes);
+		if (pdf.kind === "unreadable") {
+			return pdf;
+		}
+		const conversion = await toMarkdown(
+			deps.ai,
+			"pdf",
+			pdf.bytes,
+			`${filename}.pdf`,
+		);
+		return conversion.kind === "text"
+			? { ...conversion, pdf: pdf.bytes }
+			: conversion;
+	}
 	if (!isMarkdownFormat(format)) {
 		const text = decodeText(bytes);
 		if (text === null) {
@@ -41,6 +65,16 @@ export async function convertKnowledgeFile(
 			? { kind: "text", text }
 			: { kind: "unreadable", detail: "empty" };
 	}
+	return toMarkdown(deps.ai, format, bytes, filename);
+}
+
+/** Workers AIのMarkdown変換で、文字にする */
+async function toMarkdown(
+	ai: MarkdownConverter,
+	format: MarkdownFormat,
+	bytes: Uint8Array,
+	filename: string,
+): Promise<Conversion> {
 	const result = await ai.toMarkdown(
 		{
 			name: nameWithExtension(filename, format),

@@ -2,10 +2,11 @@ import type { AttachmentInfo } from "../queue/messages";
 import { fileKind, MAX_FILE_BYTES } from "../respond/attachments";
 import type { KnowledgeFormat } from "../store/knowledge";
 import { isVoiceAttachment } from "../voice/voice";
+import { PPTX_TYPE } from "./converter";
 
 /**
  * 知識チャンネルで受け付けるファイルの形式(仕様: docs/spec/architecture.md「知識チャンネル」)。
- * PDF、Word(.docx)、Excel(.xlsx、.xls)、CSV、テキスト(ファイルを読む道具と同じ見分け方)。
+ * PDF、Word(.docx)、Excel(.xlsx、.xls)、PowerPoint(.pptx)、CSV、テキスト(ファイルを読む道具と同じ見分け方)。
  * それ以外(画像、zip、古い形式の.docと.pptなど)と、音声メッセージは、受け付けない(何もしない)
  */
 
@@ -47,6 +48,7 @@ export function knowledgeFormat(
 		case "docx":
 		case "xlsx":
 		case "xls":
+		case "pptx":
 		case "csv":
 			return extension;
 	}
@@ -57,6 +59,9 @@ export function knowledgeFormat(
 		if (format !== "xls" && type === mime) {
 			return format as MarkdownFormat;
 		}
+	}
+	if (type === PPTX_TYPE) {
+		return "pptx";
 	}
 	if (type === "text/csv") {
 		return "csv";
