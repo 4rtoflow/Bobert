@@ -201,7 +201,7 @@ export async function deleteMessages(
 	await forgetMemorySources(deps.db, ids);
 	// 知識チャンネルのファイルの知識も消す(仕様: docs/spec/architecture.md「知識チャンネル」)
 	const knowledgeFiles = await deleteKnowledgeFilesOfMessages(deps.db, ids);
-	await forgetKnowledgeFiles(deps.knowledgeFiles, knowledgeFiles);
+	await forgetKnowledgeFiles(deps, knowledgeFiles);
 	await deps.vectors.deleteByIds(ids);
 	logEvent("queue", "deleted", {
 		messages: ids.length,

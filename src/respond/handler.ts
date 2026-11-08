@@ -9,6 +9,7 @@ import {
 	triggerTyping,
 } from "../discord/api";
 import { loadKnowledgeList } from "../knowledge/prompt";
+import { searchKnowledgeFilesTool } from "../knowledge/search";
 import { type KnowledgeReads, readKnowledgeFileTool } from "../knowledge/tool";
 import { chatWithAnthropic } from "../llm/anthropic";
 import { findOpenRouterModel } from "../llm/model-info";
@@ -515,7 +516,7 @@ export async function answer(
 		usesTools && guildId !== null
 			? await loadKnowledgeList(env.DB, guildId)
 			: null;
-	const knowledgeReads: KnowledgeReads = { ids: [] };
+	const knowledgeReads: KnowledgeReads = { ids: [], searches: 0 };
 	// 返答を頼んだ人の記憶を、本人の指示の後ろに入れる(仕様: docs/spec/architecture.md「記憶」)。
 	// 記憶を直す道具は、共有チャンネルでだけ渡す。年齢制限のチャンネルと非公開スレッドでの話を、ほかに持ち出さないため
 	const memory =
@@ -566,6 +567,12 @@ export async function answer(
 								knowledgeReads,
 								support,
 							),
+							searchKnowledgeFilesTool(
+								env.DB,
+								guildId,
+								{ embed: workersAiEmbedder(env.AI), vectors: env.VECTORIZE },
+								knowledgeReads,
+							),
 						]
 					: []),
 				...(memoryTool && guildId !== null
@@ -610,9 +617,10 @@ export async function answer(
 		// 読んだファイルは、種類だけを残す(名前と中身は残さない)。回数は、知識のファイルを読んだ分を含む
 		fileReads: fileReads.calls,
 		fileKinds: fileReads.kinds,
-		// 知識のファイルは、一覧に載せた数と、読んだファイルのIDだけを残す(名前、中身、要約は残さない)
+		// 知識のファイルは、一覧に載せた数と、読んだファイルのIDと、探した回数だけを残す(名前、中身、要約、探した内容は残さない)
 		knowledgeFiles: knowledge?.listed ?? 0,
 		knowledgeReads: knowledgeReads.ids,
+		knowledgeSearches: knowledgeReads.searches,
 		// 会話の音声メッセージの数(文字にした内容は残さない)
 		voiceMessages: voiceTexts.size,
 		...result.usage,

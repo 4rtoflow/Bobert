@@ -9,15 +9,13 @@ import {
 } from "../store/knowledge";
 import { loadMessagesByIds } from "../store/messages";
 import { knowledgeFormat } from "./format";
-import { forgetKnowledgeFiles } from "./storage";
+import { forgetKnowledgeFiles, type KnowledgeStorage } from "./storage";
 
-/** 知識のファイルの受け付けに使うもの */
-export interface KnowledgeIntakeDeps {
+/** 知識のファイルの受け付けに使うもの。消すときは、D1の外に置いたもの(R2のPDFと、ベクトル)も消す */
+export interface KnowledgeIntakeDeps extends KnowledgeStorage {
 	db: D1Database;
 	/** 受け付けたファイルを、文字にして要約する仕事を入れる(時間がかかるので、別の仕事にする) */
 	knowledgeLater: (fileIds: readonly number[]) => Promise<void>;
-	/** 知識のファイルのうち、D1の外に置いたもの(PowerPointをPDFにしたもの)。消すときに使う */
-	knowledgeFiles: Pick<R2Bucket, "delete">;
 }
 
 /**
@@ -116,7 +114,7 @@ async function removeDetachedFiles(
 		)
 	).filter((file) => !present.get(file.messageId)?.has(file.attachmentId));
 	await forgetKnowledgeFiles(
-		deps.knowledgeFiles,
+		deps,
 		await deleteKnowledgeFiles(
 			deps.db,
 			detached.map((file) => file.id),

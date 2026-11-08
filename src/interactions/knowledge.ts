@@ -117,7 +117,10 @@ export function knowledgeComponent(
 			const current = await getKnowledgeChannel(env.DB, channelId);
 			if (current !== null && current.guildId === guildId) {
 				const files = await removeKnowledgeChannel(env.DB, channelId);
-				await forgetKnowledgeFiles(env.KNOWLEDGE_FILES, files);
+				await forgetKnowledgeFiles(
+					{ knowledgeFiles: env.KNOWLEDGE_FILES, vectors: env.VECTORIZE },
+					files,
+				);
 				log("unset", { userId, guildId, channelId, files: files.length });
 			}
 			return { content: knowledgeUnset(channelId), components: [] };

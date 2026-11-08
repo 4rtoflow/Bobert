@@ -80,6 +80,8 @@ export interface KnowledgeFile {
 	textLength: number | null;
 	/** 要約。要約するまではnull */
 	summary: string | null;
+	/** 中を探すために入れたベクトルの数。まだベクトルにしていなければnull */
+	vectorCount: number | null;
 }
 
 /**
@@ -89,12 +91,14 @@ export interface KnowledgeFile {
 export interface ForgottenKnowledgeFile {
 	id: number;
 	format: KnowledgeFormat;
+	/** 中を探すために入れたベクトルの数。まだベクトルにしていなければnull */
+	vectorCount: number | null;
 }
 
 /** 新しく受け付けるファイル */
 export type NewKnowledgeFile = Omit<
 	KnowledgeFile,
-	"id" | "state" | "rejectedReason" | "textLength" | "summary"
+	"id" | "state" | "rejectedReason" | "textLength" | "summary" | "vectorCount"
 >;
 
 interface KnowledgeFileRow {
@@ -114,6 +118,7 @@ interface KnowledgeFileRow {
 	rejected_reason: string | null;
 	text_length: number | null;
 	summary: string | null;
+	vector_count: number | null;
 }
 
 /** 知識チャンネルを読む。指定されていなければnull */
@@ -210,7 +215,7 @@ export async function removeKnowledgeChannel(
 			.bind(channelId),
 		db
 			.prepare(
-				"DELETE FROM knowledge_files WHERE knowledge_channel_id = ? RETURNING id, format",
+				"DELETE FROM knowledge_files WHERE knowledge_channel_id = ? RETURNING id, format, vector_count",
 			)
 			.bind(channelId),
 		db
@@ -477,6 +482,61 @@ export async function saveKnowledgeSummary(
 }
 
 /**
+ * 中を探すために入れたベクトルの数を記録する。知識に入った(ready)ままのときだけ記録する。
+ * 入れている間に消されていたらfalse(入れたベクトルを、呼んだ側で消す)
+ */
+export async function saveKnowledgeVectorCount(
+	db: D1Database,
+	id: number,
+	count: number,
+	now = Date.now(),
+): Promise<boolean> {
+	const result = await db
+		.prepare(
+			"UPDATE knowledge_files SET vector_count = ?, updated_at = ? WHERE id = ? AND state = 'ready'",
+		)
+		.bind(count, now, id)
+		.run();
+	return result.meta.changes > 0;
+}
+
+/** 知識に入ったファイルを、サーバーとIDを指定して読む(探す道具で、見つけたファイルを読むため)。ないものは含まない */
+export async function findKnowledgeFiles(
+	db: D1Database,
+	guildId: string,
+	ids: readonly number[],
+): Promise<Map<number, KnowledgeFile>> {
+	const found = new Map<number, KnowledgeFile>();
+	for (const part of chunks([...new Set(ids)], MAX_IDS_PER_QUERY)) {
+		const { results } = await db
+			.prepare(
+				`SELECT * FROM knowledge_files
+				WHERE guild_id = ? AND state = 'ready' AND id IN (${part.map(() => "?").join(", ")})`,
+			)
+			.bind(guildId, ...part)
+			.all<KnowledgeFileRow>();
+		for (const row of results) {
+			found.set(row.id, fromRow(row));
+		}
+	}
+	return found;
+}
+
+/** 知識に入ったのに、まだベクトルにしていないファイルのID(この仕組みの前に入ったものを、ベクトルにするため)。古い順にlimit件 */
+export async function unembeddedKnowledgeFileIds(
+	db: D1Database,
+	limit: number,
+): Promise<number[]> {
+	const { results } = await db
+		.prepare(
+			"SELECT id FROM knowledge_files WHERE state = 'ready' AND vector_count IS NULL ORDER BY id LIMIT ?",
+		)
+		.bind(limit)
+		.all<{ id: number }>();
+	return results.map((row) => row.id);
+}
+
+/**
  * 知識のファイルを、知識に加えなかった(rejected)にし、文字にした内容を消す。
  * 受け付けたか文字にした状態のときだけ変える。変えたらtrue(同じファイルで二度知らせないため)
  */
@@ -520,7 +580,7 @@ export async function rejectPendingKnowledgeFiles(
 			.prepare(
 				`UPDATE knowledge_files SET state = 'rejected', rejected_reason = ?, text_length = NULL, summary = NULL, updated_at = ?
 				WHERE message_id = ? AND state IN ('pending', 'converted')
-				RETURNING id, format`,
+				RETURNING id, format, vector_count`,
 			)
 			.bind(reason, now, messageId),
 	]);
@@ -541,7 +601,7 @@ export async function deleteKnowledgeFiles(
 				.bind(...part),
 			db
 				.prepare(
-					`DELETE FROM knowledge_files WHERE id IN (${marks}) RETURNING id, format`,
+					`DELETE FROM knowledge_files WHERE id IN (${marks}) RETURNING id, format, vector_count`,
 				)
 				.bind(...part),
 		]);
@@ -566,7 +626,7 @@ export async function deleteKnowledgeFilesOfMessages(
 				.bind(...ids),
 			db
 				.prepare(
-					`DELETE FROM knowledge_files WHERE message_id IN (${marks}) RETURNING id, format`,
+					`DELETE FROM knowledge_files WHERE message_id IN (${marks}) RETURNING id, format, vector_count`,
 				)
 				.bind(...ids),
 		]);
@@ -599,7 +659,7 @@ export async function forgetKnowledgeChannels(
 			db
 				.prepare(
 					`DELETE FROM knowledge_files WHERE channel_id IN (${marks}) OR knowledge_channel_id IN (${marks})
-					RETURNING id, format`,
+					RETURNING id, format, vector_count`,
 				)
 				.bind(...ids, ...ids),
 			db
@@ -639,11 +699,19 @@ function isHighSurrogate(code: number): boolean {
 	return code >= 0xd800 && code <= 0xdbff;
 }
 
-/** 消したか、知識に加えないことにした行(RETURNING id, format)を読む */
+/** 消したか、知識に加えないことにした行(RETURNING id, format, vector_count)を読む */
 function forgottenFrom(result: D1Result | undefined): ForgottenKnowledgeFile[] {
-	return ((result?.results ?? []) as { id: number; format: string }[]).map(
-		(row) => ({ id: row.id, format: row.format as KnowledgeFormat }),
-	);
+	return (
+		(result?.results ?? []) as {
+			id: number;
+			format: string;
+			vector_count: number | null;
+		}[]
+	).map((row) => ({
+		id: row.id,
+		format: row.format as KnowledgeFormat,
+		vectorCount: row.vector_count,
+	}));
 }
 
 function fromRow(row: KnowledgeFileRow): KnowledgeFile {
@@ -664,6 +732,7 @@ function fromRow(row: KnowledgeFileRow): KnowledgeFile {
 		rejectedReason: row.rejected_reason as KnowledgeRejection | null,
 		textLength: row.text_length,
 		summary: row.summary,
+		vectorCount: row.vector_count,
 	};
 }
 

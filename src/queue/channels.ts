@@ -239,7 +239,7 @@ async function forgetChannels(
 	deps: ChannelDeps,
 ): Promise<void> {
 	const knowledge = await forgetKnowledgeChannels(deps.db, channelIds);
-	await forgetKnowledgeFiles(deps.knowledgeFiles, knowledge.files);
+	await forgetKnowledgeFiles(deps, knowledge.files);
 	if (knowledge.channels > 0 || knowledge.files.length > 0) {
 		logEvent("knowledge", "channels_forgotten", {
 			channels: knowledge.channels,
