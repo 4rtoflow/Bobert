@@ -829,10 +829,12 @@ describe("スキル", () => {
 			readSkill: async (name) =>
 				name === "meeting-notes"
 					? {
+							kind: "server" as const,
 							id: 1,
 							name,
 							body: "決まったことと宿題に分けて書く",
 							fileCount: 0,
+							mountDir: `skills/${name}`,
 						}
 					: null,
 		});
@@ -893,6 +895,8 @@ describe("スキル", () => {
 
 	/** ファイルが付いたスキル(Claude Codeのプラグインから入れたもの)。本文は、スキルのフォルダを${CLAUDE_SKILL_DIR}で指す */
 	const NAKAMABA = {
+		kind: "server" as const,
+		mountDir: "skills/nakamaba",
 		id: 7,
 		name: "nakamaba",
 		body: ["node ", "$", "{CLAUDE_SKILL_DIR}/scripts/nakamaba.mjs list"].join(
@@ -927,7 +931,7 @@ describe("スキル", () => {
 		await relay.handle(call);
 
 		expect(posts[0]?.content).toBe("-# スキルを読む: nakamaba");
-		expect(readSkillFiles).toHaveBeenCalledWith(7);
+		expect(readSkillFiles).toHaveBeenCalledWith(NAKAMABA);
 		expect(upload).toHaveBeenCalledTimes(2);
 		expect(add).toHaveBeenNthCalledWith(1, "sesn_1", {
 			type: "file",
@@ -958,6 +962,45 @@ describe("スキル", () => {
 					],
 					is_error: false,
 				},
+			],
+		});
+	});
+
+	it("プラグインのスキルは、plugins/<プラグイン名>/skills/<スキル名>/ に置く", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, send, add } = fakeFileClient();
+		const { relay } = relayOf(state, discord, client, {
+			readSkill: async () => ({
+				...NAKAMABA,
+				kind: "plugin",
+				name: "code-review:review",
+				mountDir: "plugins/code-review/skills/review",
+				fileCount: 1,
+			}),
+			readSkillFiles: async () => [
+				NAKAMABA_FILES[0] as (typeof NAKAMABA_FILES)[0],
+			],
+		});
+
+		await relay.handle(readSkillCall("code-review:review"));
+
+		expect(add).toHaveBeenCalledWith("sesn_1", {
+			type: "file",
+			file_id: "file_up",
+			mount_path: "/plugins/code-review/skills/review/scripts/nakamaba.mjs",
+		});
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				expect.objectContaining({
+					content: [
+						{
+							type: "text",
+							text: "スキル「code-review:review」の本文です。この手順に従ってください。このスキルのファイルは /mnt/session/uploads/plugins/code-review/skills/review/ に置いてあります(読み取り専用。書き換えるときは /workspace に写してから使ってください)。\n\nnode /mnt/session/uploads/plugins/code-review/skills/review/scripts/nakamaba.mjs list",
+						},
+					],
+					is_error: false,
+				}),
 			],
 		});
 	});

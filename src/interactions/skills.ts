@@ -402,7 +402,7 @@ export async function submitSkillModal(
 				"reply",
 				async () => {
 					const content = writtenSkill(interaction);
-					const problem = problemOf(content);
+					const problem = skillProblemOf(content);
 					return problem !== null
 						? withDraft(problem, content)
 						: register(env.DB, guildId, content, editor, "text");
@@ -417,7 +417,7 @@ export async function submitSkillModal(
 				editor.id,
 				async () => {
 					const content = writtenSkill(interaction);
-					const problem = problemOf(content);
+					const problem = skillProblemOf(content);
 					return problem !== null
 						? { reply: { content: problem } }
 						: save(env.DB, guildId, edited, content, editor, "text");
@@ -767,7 +767,7 @@ function preparedSkill(
 		return `「${repository}」のスキル「${nameOf(skill)}」を登録できませんでした。\nSKILL.mdを読めませんでした。`;
 	}
 	const content = { ...skill.file, name: normalizeSkillName(skill.file.name) };
-	const problem = problemOf(content);
+	const problem = skillProblemOf(content);
 	if (problem !== null) {
 		return `「${repository}」のスキル「${content.name}」を登録できませんでした。\n${problem}`;
 	}
@@ -928,11 +928,11 @@ async function readSkillFile(
 		return UNREADABLE_FILE;
 	}
 	const content = { ...file, name: normalizeSkillName(file.name) };
-	return problemOf(content) ?? content;
+	return skillProblemOf(content) ?? content;
 }
 
 /** スキルが決まり(名前の規則と、長さの上限)に合わなければ、その理由 */
-function problemOf(content: SkillContent): string | null {
+export function skillProblemOf(content: SkillContent): string | null {
 	if (!isValidSkillName(content.name)) {
 		return INVALID_NAME;
 	}
@@ -1036,7 +1036,7 @@ function selectRow(
 
 /**
  * スキルの画面。説明と、登録した人と最後に編集した人を書き、SKILL.mdを添付する。
- * プラグインから入れたスキルには、入手元(リポジトリ、プラグイン、コミット)と、付いているファイルの数も書く
+ * source から入れたスキルには、入手元(リポジトリ、コミット)と、付いているファイルの数も書く
  */
 function skillScreen(skill: Skill): MessageEdit {
 	const registered = `登録: ${skill.createdByName}(${formatJstDate(skill.createdAt)})`;
@@ -1049,7 +1049,7 @@ function skillScreen(skill: Skill): MessageEdit {
 		source === null
 			? []
 			: [
-					`-# 入手元: ${source.plugin === "" ? `${source.repository}(${source.commit.slice(0, 7)})` : `${source.repository} のプラグイン「${source.plugin}」(${source.commit.slice(0, 7)})`}${skill.fileCount > 0 ? `・ファイル${skill.fileCount}個` : ""}`,
+					`-# 入手元: ${source.repository}(${source.commit.slice(0, 7)})${skill.fileCount > 0 ? `・ファイル${skill.fileCount}個` : ""}`,
 				];
 	return {
 		content: [

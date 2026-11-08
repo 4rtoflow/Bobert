@@ -468,7 +468,7 @@ export async function savePendingSkill(
 	content: SkillContent,
 	now = Date.now(),
 ): Promise<number> {
-	const [, , , inserted] = await db.batch<{ id: number }>([
+	const [, , inserted] = await db.batch<{ id: number }>([
 		...deletePendingStatements(db, guildId, userId),
 		db
 			.prepare(
@@ -515,83 +515,6 @@ export async function deletePendingSkill(
 	id: number,
 ): Promise<void> {
 	await db.prepare("DELETE FROM pending_skills WHERE id = ?").bind(id).run();
-}
-
-/** プラグインから入れるときに、置き換えるかを確かめている間の入手元(読み直すコミット) */
-export interface PendingPlugin {
-	repository: string;
-	plugin: string;
-	commit: string;
-}
-
-/**
- * プラグインから入れるスキルを置き換えるかを確かめている間の入手元を保存し、そのIDを返す。
- * 同じ人が同じサーバーで確かめていた、前の内容は消す(SKILL.mdの置き換えと合わせて、1つだけ残す)
- */
-export async function savePendingPlugin(
-	db: D1Database,
-	guildId: string,
-	userId: string,
-	pending: PendingPlugin,
-	now = Date.now(),
-): Promise<number> {
-	const [, , , inserted] = await db.batch<{ id: number }>([
-		...deletePendingStatements(db, guildId, userId),
-		db
-			.prepare(
-				`INSERT INTO pending_plugin_skills (guild_id, user_id, repository, plugin, commit_sha, created_at)
-				VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
-			)
-			.bind(
-				guildId,
-				userId,
-				pending.repository,
-				pending.plugin,
-				pending.commit,
-				now,
-			),
-	]);
-	const id = inserted?.results[0]?.id;
-	if (id === undefined) {
-		throw new Error("pending plugin was not saved");
-	}
-	return id;
-}
-
-/** プラグインから入れるときに、確かめている間の入手元。消えていたら、またはほかの人のものならnull */
-export async function getPendingPlugin(
-	db: D1Database,
-	guildId: string,
-	userId: string,
-	id: number,
-): Promise<PendingPlugin | null> {
-	if (!isSkillId(id)) {
-		return null;
-	}
-	const row = await db
-		.prepare(
-			"SELECT repository, plugin, commit_sha FROM pending_plugin_skills WHERE id = ? AND guild_id = ? AND user_id = ?",
-		)
-		.bind(id, guildId, userId)
-		.first<{ repository: string; plugin: string; commit_sha: string }>();
-	return row === null
-		? null
-		: {
-				repository: row.repository,
-				plugin: row.plugin,
-				commit: row.commit_sha,
-			};
-}
-
-/** 置き換えを済ませた、プラグインの入手元を消す */
-export async function deletePendingPlugin(
-	db: D1Database,
-	id: number,
-): Promise<void> {
-	await db
-		.prepare("DELETE FROM pending_plugin_skills WHERE id = ?")
-		.bind(id)
-		.run();
 }
 
 /** source(npx skills add と同じ指定)で入れるときに、選んでもらっているか、置き換えるかを確かめている間の入手元 */
@@ -679,7 +602,7 @@ export async function deletePendingSource(
 		.run();
 }
 
-/** 同じ人が同じサーバーで、置き換えるかを確かめていた内容を消す文(SKILL.md、プラグイン、sourceのすべて) */
+/** 同じ人が同じサーバーで、置き換えるかを確かめていた内容を消す文(SKILL.mdとsourceの両方) */
 function deletePendingStatements(
 	db: D1Database,
 	guildId: string,
@@ -693,11 +616,6 @@ function deletePendingStatements(
 			.bind(guildId, userId),
 		db
 			.prepare("DELETE FROM pending_skills WHERE guild_id = ? AND user_id = ?")
-			.bind(guildId, userId),
-		db
-			.prepare(
-				"DELETE FROM pending_plugin_skills WHERE guild_id = ? AND user_id = ?",
-			)
 			.bind(guildId, userId),
 	];
 }
