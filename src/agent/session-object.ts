@@ -18,9 +18,11 @@ import {
 import { prepareGitHubWrite, runGitHubRead } from "../github/operations";
 import type { AnthropicCredential } from "../llm/anthropic";
 import { logEvent } from "../log";
-import { findSkillByName, listSkillFiles } from "../store/skills";
+import { listPluginSkillFiles } from "../store/plugins";
+import { listSkillFiles } from "../store/skills";
 import { loadCredential } from "../store/users";
 import { transcribeAudio } from "../voice/voice";
+import { readAgentSkill } from "./agent-skills";
 import { agentClient, deleteSession } from "./managed";
 import {
 	type AgentEvent,
@@ -453,7 +455,7 @@ export class AgentSession extends DurableObject<Env> {
 			},
 			uploadLimit: () => this.uploadLimit(state.guildId),
 			readSkill: async (name) => {
-				const skill = await findSkillByName(this.env.DB, state.guildId, name);
+				const skill = await readAgentSkill(this.env.DB, state.guildId, name);
 				if (skill !== null) {
 					// スキルは誰でも編集できるので、何が読まれたかを後から分かるようにする
 					logEvent("agent", "skill_read", {
@@ -464,8 +466,10 @@ export class AgentSession extends DurableObject<Env> {
 				}
 				return skill;
 			},
-			readSkillFiles: (skillId) =>
-				listSkillFiles(this.env.DB, state.guildId, skillId),
+			readSkillFiles: (skill) =>
+				skill.kind === "plugin"
+					? listPluginSkillFiles(this.env.DB, state.guildId, skill.id)
+					: listSkillFiles(this.env.DB, state.guildId, skill.id),
 			github: {
 				findRepository: (fullName, minValidityMs) =>
 					findAllowedRepository(

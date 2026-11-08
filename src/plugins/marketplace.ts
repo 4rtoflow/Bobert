@@ -22,7 +22,7 @@ export interface PluginSkill {
 	directory: string;
 	/** SKILL.mdの中身。読めなければnull */
 	file: SkillFile | null;
-	/** SKILL.md以外のファイル。位置は、スキルのフォルダから(例: scripts/nakamaba.mjs) */
+	/** SKILL.md以外のファイル。位置は、スキルのフォルダから(例: scripts/run.sh) */
 	files: PluginFile[];
 	/** ファイルの数か大きさが、上限を超えた(超えたスキルのファイルは残さない) */
 	tooManyFiles: boolean;
@@ -189,7 +189,7 @@ function loaded(
 
 /** 一覧から探したプラグインの、スキルの置き場所 */
 type Resolution =
-	/** 一覧と同じリポジトリの中。skillsDirは、リポジトリの根からの位置(例: plugins/nakamaba/skills/) */
+	/** 一覧と同じリポジトリの中。skillsDirは、リポジトリの根からの位置(例: plugins/code-review/skills/) */
 	| { kind: "local"; skillsDir: string }
 	/** 別のGitHubのリポジトリ */
 	| {
@@ -238,7 +238,7 @@ function resolvePlugin(content: Uint8Array, plugin: string): Resolution {
 
 /**
  * プラグインの配り方(source)から、スキルの置き場所を決める。
- * 一覧と同じリポジトリのフォルダ(「./plugins/nakamaba」。metadata.pluginRootがあれば、「./」で始まらない位置の前に付ける)と、
+ * 一覧と同じリポジトリのフォルダ(「./plugins/code-review」。metadata.pluginRootがあれば、「./」で始まらない位置の前に付ける)と、
  * GitHubのリポジトリ(github、GitHubのURLのurlとgit-subdir)に対応する。npmなどには対応しない
  */
 function sourceOf(source: unknown, pluginRoot: string): Resolution {

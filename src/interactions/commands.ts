@@ -43,6 +43,14 @@ import {
 import { EXPLAIN_COMMAND_NAME } from "./explain";
 import { KNOWLEDGE_CHANNEL_TYPES } from "./knowledge";
 import {
+	PLUGINS_COMMAND_DESCRIPTION,
+	PLUGINS_COMMAND_NAME,
+	PLUGINS_MARKETPLACE_OPTION,
+	PLUGINS_MARKETPLACE_OPTION_DESCRIPTION,
+	PLUGINS_PLUGIN_OPTION,
+	PLUGINS_PLUGIN_OPTION_DESCRIPTION,
+} from "./plugins";
+import {
 	SKILLS_COMMAND_NAME,
 	SKILLS_FILE_OPTION,
 	SKILLS_SKILL_OPTION,
@@ -126,6 +134,27 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 					"入れるスキルの名前(例: web-design-guidelines)。省くと、見つかったスキルから選ぶ",
 				required: false,
 				max_length: 100,
+			},
+		],
+	},
+	{
+		...GUILD_ONLY,
+		name: PLUGINS_COMMAND_NAME,
+		description: PLUGINS_COMMAND_DESCRIPTION,
+		options: [
+			{
+				type: ApplicationCommandOptionType.String,
+				name: PLUGINS_PLUGIN_OPTION,
+				description: PLUGINS_PLUGIN_OPTION_DESCRIPTION,
+				required: false,
+				max_length: 100,
+			},
+			{
+				type: ApplicationCommandOptionType.String,
+				name: PLUGINS_MARKETPLACE_OPTION,
+				description: PLUGINS_MARKETPLACE_OPTION_DESCRIPTION,
+				required: false,
+				max_length: 200,
 			},
 		],
 	},

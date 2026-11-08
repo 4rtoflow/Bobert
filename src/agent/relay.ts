@@ -132,8 +132,6 @@ export const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const UPLOADS_DIR = "/mnt/session/uploads";
 /** スキルのファイルを、同時にいくつ置くか */
 const MOUNT_CONCURRENCY = 6;
-/** スキルのファイルを置く、UPLOADS_DIRの下のフォルダ(発言ごとのフォルダは、発言のIDなので重ならない) */
-const SKILLS_MOUNT_DIR = "skills";
 /** Claude Codeで、スキルのフォルダを指す書き方。サンドボックスに置いた場所に置き換える */
 // biome-ignore lint/suspicious/noTemplateCurlyInString: Claude Codeの書き方そのもので、テンプレート文字列ではない
 const SKILL_DIR_VARIABLE = "${CLAUDE_SKILL_DIR}";
@@ -362,13 +360,21 @@ export function withDefaults(
 	};
 }
 
-/** read_skillの道具で読む、サーバーのスキル */
+/** read_skillの道具で読む、サーバーのスキルか、プラグインのスキル */
 export interface AgentSkillContent {
+	/** server はサーバーのスキル(/skills)、plugin はプラグインのスキル(/plugins) */
+	kind: "server" | "plugin";
 	id: number;
+	/** エージェントに見せる名前(プラグインのスキルは「<プラグイン名>:<スキル名>」) */
 	name: string;
 	body: string;
 	/** 付いているファイル(スクリプトなど)の数。あれば、読んだときにサンドボックスに置く */
 	fileCount: number;
+	/**
+	 * ファイルを置く、UPLOADS_DIRの下のフォルダ(先頭と末尾の「/」なし)。
+	 * サーバーのスキルは skills/<名前>、プラグインのスキルは plugins/<プラグイン名>/skills/<スキル名>
+	 */
+	mountDir: string;
 }
 
 /** エージェントのチャンネルに投稿された、Gatewayからのメッセージ */
@@ -421,11 +427,11 @@ export interface RelayDeps {
 	transcribe(audio: Uint8Array): Promise<Transcription>;
 	/** このサーバーで、Discordに1つ上げられるファイルの大きさ(バイト) */
 	uploadLimit(): Promise<number>;
-	/** サーバーのスキルを、名前で読む。なければnull */
+	/** サーバーのスキルか、プラグインのスキル(「<プラグイン名>:<スキル名>」)を、名前で読む。なければnull */
 	readSkill(name: string): Promise<AgentSkillContent | null>;
 	/** スキルに付いたファイル(スクリプトなど)。位置は、スキルのフォルダから */
 	readSkillFiles(
-		skillId: number,
+		skill: AgentSkillContent,
 	): Promise<{ path: string; content: Uint8Array }[]>;
 	/** 本人のGitHub */
 	github: RelayGitHub;
@@ -1514,7 +1520,7 @@ export class SessionRelay {
 	/**
 	 * read_skillの道具: サーバーのスキルの本文を返す。作業の様子に「スキルを読む」の行を書く。
 	 * 一覧を渡した後に、ほかの人が消したり名前を変えたりしていることがある。
-	 * ファイル(スクリプトなど)が付いたスキルは、ファイルをサンドボックスの /mnt/session/uploads/skills/<名前>/ に置き、
+	 * ファイル(スクリプトなど)が付いたスキルは、ファイルをサンドボックスの /mnt/session/uploads/<mountDir>/ に置き、
 	 * 本文の ${CLAUDE_SKILL_DIR}(Claude Codeでスキルのフォルダを指す書き方)を、その場所に置き換えて返す
 	 */
 	private async readSkill(
@@ -1537,7 +1543,7 @@ export class SessionRelay {
 		if (skill.fileCount === 0) {
 			return { text: `${intro}\n\n${skill.body}`, error: false };
 		}
-		const directory = `${UPLOADS_DIR}/${SKILLS_MOUNT_DIR}/${skill.name}`;
+		const directory = `${UPLOADS_DIR}/${skill.mountDir}`;
 		try {
 			await this.mountSkillFiles(client, sessionId, skill);
 		} catch (error) {
@@ -1564,7 +1570,7 @@ export class SessionRelay {
 		skill: AgentSkillContent,
 	): Promise<void> {
 		const { state } = this;
-		const directory = `/${SKILLS_MOUNT_DIR}/${skill.name}/`;
+		const directory = `/${skill.mountDir}/`;
 		// すべて置いてあれば、ファイルの中身(1つのスキルで10MBまで)をD1から読まない
 		const mounted = state.mountedSkillFiles.filter((path) =>
 			path.startsWith(directory),
@@ -1572,7 +1578,7 @@ export class SessionRelay {
 		if (mounted.length >= skill.fileCount) {
 			return;
 		}
-		const files = (await this.deps.readSkillFiles(skill.id)).filter(
+		const files = (await this.deps.readSkillFiles(skill)).filter(
 			(file) => !state.mountedSkillFiles.includes(`${directory}${file.path}`),
 		);
 		// ファイルが多いスキル(200個まで)でも待たせすぎないよう、いくつかずつ同時に置く。
