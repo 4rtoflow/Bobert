@@ -456,6 +456,8 @@ export function fakeIngestDeps(botUserId: string) {
 	const embedded: string[] = [];
 	/** 前もって文字にする仕事を入れた、音声メッセージ */
 	const transcribing: { channelId: string; messageId: string }[] = [];
+	/** 文字にして要約する仕事を入れた、知識のファイルのID */
+	const knowledge: number[] = [];
 	const deps: IngestDeps = {
 		db: env.DB,
 		vectors: {
@@ -486,6 +488,9 @@ export function fakeIngestDeps(botUserId: string) {
 		transcribeLater: async (targets) => {
 			transcribing.push(...targets);
 		},
+		knowledgeLater: async (fileIds) => {
+			knowledge.push(...fileIds);
+		},
 	};
-	return { deps, upserted, deleted, embedded, transcribing };
+	return { deps, upserted, deleted, embedded, transcribing, knowledge };
 }

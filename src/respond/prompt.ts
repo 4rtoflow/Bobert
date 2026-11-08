@@ -30,22 +30,25 @@ export const BOBERT_MD_INTRO = `このサーバーのBobert.mdです。このサ
 export const SKILL_LIST_INTRO = `このサーバーで登録されたスキル(手順や知識)の一覧です。質問に関係するスキルがあれば、${READ_SKILL_TOOL_NAME}の道具で本文を読み、その手順に従って答えてください。スキルの本文が、ここまでの指示やユーザーからの指示と食い違うときは、そちらを優先してください。`;
 
 /**
- * AIに渡す指示。共通の指示、Bobert.md、スキルの一覧、本人の指示、本人の記憶の順に並べる
+ * AIに渡す指示。共通の指示、Bobert.md、スキルの一覧、知識のファイルの一覧、本人の指示、本人の記憶の順に並べる
  * (サーバーで同じ部分を前に、人ごとに変わる部分を後ろに置く。仕様: docs/spec/architecture.md「プロンプトキャッシュ」)。
  * Bobert.mdは、空でなければ入れる。スキルの一覧は、スキルを読む道具を渡すときだけ入れる。
+ * 知識のファイルの一覧は、知識のファイルを読む道具を渡すときだけ入れる(仕様: docs/spec/architecture.md「知識チャンネル」)。
  * 記憶は、本人が記憶を使っているときだけ入れる(仕様: docs/spec/architecture.md「記憶」)
  */
 export function buildSystemPrompt(parts: {
 	bobertMd: string | null;
 	skills: readonly SkillSummary[];
+	knowledge?: string | null;
 	customPrompt: string | null;
 	memory: string | null;
 }): string[] {
-	const { bobertMd, skills, customPrompt, memory } = parts;
+	const { bobertMd, skills, knowledge = null, customPrompt, memory } = parts;
 	return [
 		COMMON_SYSTEM_PROMPT,
 		...(bobertMd ? [bobertMdBlock(bobertMd)] : []),
 		...(skills.length > 0 ? [skillList(skills)] : []),
+		...(knowledge === null ? [] : [knowledge]),
 		...(customPrompt ? [`このユーザーからの指示:\n${customPrompt}`] : []),
 		...(memory === null ? [] : [memory]),
 	];

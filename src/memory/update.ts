@@ -1,9 +1,7 @@
 import { editOriginalInteractionResponse } from "../discord/api";
-import { chatWithAnthropic } from "../llm/anthropic";
-import { chatWithOpenRouter } from "../llm/openrouter";
+import { ownKeyModel } from "../llm/own-key";
 import {
 	type ChatRequest,
-	type ChatResult,
 	LlmError,
 	sumUsage,
 	type TokenUsage,
@@ -14,7 +12,6 @@ import type {
 	QueueMessage,
 	StoredMessageInput,
 } from "../queue/messages";
-import { type ResolvedModel, resolveModel } from "../respond/model";
 import { describeLlmError } from "../respond/replies";
 import {
 	claimMemoryUpdate,
@@ -30,11 +27,6 @@ import {
 	loadAuthorMessages,
 	loadRepliesFrom,
 } from "../store/messages";
-import {
-	DEFAULT_USER_SETTINGS,
-	getRegisteredProviders,
-	loadCredential,
-} from "../store/users";
 import { storedVoiceTexts } from "../store/voice";
 import {
 	applyOperations,
@@ -112,7 +104,7 @@ export async function handleMemoryJob(
 		await showScreen(env, job);
 		return;
 	}
-	const model = await memoryModel(env, userId);
+	const model = await ownKeyModel(env, userId, MEMORY_MODEL_KEY);
 	if (model === null) {
 		await recordMemoryFailure(env.DB, userId, guildId, MEMORY_KEY_REQUIRED);
 		log("skipped", { userId, reason: "no_key" });
@@ -233,36 +225,6 @@ export async function handleMemoryJob(
 		return;
 	}
 	await showScreen(env, job);
-}
-
-/** まとめるのに使う、本人のキーとモデル。Anthropicのキーがあれば直接、なければOpenRouter経由で呼ぶ */
-async function memoryModel(
-	env: Env,
-	userId: string,
-): Promise<{
-	resolved: ResolvedModel;
-	call: (request: ChatRequest) => Promise<ChatResult>;
-} | null> {
-	const providers = await getRegisteredProviders(env.DB, userId);
-	const resolution = resolveModel(
-		{ ...DEFAULT_USER_SETTINGS, modelKey: MEMORY_MODEL_KEY },
-		providers,
-	);
-	if (!resolution.ok) {
-		return null;
-	}
-	const resolved = resolution.model;
-	const credential = await loadCredential(env, userId, resolved.provider);
-	if (credential === null) {
-		return null;
-	}
-	return {
-		resolved,
-		call: (request) =>
-			resolved.provider === "anthropic"
-				? chatWithAnthropic(credential, request)
-				: chatWithOpenRouter(credential.apiKey, request),
-	};
 }
 
 /**

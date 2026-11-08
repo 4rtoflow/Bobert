@@ -29,6 +29,7 @@ Cloudflare Workers上で動く。1つのWorkerプロジェクトに、次のも�
 | `src/llm/`             | AnthropicとOpenRouterの呼び出しと、モデル情報の取得                                                                                                                 |
 | `src/jev/`             | 右クリックメニューの「Jevに聞く」と`/jev`(TypeSafeのJevの呼び出し、AIに渡す道具と指示、回答の整形)                                                                  |
 | `src/voice/`           | 音声メッセージの文字起こし(Workers AIのWhisperの呼び出し、1回の返答の長さの上限、前もって文字にする仕事、表示する文言)                                              |
+| `src/knowledge/`       | 知識チャンネル(ファイルの受け付け、文字にして要約する仕事、AIに渡す一覧と読む道具、表示する文言)                                                                    |
 | `src/store/`           | D1の読み書き(設定、暗号化したキー、連携の途中の状態、保存したメッセージ、リアクション、寄付、スキル、Bobert.md、音声メッセージを文字にした内容)と、検索用のデータ化 |
 | `src/crypto.ts`        | キーの暗号化と、ランダムな文字列                                                                                                                                    |
 | `src/config/models.ts` | `/model`で選べるモデルの候補                                                                                                                                        |

@@ -24,6 +24,7 @@ import {
 } from "../discord/constants";
 import { IMPORT_COMMAND_NAME } from "../import/progress";
 import { JEV_COMMAND_NAME, JEV_SLASH_COMMAND_NAME } from "../jev/texts";
+import { KNOWLEDGE_COMMAND_NAME } from "../knowledge/texts";
 import { MEMORY_EDIT_MODAL_ID, MEMORY_ID_PREFIX } from "../memory/screen";
 import { MEMORY_COMMAND_NAME } from "../memory/texts";
 import {
@@ -53,6 +54,11 @@ import { FEAT_BUTTON_PREFIX, featCommand, toggleFeature } from "./feat";
 import { helpCommand } from "./help";
 import { importCommand } from "./import";
 import { jevFromCommand, jevFromMenu } from "./jev";
+import {
+	KNOWLEDGE_ID_PREFIX,
+	knowledgeCommand,
+	knowledgeComponent,
+} from "./knowledge";
 import { memoryCommand, memoryComponent, submitMemoryEdit } from "./memory";
 import {
 	MODEL_CUSTOM_ID,
@@ -231,6 +237,19 @@ async function route(
 			if (interaction.data.name === IMPORT_COMMAND_NAME && guildId) {
 				return importCommand(interaction, env, guildId, user.id);
 			}
+			if (
+				interaction.data.type === ApplicationCommandType.ChatInput &&
+				interaction.data.name === KNOWLEDGE_COMMAND_NAME &&
+				guildId
+			) {
+				return knowledgeCommand(
+					interaction as APIChatInputApplicationCommandInteraction,
+					env,
+					ctx,
+					guildId,
+					user.id,
+				);
+			}
 			if (interaction.data.name === "delete") {
 				return deleteCommand(env, user.id);
 			}
@@ -275,6 +294,21 @@ async function route(
 					user.id,
 					guildId,
 					interaction.data.custom_id,
+				);
+				if (response) {
+					return response;
+				}
+			}
+			if (
+				interaction.data.custom_id.startsWith(KNOWLEDGE_ID_PREFIX) &&
+				guildId
+			) {
+				const response = knowledgeComponent(
+					interaction,
+					env,
+					ctx,
+					guildId,
+					user.id,
 				);
 				if (response) {
 					return response;
