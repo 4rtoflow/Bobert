@@ -11,7 +11,6 @@ import {
 	type AddSecretResult,
 	type AgentSecret,
 	addAgentSecret,
-	basicAuthorization,
 	deleteAgentSecret,
 	isValidSecretName,
 	listAgentSecrets,
@@ -43,17 +42,13 @@ export const AGENT_SECRETS_ID_PREFIX = "agentsecrets:";
 
 const Action = {
 	Add: "add",
-	AddBasic: "add-basic",
 	Select: "select",
 	Delete: "delete",
 	AddModal: "add-modal",
-	BasicModal: "basic-modal",
 } as const;
 
 const NAME_INPUT_ID = "name";
 const VALUE_INPUT_ID = "value";
-const USERNAME_INPUT_ID = "username";
-const PASSWORD_INPUT_ID = "password";
 const URL_INPUT_ID = "url";
 
 const PANEL_HEADER = "**エージェントに渡す秘密**";
@@ -62,7 +57,7 @@ const PANEL_NOTE =
 const KEY_MISSING =
 	"秘密を登録するには、AnthropicのAPIキーの登録が必要です(OpenRouterでは使えません)。`/setup` から登録してください。";
 const INVALID_NAME =
-	"名前は、英大文字、数字、_ だけで、先頭は英大文字にしてください。例: `NAKAMABA_AUTHORIZATION`";
+	"名前は、英大文字、数字、_ だけで、先頭は英大文字にしてください。例: `WEATHER_API_KEY`";
 const INVALID_URL = "送り先は、https:// で始まるURLにしてください。";
 const LIMIT_REACHED = `秘密は${MAX_AGENT_SECRETS}個までです。使っていない秘密を削除してから追加してください。`;
 
@@ -109,8 +104,6 @@ export async function agentSecretsComponent(
 	switch (action) {
 		case Action.Add:
 			return addModal();
-		case Action.AddBasic:
-			return basicModal();
 		case Action.Select: {
 			if (interaction.data.component_type !== ComponentType.StringSelect) {
 				return null;
@@ -184,7 +177,7 @@ export async function submitAgentSecretModal(
 	userId: string,
 ): Promise<APIInteractionResponse | null> {
 	const [action] = parseId(interaction.data.custom_id);
-	if (action !== Action.AddModal && action !== Action.BasicModal) {
+	if (action !== Action.AddModal) {
 		return null;
 	}
 	const name = (readTextInput(interaction, NAME_INPUT_ID) ?? "")
@@ -200,13 +193,7 @@ export async function submitAgentSecretModal(
 	if (destination === null) {
 		return ephemeral(INVALID_URL);
 	}
-	const value =
-		action === Action.AddModal
-			? (readTextInput(interaction, VALUE_INPUT_ID) ?? "")
-			: basicAuthorization(
-					(readTextInput(interaction, USERNAME_INPUT_ID) ?? "").trim(),
-					readTextInput(interaction, PASSWORD_INPUT_ID) ?? "",
-				);
+	const value = readTextInput(interaction, VALUE_INPUT_ID) ?? "";
 	const credential = await loadCredential(env, userId, "anthropic");
 	if (credential === null) {
 		return ephemeral(KEY_MISSING);
@@ -275,12 +262,6 @@ function panel(secrets: readonly AgentSecret[]): MessageEdit {
 				style: ButtonStyle.Primary,
 				custom_id: idOf(Action.Add),
 				label: "追加",
-			},
-			{
-				type: ComponentType.Button,
-				style: ButtonStyle.Secondary,
-				custom_id: idOf(Action.AddBasic),
-				label: "Basic認証で追加",
 			},
 		],
 	};
@@ -361,44 +342,6 @@ function addModal(): APIInteractionResponse {
 						style: TextInputStyle.Paragraph,
 						required: true,
 						max_length: 4000,
-					},
-				},
-				URL_FIELD,
-			],
-		},
-	};
-}
-
-/** 「Basic認証で追加」の入力画面(名前・ユーザー名・パスワード・送り先) */
-function basicModal(): APIInteractionResponse {
-	return {
-		type: InteractionResponseType.Modal,
-		data: {
-			custom_id: idOf(Action.BasicModal),
-			title: "Basic認証の秘密を追加する",
-			components: [
-				nameField("例: NAKAMABA_AUTHORIZATION"),
-				{
-					type: ComponentType.Label,
-					label: "ユーザー名",
-					component: {
-						type: ComponentType.TextInput,
-						custom_id: USERNAME_INPUT_ID,
-						style: TextInputStyle.Short,
-						required: true,
-						max_length: 200,
-					},
-				},
-				{
-					type: ComponentType.Label,
-					label: "パスワード",
-					description: "Bobertが「Basic …」の形にして預ける",
-					component: {
-						type: ComponentType.TextInput,
-						custom_id: PASSWORD_INPUT_ID,
-						style: TextInputStyle.Short,
-						required: true,
-						max_length: 1000,
 					},
 				},
 				URL_FIELD,

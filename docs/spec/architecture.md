@@ -701,7 +701,7 @@ AIが、どんなスレッドがあるかを知り、スレッドと親のチャ
   - セッションを作るときに、秘密があれば`vault_ids`でつなぎ、指示に名前と送り先を書く。vaultは作るときにしかつなげないので、登録した秘密は、次のセッションから使える。vaultを読めなくても、秘密なしでセッションを始める。
   - vaultはワークスペース単位で、同じワークスペースの開発者は、自分のセッションにつないで使える(値は読めない)。そのことを一覧の画面に書く。
   - 1つのvaultに置けるのは20個まで(Managed Agentsの上限)。
-  - Nakamabaは、`NAKAMABA_AUTHORIZATION`(Authorizationヘッダーの値そのもの)と`NAKAMABA_ADMIN_URL`で認証できる(4rtoflow/Nakamaba#2)。スクリプトの中で値を組み立て直すと、ダミーの文字列が変わって差し替えられないため、Basic認証の値はBobertが組み立てて預ける。
+  - 値は、本人が入れたものをそのまま預ける。スクリプトの中で値を組み立て直すと(たとえばbase64にすると)、ダミーの文字列が変わって差し替えられないので、ヘッダーにそのまま入れる形の値にする。
   - `/delete`では、vaultごと削除する。
 - **GitHub:** 運営者が登録した、Bobert用のGitHub App(`bobert-agent-app`。持ち主は4rtoflowの組織)で、本人のGitHubと連携する。本人は、連携するときに、Bobertに触らせるリポジトリをGitHubの画面で選ぶ。
   - **連携:** 「GitHubと連携」のボタンを押したときに、連携のリンクを作る(10分で使えなくなる。OpenRouterとの連携と同じ)。リンクの先は、GitHubの承認の画面(OAuthのWebアプリケーションフロー。PKCEを付ける)。承認の後、まだアプリをどこにも入れていなければ、同じ`state`で、アプリを入れる画面(リポジトリを選ぶ画面)へ進める。アプリには「Request user authorization (OAuth) during installation」を付けてあるので、入れ終わると、GitHubがcodeを付けてコールバック(`/oauth/github/callback`)に戻す。連携の途中の状態は、D1(`github_link_states`)に置く。

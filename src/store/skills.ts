@@ -42,7 +42,7 @@ export interface SkillSummary {
 
 /** プラグインから入れたスキルの入手元 */
 export interface SkillSource {
-	/** プラグインの一覧(マーケットプレイス)のGitHubのリポジトリ(例: 4rtoflow/Nakamaba) */
+	/** プラグインの一覧(マーケットプレイス)のGitHubのリポジトリ(例: anthropics/claude-plugins-official) */
 	repository: string;
 	/** プラグインの名前 */
 	plugin: string;
@@ -50,7 +50,7 @@ export interface SkillSource {
 	commit: string;
 }
 
-/** スキルに付いたファイル。位置は、スキルのフォルダから(例: scripts/nakamaba.mjs) */
+/** スキルに付いたファイル。位置は、スキルのフォルダから(例: scripts/run.sh) */
 export interface SkillFileData {
 	path: string;
 	content: Uint8Array;

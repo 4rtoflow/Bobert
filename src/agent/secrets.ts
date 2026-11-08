@@ -51,12 +51,6 @@ export function parseSecretUrl(
 	return { url: url.origin, host: url.hostname };
 }
 
-/** Basic認証の、Authorizationヘッダーの値(「Basic」に続けて、「ユーザー名:パスワード」をbase64にしたもの) */
-export function basicAuthorization(username: string, password: string): string {
-	const bytes = new TextEncoder().encode(`${username}:${password}`);
-	return `Basic ${btoa(String.fromCharCode(...bytes))}`;
-}
-
 /** 預けた秘密の一覧(名前の順)。vaultがまだなければ空 */
 export async function listAgentSecrets(
 	db: D1Database,
