@@ -12,6 +12,7 @@ import type {
 } from "../src/discord/channels";
 import { handleInteraction } from "../src/interactions/handler";
 import type { IngestDeps } from "../src/queue/ingest";
+import type { KnowledgeJob } from "../src/queue/messages";
 import {
 	recomputeVisibility,
 	replaceGuildRoles,
@@ -458,6 +459,11 @@ export function fakeIngestDeps(botUserId: string) {
 	const transcribing: { channelId: string; messageId: string }[] = [];
 	/** 文字にして要約する仕事を入れた、知識のファイルのID */
 	const knowledge: number[] = [];
+	/** 入れた、知識のファイルの仕事 */
+	const knowledgeJobs: KnowledgeJob[] = [];
+	/** 知識のファイルの、読み込みの進み具合を見せた操作(DiscordのAPIの代わり) */
+	const progress: string[][] = [];
+	let nextReplyId = 1;
 	const deps: IngestDeps = {
 		db: env.DB,
 		vectors: {
@@ -488,10 +494,38 @@ export function fakeIngestDeps(botUserId: string) {
 		transcribeLater: async (targets) => {
 			transcribing.push(...targets);
 		},
-		knowledgeLater: async (fileIds) => {
-			knowledge.push(...fileIds);
+		knowledgeLater: async (jobs) => {
+			knowledge.push(...jobs.map((job) => job.fileId));
+			knowledgeJobs.push(...jobs);
+		},
+		knowledgeProgress: {
+			react: async (...args) => {
+				progress.push(["react", ...args]);
+			},
+			unreact: async (...args) => {
+				progress.push(["unreact", ...args]);
+			},
+			reply: async (...args) => {
+				progress.push(["reply", ...args]);
+				return `reply-${nextReplyId++}`;
+			},
+			edit: async (...args) => {
+				progress.push(["edit", ...args]);
+			},
+			remove: async (...args) => {
+				progress.push(["remove", ...args]);
+			},
 		},
 		knowledgeFiles: env.KNOWLEDGE_FILES,
 	};
-	return { deps, upserted, deleted, embedded, transcribing, knowledge };
+	return {
+		deps,
+		upserted,
+		deleted,
+		embedded,
+		transcribing,
+		knowledge,
+		knowledgeJobs,
+		progress,
+	};
 }

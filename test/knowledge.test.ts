@@ -28,6 +28,7 @@ import {
 	type KnowledgeJobDeps,
 	processKnowledgeFile,
 } from "../src/knowledge/job";
+import { discordProgressApi } from "../src/knowledge/progress";
 import {
 	knowledgeListBlock,
 	MAX_LISTED_KNOWLEDGE_FILES,
@@ -50,6 +51,7 @@ import {
 	KNOWLEDGE_LIST_INTRO,
 	KNOWLEDGE_NO_KEY,
 	KNOWLEDGE_SUMMARY_PROMPT,
+	knowledgeProgress,
 } from "../src/knowledge/texts";
 import {
 	type KnowledgeReads,
@@ -194,7 +196,7 @@ async function pendingFiles(
 	knowledgeChannelId = message.channelId,
 ): Promise<KnowledgeFile[]> {
 	await saveMessages(env.DB, [message]);
-	const ids = await addPendingKnowledgeFiles(
+	const accepted = await addPendingKnowledgeFiles(
 		env.DB,
 		message.attachments.map(
 			(file): NewKnowledgeFile => ({
@@ -213,7 +215,7 @@ async function pendingFiles(
 		),
 	);
 	const files: KnowledgeFile[] = [];
-	for (const id of ids) {
+	for (const { id } of accepted) {
 		const file = await loadKnowledgeFile(env.DB, id);
 		if (file !== null) {
 			files.push(file);
@@ -381,6 +383,35 @@ describe("知識チャンネルに送られたファイルの受け付け", () =
 		});
 	});
 
+	it("受け付けたら、メッセージに👀を付け、読み込みの進み具合を返信で見せる。仕事には、メッセージと返信を渡す", async () => {
+		const { guildId, channelId } = await knowledgeGuild();
+		const { deps, knowledgeJobs, progress } = fakeIngestDeps(BOT.id);
+		const message = storedMessage(guildId, channelId, [
+			attachment(channelId, "規約_2026.pdf"),
+			attachment(channelId, "photo.png", { contentType: "image/png" }),
+			attachment(channelId, "名簿.xlsx"),
+		]);
+
+		await ingestMessages([message], deps);
+
+		// 受け付けたファイルを、1つの返信に1行ずつ並べる(画像は並べない)。ファイル名の「_」は、書式にならないようにする
+		expect(progress).toEqual([
+			["react", channelId, message.messageId, "👀"],
+			[
+				"reply",
+				channelId,
+				message.messageId,
+				"-# 「規約\\_2026.pdf」を読み込んでいます(1/2 中身を読み取っています)\n-# 「名簿.xlsx」を読み込んでいます(1/2 中身を読み取っています)",
+			],
+		]);
+		const shown = {
+			channelId,
+			messageId: message.messageId,
+			replyId: "reply-1",
+		};
+		expect(knowledgeJobs.map((job) => job.progress)).toEqual([shown, shown]);
+	});
+
 	it("知識チャンネルの中の公開スレッドのファイルも、親のチャンネルに従って受け付ける", async () => {
 		const { guildId, channelId, threadId } = await knowledgeGuild();
 		const { deps, knowledge } = fakeIngestDeps(BOT.id);
@@ -400,7 +431,7 @@ describe("知識チャンネルに送られたファイルの受け付け", () =
 
 	it("知識チャンネルでないチャンネル、指定する前に送られたファイル、Botが送ったファイルは受け付けない", async () => {
 		const { guildId, channelId, otherId } = await knowledgeGuild();
-		const { deps, knowledge } = fakeIngestDeps(BOT.id);
+		const { deps, knowledge, progress } = fakeIngestDeps(BOT.id);
 
 		await ingestMessages(
 			[
@@ -416,11 +447,12 @@ describe("知識チャンネルに送られたファイルの受け付け", () =
 		);
 
 		expect(knowledge).toEqual([]);
+		expect(progress).toEqual([]);
 	});
 
 	it("同じ添付ファイルは、二度受け付けない(作成と編集の通知が両方届いたときなど)", async () => {
 		const { guildId, channelId } = await knowledgeGuild();
-		const { deps, knowledge } = fakeIngestDeps(BOT.id);
+		const { deps, knowledge, progress } = fakeIngestDeps(BOT.id);
 		const message = storedMessage(guildId, channelId, [
 			attachment(channelId, "a.pdf"),
 		]);
@@ -432,6 +464,8 @@ describe("知識チャンネルに送られたファイルの受け付け", () =
 		);
 
 		expect(knowledge).toHaveLength(1);
+		// 進み具合も、二度は見せない
+		expect(progress.map(([action]) => action)).toEqual(["react", "reply"]);
 	});
 
 	it("編集でファイルが外されたら、そのファイルの知識を消す", async () => {
@@ -632,6 +666,27 @@ describe("文字にして要約する仕事", () => {
 
 	function job(file: KnowledgeFile): KnowledgeJob {
 		return { kind: "knowledge", fileId: file.id };
+	}
+
+	/**
+	 * 進み具合を見せる操作(Discordへの、リアクションの付け外しと、返信の書き換えと削除)。
+	 * 「方法、パス(APIの版を除き、絵文字はそのまま)、書き換えた本文」にする
+	 */
+	function progressCalls(calls: FetchCall[]) {
+		return calls
+			.filter(
+				(call) =>
+					call.url.hostname === "discord.com" &&
+					["PUT", "PATCH", "DELETE"].includes(call.method),
+			)
+			.map((call) => {
+				const path = decodeURIComponent(
+					call.url.pathname.replace(/^\/api\/v\d+/, ""),
+				);
+				return call.method === "PATCH"
+					? [call.method, path, (call.body as { content: string }).content]
+					: [call.method, path];
+			});
 	}
 
 	it("PDFを、Workers AIで文字にして保存し、送った人のキー(Claude Haiku 5.5)で要約して、知識に入れる。何も表示しない", async () => {
@@ -949,6 +1004,197 @@ describe("文字にして要約する仕事", () => {
 
 		expect(calls).toEqual([]);
 	});
+
+	it("進み具合を見せていれば、中身を読み取ったら返信を書き換え、知識に入ったら✅を付けて、👀と返信を消す", async () => {
+		const { guildId, channelId } = await knowledgeGuild();
+		const user = await userWith("anthropic");
+		const message = storedMessage(
+			guildId,
+			channelId,
+			[attachment(channelId, "規約.pdf")],
+			{ authorId: user.id },
+		);
+		const [file] = await pendingFiles(message);
+		const calls = mockServices();
+
+		await handleKnowledgeJob(
+			{
+				...job(file as KnowledgeFile),
+				progress: { channelId, messageId: message.messageId, replyId: "r1" },
+			},
+			jobEnv().env,
+		);
+
+		const target = `/channels/${channelId}/messages/${message.messageId}`;
+		expect(progressCalls(calls)).toEqual([
+			[
+				"PATCH",
+				`/channels/${channelId}/messages/r1`,
+				"-# 「規約.pdf」を読み込んでいます(2/2 要約しています)",
+			],
+			["PUT", `${target}/reactions/✅/@me`],
+			["DELETE", `${target}/reactions/👀/@me`],
+			["DELETE", `/channels/${channelId}/messages/r1`],
+		]);
+		expect(replies(calls)).toEqual([]);
+	});
+
+	it("知識に加えなかったら、今までどおり返信で理由を知らせ、👀と進み具合の返信を消す。✅は付けない", async () => {
+		const { guildId, channelId } = await knowledgeGuild();
+		const user = await userWith("anthropic");
+		const message = storedMessage(
+			guildId,
+			channelId,
+			[attachment(channelId, "big.pdf", { size: 20 * 1024 * 1024 + 1 })],
+			{ authorId: user.id },
+		);
+		const [file] = await pendingFiles(message);
+		const calls = mockServices();
+
+		await handleKnowledgeJob(
+			{
+				...job(file as KnowledgeFile),
+				progress: { channelId, messageId: message.messageId, replyId: "r1" },
+			},
+			jobEnv().env,
+		);
+
+		expect(replies(calls).map((reply) => reply.content)).toEqual([
+			"このファイルは知識に加えませんでした。20MBまでのファイルを送ってください。",
+		]);
+		expect(progressCalls(calls)).toEqual([
+			[
+				"DELETE",
+				`/channels/${channelId}/messages/${message.messageId}/reactions/👀/@me`,
+			],
+			["DELETE", `/channels/${channelId}/messages/r1`],
+		]);
+	});
+
+	it("複数のファイルがあれば、すべて終わるまで👀と返信を残し、返信には読み込み中のファイルを並べる。すべて知識に入ったら✅を付ける", async () => {
+		const { guildId, channelId } = await knowledgeGuild();
+		const user = await userWith("anthropic");
+		const message = storedMessage(
+			guildId,
+			channelId,
+			[attachment(channelId, "a.txt"), attachment(channelId, "b.txt")],
+			{ authorId: user.id },
+		);
+		const [first, second] = await pendingFiles(message);
+		const progress = { channelId, messageId: message.messageId, replyId: "r1" };
+		const calls = mockServices();
+
+		await handleKnowledgeJob(
+			{ ...job(first as KnowledgeFile), progress },
+			jobEnv().env,
+		);
+
+		const reply = `/channels/${channelId}/messages/r1`;
+		expect(progressCalls(calls)).toEqual([
+			[
+				"PATCH",
+				reply,
+				"-# 「a.txt」を読み込んでいます(2/2 要約しています)\n-# 「b.txt」を読み込んでいます(1/2 中身を読み取っています)",
+			],
+			[
+				"PATCH",
+				reply,
+				"-# 「b.txt」を読み込んでいます(1/2 中身を読み取っています)",
+			],
+		]);
+
+		calls.length = 0;
+		await handleKnowledgeJob(
+			{ ...job(second as KnowledgeFile), progress },
+			jobEnv().env,
+		);
+
+		const target = `/channels/${channelId}/messages/${message.messageId}`;
+		expect(progressCalls(calls)).toEqual([
+			["PATCH", reply, "-# 「b.txt」を読み込んでいます(2/2 要約しています)"],
+			["PUT", `${target}/reactions/✅/@me`],
+			["DELETE", `${target}/reactions/👀/@me`],
+			["DELETE", reply],
+		]);
+	});
+
+	it("複数のファイルのうち、1つでも知識に加えなかったら、✅は付けない", async () => {
+		const { guildId, channelId } = await knowledgeGuild();
+		const user = await userWith("anthropic");
+		const message = storedMessage(
+			guildId,
+			channelId,
+			[
+				attachment(channelId, "a.txt"),
+				attachment(channelId, "big.pdf", { size: 20 * 1024 * 1024 + 1 }),
+			],
+			{ authorId: user.id },
+		);
+		const files = await pendingFiles(message);
+		const progress = { channelId, messageId: message.messageId, replyId: "r1" };
+		const calls = mockServices();
+
+		for (const file of files) {
+			await handleKnowledgeJob({ ...job(file), progress }, jobEnv().env);
+		}
+
+		expect(replies(calls).map((reply) => reply.content)).toEqual([
+			"「big.pdf」は知識に加えませんでした。20MBまでのファイルを送ってください。",
+		]);
+		const methods = progressCalls(calls).map(([method, path]) => [
+			method,
+			path,
+		]);
+		expect(methods).not.toContainEqual([
+			"PUT",
+			`/channels/${channelId}/messages/${message.messageId}/reactions/✅/@me`,
+		]);
+		expect(methods.slice(-2)).toEqual([
+			[
+				"DELETE",
+				`/channels/${channelId}/messages/${message.messageId}/reactions/👀/@me`,
+			],
+			["DELETE", `/channels/${channelId}/messages/r1`],
+		]);
+	});
+
+	it("読み込み中に、メッセージが消されたか、知識のファイルが消された(知識チャンネルの解除など)ときも、👀と返信を片付ける", async () => {
+		const { guildId, channelId } = await knowledgeGuild();
+		const user = await userWith("anthropic");
+		const message = storedMessage(
+			guildId,
+			channelId,
+			[attachment(channelId, "a.txt")],
+			{ authorId: user.id },
+		);
+		const [file] = await pendingFiles(message);
+		await env.DB.prepare("DELETE FROM messages WHERE message_id = ?")
+			.bind(message.messageId)
+			.run();
+		const progress = { channelId, messageId: message.messageId, replyId: "r1" };
+		const calls = mockServices();
+
+		// メッセージが消されていた(知識のファイルは、仕事の中で消す)
+		await handleKnowledgeJob(
+			{ ...job(file as KnowledgeFile), progress },
+			jobEnv().env,
+		);
+		// 知識のファイルが、もう消されていた
+		await handleKnowledgeJob(
+			{ kind: "knowledge", fileId: 999_999_999, progress },
+			jobEnv().env,
+		);
+
+		const cleanup = [
+			[
+				"DELETE",
+				`/channels/${channelId}/messages/${message.messageId}/reactions/👀/@me`,
+			],
+			["DELETE", `/channels/${channelId}/messages/r1`],
+		];
+		expect(progressCalls(calls)).toEqual([...cleanup, ...cleanup]);
+		expect(replies(calls)).toEqual([]);
+	});
 });
 
 describe("やり直しと、知らせ方", () => {
@@ -993,6 +1239,7 @@ describe("やり直しと、知らせ方", () => {
 			reply: async (_channelId, _messageId, content) => {
 				replied.push(content);
 			},
+			showProgress: async () => {},
 			...overrides,
 		};
 		return { deps, replied };
@@ -1015,19 +1262,23 @@ describe("やり直しと、知らせ方", () => {
 			kind: "ok" as const,
 			bytes: new TextEncoder().encode("中身"),
 		}));
+		const firstShown = vi.fn(async () => {});
 		const { deps, replied } = fakeDeps(
 			async () => {
 				throw new LlmError("rate_limited", 429, "rate limited");
 			},
-			{ download },
+			{ download, showProgress: firstShown },
 		);
 
 		await expect(processKnowledgeFile(file, deps, 1)).rejects.toThrow(LlmError);
 
 		expect(replied).toEqual([]);
+		// 進み具合は、中身を読み取ったときだけ見せ直す(やり直すので、👀と返信は残す)
+		expect(firstShown).toHaveBeenCalledTimes(1);
 		const converted = await loadKnowledgeFile(env.DB, file.id);
 		expect(converted).toMatchObject({ state: "converted", textLength: 2 });
 
+		const secondShown = vi.fn(async () => {});
 		const second = fakeDeps(
 			async () => ({
 				text: "要約",
@@ -1044,11 +1295,13 @@ describe("やり直しと、知らせ方", () => {
 				sources: [],
 				toolCalls: 0,
 			}),
-			{ download },
+			{ download, showProgress: secondShown },
 		);
 		await processKnowledgeFile(converted as KnowledgeFile, second.deps, 2);
 
 		expect(download).toHaveBeenCalledTimes(1);
+		// 読み込みが終わったので、見せ直す
+		expect(secondShown).toHaveBeenCalledTimes(1);
 		expect(await loadKnowledgeFile(env.DB, file.id)).toMatchObject({
 			state: "ready",
 			summary: "要約",
@@ -1210,6 +1463,7 @@ describe("PowerPoint", () => {
 			reply: async (_channelId, _messageId, content) => {
 				replied.push(content);
 			},
+			showProgress: async () => {},
 		};
 		return { deps, replied, markdown };
 	}
@@ -1523,6 +1777,7 @@ describe("ファイルの中を探す", () => {
 			reply: async (_channelId, _messageId, content) => {
 				replied.push(content);
 			},
+			showProgress: async () => {},
 		};
 		return { deps, store, download, replied };
 	}
@@ -2344,6 +2599,94 @@ describe("/knowledge", () => {
 					"知識チャンネルを保存できませんでした。少し待ってから、もう一度試してください。",
 			},
 		]);
+	});
+});
+
+describe("読み込みの進み具合の見せ方", () => {
+	it("👀と✅は、Bot自身のリアクションとして付け外しする。進み具合は、ファイルのメッセージへの、誰にも通知しない返信にする", async () => {
+		const calls = mockFetch((call) =>
+			call.method === "POST"
+				? Response.json({ id: "r1" })
+				: new Response(null, { status: 204 }),
+		);
+		const api = discordProgressApi("token");
+
+		await api.react("c1", "m1", "👀");
+		const replyId = await api.reply("c1", "m1", "進み具合");
+		await api.edit("c1", "r1", "書き換えた進み具合");
+		await api.react("c1", "m1", "✅");
+		await api.unreact("c1", "m1", "👀");
+		await api.remove("c1", "r1");
+
+		expect(replyId).toBe("r1");
+		expect(
+			calls.map((call) => [call.method, call.url.pathname, call.body]),
+		).toEqual([
+			[
+				"PUT",
+				"/api/v10/channels/c1/messages/m1/reactions/%F0%9F%91%80/@me",
+				null,
+			],
+			[
+				"POST",
+				"/api/v10/channels/c1/messages",
+				{
+					content: "進み具合",
+					message_reference: { message_id: "m1", fail_if_not_exists: true },
+					allowed_mentions: { parse: [], replied_user: false },
+					// 通知しない(@silent)
+					flags: 4096,
+				},
+			],
+			[
+				"PATCH",
+				"/api/v10/channels/c1/messages/r1",
+				{ content: "書き換えた進み具合" },
+			],
+			["PUT", "/api/v10/channels/c1/messages/m1/reactions/%E2%9C%85/@me", null],
+			[
+				"DELETE",
+				"/api/v10/channels/c1/messages/m1/reactions/%F0%9F%91%80/@me",
+				null,
+			],
+			["DELETE", "/api/v10/channels/c1/messages/r1", null],
+		]);
+	});
+
+	it("うまくいかなくても、例外にしない。権限がないときなどは記録に残し、消えていた(404)ときは残さない", async () => {
+		mockFetch((call) =>
+			call.url.pathname.includes("/reactions/")
+				? Response.json({ code: 50013 }, { status: 403 })
+				: Response.json({ code: 10008 }, { status: 404 }),
+		);
+		const logs = vi.spyOn(console, "log").mockImplementation(() => {});
+		const api = discordProgressApi("token");
+
+		await api.react("c1", "m1", "👀");
+		expect(await api.reply("c1", "m1", "進み具合")).toBeNull();
+		await api.remove("c1", "r1");
+
+		expect(logs.mock.calls.map(([line]) => JSON.parse(String(line)))).toEqual([
+			{
+				component: "knowledge",
+				event: "progress_failed",
+				action: "react",
+				status: 403,
+				code: 50013,
+				error: "DiscordApiError",
+			},
+		]);
+	});
+
+	it("読み込み中のファイルを1行ずつ、小さい文字で並べる。中身を読み取ったものは、要約している段階にする", () => {
+		expect(
+			knowledgeProgress([
+				{ filename: "規約.pdf", converted: true },
+				{ filename: "名簿_2026.xlsx", converted: false },
+			]),
+		).toBe(
+			"-# 「規約.pdf」を読み込んでいます(2/2 要約しています)\n-# 「名簿\\_2026.xlsx」を読み込んでいます(1/2 中身を読み取っています)",
+		);
 	});
 });
 

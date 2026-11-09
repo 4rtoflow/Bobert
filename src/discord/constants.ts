@@ -76,6 +76,8 @@ export const InteractionResponseType = {
 
 export const MessageFlags = {
 	Ephemeral: 64 as DiscordMessageFlags.Ephemeral,
+	/** 通知しない(@silent)。プッシュ通知とデスクトップ通知を出さない */
+	SuppressNotifications: 4096 as DiscordMessageFlags.SuppressNotifications,
 } as const;
 
 export const MessageType = {

@@ -356,6 +356,39 @@ export async function deleteMessage(
 	);
 }
 
+/**
+ * メッセージに、Botのリアクションを付ける。メッセージ履歴を読む権限が必要で、
+ * まだ誰も付けていない絵文字なら、リアクションの追加の権限も必要
+ */
+export async function addOwnReaction(
+	botToken: string,
+	channelId: string,
+	messageId: string,
+	emoji: string,
+): Promise<void> {
+	await discordRequest(
+		"PUT own reaction",
+		"PUT",
+		`/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`,
+		{ botToken },
+	);
+}
+
+/** Botが付けたリアクションを外す */
+export async function deleteOwnReaction(
+	botToken: string,
+	channelId: string,
+	messageId: string,
+	emoji: string,
+): Promise<void> {
+	await discordRequest(
+		"DELETE own reaction",
+		"DELETE",
+		`/channels/${channelId}/messages/${messageId}/reactions/${encodeURIComponent(emoji)}/@me`,
+		{ botToken },
+	);
+}
+
 /** メッセージをピン留めする(メッセージの管理の権限が必要) */
 export async function pinMessage(
 	botToken: string,

@@ -101,6 +101,11 @@ export type NewKnowledgeFile = Omit<
 	"id" | "state" | "rejectedReason" | "textLength" | "summary" | "vectorCount"
 >;
 
+/** 新しく記録した(受け付けた)ファイルと、そのID */
+export interface AcceptedKnowledgeFile extends NewKnowledgeFile {
+	id: number;
+}
+
 interface KnowledgeFileRow {
 	id: number;
 	guild_id: string;
@@ -274,7 +279,7 @@ interface KnowledgeChannelMatch {
 }
 
 /**
- * 知識チャンネルに送られたファイルを、受け付けた(pending)として記録する。新しく記録したもののIDを返す。
+ * 知識チャンネルに送られたファイルを、受け付けた(pending)として記録する。新しく記録したものを、IDを付けて返す。
  * 同じ添付ファイルがすでにあれば(作成と編集の通知が両方届いたときなど)、記録しない。
  * 消されたメッセージ(削除の記録があるもの)と、指定が外された(か、指定より前に送られた)ものも、記録しない
  */
@@ -282,7 +287,7 @@ export async function addPendingKnowledgeFiles(
 	db: D1Database,
 	files: readonly NewKnowledgeFile[],
 	now = Date.now(),
-): Promise<number[]> {
+): Promise<AcceptedKnowledgeFile[]> {
 	if (files.length === 0) {
 		return [];
 	}
@@ -316,9 +321,14 @@ export async function addPendingKnowledgeFiles(
 				),
 		),
 	);
-	return results.flatMap((result) =>
-		((result.results ?? []) as { id: number }[]).map((row) => row.id),
-	);
+	// 1つのファイルに1つの文なので、文の結果の順は、filesの順と同じ
+	return results.flatMap((result, index) => {
+		const file = files[index];
+		const [row] = (result.results ?? []) as { id: number }[];
+		return file === undefined || row === undefined
+			? []
+			: [{ ...file, id: row.id }];
+	});
 }
 
 /** 知識のファイルを、IDで読む。なければnull */

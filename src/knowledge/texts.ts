@@ -1,7 +1,7 @@
 /**
  * 知識チャンネルについて、Discordに表示する文言と、AIに渡す文(仕様: docs/spec/behavior.md「知識チャンネル」)。
  * 表示する文言は、2026-11-06に承認されたもの(issue #96)。複数のファイルがあるメッセージへの返信の形と、
- * 読み込めなかったときの文は、2026-11-07に承認
+ * 読み込めなかったときの文は、2026-11-07に承認。読み込みの進み具合の返信は、2026-11-09に承認
  */
 
 /** /knowledge の名前と説明(/help のコマンドの一覧にも出る) */
@@ -75,6 +75,21 @@ export function knowledgeSummaryFailed(
 /** やり直しても失敗した(障害など) */
 export function knowledgeRetryFailed(filename: string | null): string {
 	return `${notAdded(filename)}少し待ってから、ファイルを送り直してください。`;
+}
+
+/**
+ * 読み込みの進み具合(知識チャンネルの、ファイルのメッセージへの返信。全員に見えるが、通知はしない)。
+ * 読み込み中のファイルを、1行ずつ小さい文字(行の頭の「-#」)で並べる。convertedは、中身を読み取り終えて、要約しているもの
+ */
+export function knowledgeProgress(
+	files: readonly { filename: string; converted: boolean }[],
+): string {
+	return files
+		.map(
+			(file) =>
+				`-# 「${escapeMarkdown(file.filename)}」を読み込んでいます(${file.converted ? "2/2 要約しています" : "1/2 中身を読み取っています"})`,
+		)
+		.join("\n");
 }
 
 /** /help の使い方に足す1行(記憶の行の次) */
