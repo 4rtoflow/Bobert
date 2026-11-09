@@ -1,4 +1,5 @@
 import { fetchChannelInfo, fetchGuildRoles } from "../discord/channels";
+import { discordProgressApi } from "../knowledge/progress";
 import { workersAiEmbedder } from "../store/embedding";
 import type { IngestDeps } from "./ingest";
 import type { QueueMessage } from "./messages";
@@ -36,15 +37,16 @@ export function ingestDeps(env: Env): IngestDeps {
 			}
 		},
 		// 知識チャンネルに送られたファイルは、届いてすぐに読む(DiscordのファイルのURLは期限付きのため)
-		knowledgeLater: async (fileIds) => {
+		knowledgeLater: async (jobs) => {
 			// Queueに1回で入れられるのは、100件まで
-			for (let i = 0; i < fileIds.length; i += 100) {
+			for (let i = 0; i < jobs.length; i += 100) {
 				await env.RESPOND_QUEUE.sendBatch(
-					fileIds.slice(i, i + 100).map((fileId) => ({
-						body: { kind: "knowledge", fileId } satisfies QueueMessage,
+					jobs.slice(i, i + 100).map((job) => ({
+						body: job satisfies QueueMessage,
 					})),
 				);
 			}
 		},
+		knowledgeProgress: discordProgressApi(token),
 	};
 }

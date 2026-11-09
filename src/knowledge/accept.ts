@@ -1,6 +1,7 @@
-import type { StoredMessageInput } from "../queue/messages";
+import type { KnowledgeJob, StoredMessageInput } from "../queue/messages";
 import { attachmentKey } from "../respond/attachments";
 import {
+	type AcceptedKnowledgeFile,
 	addPendingKnowledgeFiles,
 	deleteKnowledgeFiles,
 	knowledgeChannelsFor,
@@ -9,19 +10,23 @@ import {
 } from "../store/knowledge";
 import { loadMessagesByIds } from "../store/messages";
 import { knowledgeFormat } from "./format";
+import { type KnowledgeProgressApi, startKnowledgeProgress } from "./progress";
 import { forgetKnowledgeFiles, type KnowledgeStorage } from "./storage";
 
 /** 知識のファイルの受け付けに使うもの。消すときは、D1の外に置いたもの(R2のPDFと、ベクトル)も消す */
 export interface KnowledgeIntakeDeps extends KnowledgeStorage {
 	db: D1Database;
 	/** 受け付けたファイルを、文字にして要約する仕事を入れる(時間がかかるので、別の仕事にする) */
-	knowledgeLater: (fileIds: readonly number[]) => Promise<void>;
+	knowledgeLater: (jobs: readonly KnowledgeJob[]) => Promise<void>;
+	/** 受け付けたファイルのメッセージに、読み込みの進み具合を見せる(DiscordのAPI) */
+	knowledgeProgress: KnowledgeProgressApi;
 }
 
 /**
  * 保存したメッセージのうち、知識チャンネル(と、その中の公開スレッドとフォーラムの投稿)のものを見る
  * (仕様: docs/spec/architecture.md「知識チャンネル」)。
  * - 指定した後に送られた、受け付ける形式のファイルを記録し、文字にして要約する仕事を入れる。
+ *   そのメッセージに👀を付け、読み込みの進み具合を返信で見せる(src/knowledge/progress.ts)。
  *   Botが送ったファイルと、受け付けない形式のファイルには、何もしない
  * - 編集でファイルが外されていたら、そのファイルの知識を消す
  * 同じ添付ファイルは、二度受け付けない(作成と編集の通知が両方届いたときや、読み直したメッセージを保存し直したとき)。
@@ -86,11 +91,49 @@ export async function acceptKnowledgeFiles(
 					];
 		});
 	});
-	const ids = await addPendingKnowledgeFiles(deps.db, candidates);
-	if (ids.length > 0) {
-		await deps.knowledgeLater(ids);
+	const accepted = await addPendingKnowledgeFiles(deps.db, candidates);
+	// 進み具合は、メッセージごとに見せる(1つのメッセージに複数のファイルがあれば、1つの返信に並べる)
+	const jobs: KnowledgeJob[] = [];
+	for (const files of byMessage(accepted)) {
+		const [first] = files;
+		if (first === undefined) {
+			continue;
+		}
+		const progress = await startKnowledgeProgress(
+			deps.knowledgeProgress,
+			first,
+			files.map((file) => file.filename),
+		);
+		jobs.push(
+			...files.map(
+				(file): KnowledgeJob => ({
+					kind: "knowledge",
+					fileId: file.id,
+					progress,
+				}),
+			),
+		);
 	}
-	return { accepted: ids.length, removed };
+	if (jobs.length > 0) {
+		await deps.knowledgeLater(jobs);
+	}
+	return { accepted: accepted.length, removed };
+}
+
+/** 受け付けたファイルを、メッセージごとに分ける(受け付けた順のまま) */
+function byMessage(
+	files: readonly AcceptedKnowledgeFile[],
+): AcceptedKnowledgeFile[][] {
+	const groups = new Map<string, AcceptedKnowledgeFile[]>();
+	for (const file of files) {
+		const group = groups.get(file.messageId);
+		if (group === undefined) {
+			groups.set(file.messageId, [file]);
+		} else {
+			group.push(file);
+		}
+	}
+	return [...groups.values()];
 }
 
 /** 編集されたメッセージのうち、知識のファイルの添付が外されたものの知識を消す。消した数を返す */

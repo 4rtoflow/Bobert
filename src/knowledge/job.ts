@@ -2,7 +2,7 @@ import { createMessage, DiscordApiError } from "../discord/api";
 import { type OwnKeyModel, ownKeyModel } from "../llm/own-key";
 import { LlmError, type LlmErrorKind } from "../llm/types";
 import { logEvent } from "../log";
-import type { KnowledgeJob } from "../queue/messages";
+import type { KnowledgeJob, KnowledgeProgress } from "../queue/messages";
 import { attachmentKey } from "../respond/attachments";
 import { historyFor } from "../respond/handler";
 import { freshAttachment, type HistoryDeps } from "../respond/history";
@@ -33,6 +33,7 @@ import {
 } from "./convert";
 import { powerPointToPdf } from "./converter";
 import { MAX_KNOWLEDGE_FILE_BYTES } from "./format";
+import { discordProgressApi, refreshKnowledgeProgress } from "./progress";
 import {
 	forgetKnowledgeFiles,
 	type KnowledgeFilesBucket,
@@ -65,7 +66,8 @@ import {
  * 送った人のキーを確かめ、大きさを確かめてから、文字にして保存し、送った人のキーで要約する。
  * 知識に入ったら、中を探せるよう、文字にした内容を区切ってベクトルにする。
  * 受け付けないときと、文字にできないとき、要約できないときは、知識に加えず、ファイルのメッセージへの返信で知らせる。
- * うまくいったときは、何も表示しない
+ * 受け付けたときに見せ始めた進み具合(👀と返信)は、中身を読み取ったときと、読み込みが終わったときに見せ直す
+ * (src/knowledge/progress.ts)
  */
 
 /** この仕事を運ぶQueue(RESPOND_QUEUE)で、1つの仕事を試す回数(wrangler.jsonc の max_retries は2) */
@@ -102,6 +104,11 @@ export interface KnowledgeJobDeps extends ConversionDeps, KnowledgeStorage {
 		messageId: string,
 		content: string,
 	) => Promise<void>;
+	/**
+	 * ファイルのメッセージに、読み込みの進み具合を見せ直す。中身を読み取ったときと、読み込みが終わったときに呼ぶ。
+	 * うまくいかなくても、例外にはしない
+	 */
+	showProgress: () => Promise<void>;
 }
 
 /**
@@ -125,15 +132,23 @@ export async function handleKnowledgeJob(
 			fileId: job.fileId,
 			reason: file === null ? "deleted" : file.state,
 		});
+		// 進み具合を見せていたら、片付ける(ほかのファイルの仕事が、まとめて知識に加えないことにしたときや、
+		// 読み込み中に、メッセージが消されたときなど)
+		await showProgress(env, job.progress);
 		return;
 	}
-	await processKnowledgeFile(file, knowledgeJobDeps(env, file), attempts);
+	await processKnowledgeFile(
+		file,
+		knowledgeJobDeps(env, file, job.progress),
+		attempts,
+	);
 }
 
-/** 本物のD1、Workers AI、DiscordのAPI、送った人のキーを使う */
+/** 本物のD1、Workers AI、DiscordのAPI、送った人のキーを使う。progressは、進み具合を見せている、ファイルのメッセージと返信 */
 export function knowledgeJobDeps(
 	env: Env,
 	file: Pick<KnowledgeFile, "guildId" | "channelId">,
+	progress?: KnowledgeProgress,
 ): KnowledgeJobDeps {
 	return {
 		db: env.DB,
@@ -152,19 +167,36 @@ export function knowledgeJobDeps(
 			ownKeyModel(env, userId, KNOWLEDGE_SUMMARY_MODEL_KEY),
 		reply: (channelId, messageId, content) =>
 			replyToFile(env.DISCORD_BOT_TOKEN, channelId, messageId, content),
+		showProgress: () => showProgress(env, progress),
 	};
+}
+
+/** 本物のD1とDiscordのAPIで、進み具合を見せ直す */
+function showProgress(
+	env: Env,
+	progress: KnowledgeProgress | undefined,
+): Promise<void> {
+	return refreshKnowledgeProgress(
+		env.DB,
+		discordProgressApi(env.DISCORD_BOT_TOKEN),
+		progress,
+	);
 }
 
 /**
  * 受け付けた(pending)か、文字にした(converted)ファイルを、知識に入れ(か、知識に加えないと決めて知らせ)、
- * 知識に入ったら、ベクトルにする。知識に入っているファイルは、ベクトルにするだけ
+ * 知識に入ったら、ベクトルにする。知識に入っているファイルは、ベクトルにするだけ。
+ * 読み込みが終わったら(ベクトルにする前に)、進み具合を見せ直す。中を探せるようになるのは、少し後になる
  */
 export async function processKnowledgeFile(
 	file: KnowledgeFile,
 	deps: KnowledgeJobDeps,
 	attempts: number,
 ): Promise<void> {
-	if (file.state !== "ready" && !(await addToKnowledge(file, deps, attempts))) {
+	const added =
+		file.state === "ready" || (await addToKnowledge(file, deps, attempts));
+	await deps.showProgress();
+	if (!added) {
 		return;
 	}
 	await embedFile(file.id, deps, attempts);
@@ -278,6 +310,8 @@ async function addToKnowledge(
 			}
 			textLength = conversion.text.length;
 			convertMs = Date.now() - startedAt;
+			// 次は要約なので、進み具合の返信を書き換える
+			await deps.showProgress();
 		}
 		return await summarize(file, deps, model, {
 			label,

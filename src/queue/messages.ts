@@ -127,6 +127,19 @@ export interface KnowledgeJob {
 	kind: "knowledge";
 	/** 知識のファイルのID */
 	fileId: number;
+	/**
+	 * 読み込みの進み具合を見せている、ファイルのメッセージと返信(src/knowledge/progress.ts)。
+	 * 管理用エンドポイントで入れた仕事と、この仕組みより前に入った仕事にはない
+	 */
+	progress?: KnowledgeProgress;
+}
+
+/** 読み込みの進み具合を見せている、ファイルのメッセージと、進み具合の返信 */
+export interface KnowledgeProgress {
+	channelId: string;
+	messageId: string;
+	/** 進み具合の返信のID。送れなかったときはnull */
+	replyId: string | null;
 }
 
 /**
