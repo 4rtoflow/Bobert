@@ -114,7 +114,7 @@ const LIST_PREVIEW_LENGTHS = [Number.POSITIVE_INFINITY, 100, 40, 20, 0];
 const OPTION_DESCRIPTION_LENGTH = 100;
 /** Discordの1メッセージの長さの上限 */
 const MESSAGE_LENGTH = 2000;
-/** 読むファイルの大きさの上限。本文の上限(2万文字)を、どんな文字でも超える大きさにする */
+/** 読むファイルの大きさの上限。本文の上限(10万文字)を、どんな文字でも超える大きさにする */
 const MAX_FILE_BYTES = 1024 * 1024;
 const SKILL_FILE_NAME = "SKILL.md";
 
@@ -941,7 +941,7 @@ export function skillProblemOf(content: SkillContent): string | null {
 	}
 	const bodyLength = countCharacters(content.body);
 	if (bodyLength > MAX_BODY_LENGTH) {
-		return `本文は2万文字までにしてください(いまは${bodyLength.toLocaleString("en-US")}文字)。`;
+		return `本文は10万文字までにしてください(いまは${bodyLength.toLocaleString("en-US")}文字)。`;
 	}
 	return null;
 }
@@ -1166,7 +1166,7 @@ function fileModal(customId: string, title: string): APIInteractionResponse {
 					type: ComponentType.Label,
 					label: SKILL_FILE_NAME,
 					description:
-						"冒頭に名前(name)と説明(description)を書いたファイル。本文は2万文字まで",
+						"冒頭に名前(name)と説明(description)を書いたファイル。本文は10万文字まで",
 					component: {
 						type: ComponentType.FileUpload,
 						custom_id: FILE_INPUT_ID,

@@ -607,13 +607,13 @@ describe("/skills の file(SKILL.mdを添付)", () => {
 		await sendInteraction(regskills(guildId, 100));
 		vi.restoreAllMocks();
 		const tooLong = mockDiscord(
-			FILE.replace("決まったこと", "あ".repeat(20_001)),
+			FILE.replace("決まったこと", "あ".repeat(100_001)),
 		);
 		await sendInteraction(regskills(guildId, 100));
 
 		expect(edits(unreadable)).toEqual([{ content: UNREADABLE_FILE }]);
 		expect(edits(tooLong)).toEqual([
-			{ content: "本文は2万文字までにしてください(いまは20,019文字)。" },
+			{ content: "本文は10万文字までにしてください(いまは100,019文字)。" },
 		]);
 		expect(await findSkillByName(env.DB, guildId, "meeting-notes")).toBe(null);
 	});
@@ -978,7 +978,7 @@ describe("ファイルで置き換え", () => {
 					type: ComponentType.Label,
 					label: "SKILL.md",
 					description:
-						"冒頭に名前(name)と説明(description)を書いたファイル。本文は2万文字まで",
+						"冒頭に名前(name)と説明(description)を書いたファイル。本文は10万文字まで",
 					component: {
 						type: ComponentType.FileUpload,
 						custom_id: "file",

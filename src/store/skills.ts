@@ -10,7 +10,7 @@ export const MAX_SKILL_NAME_LENGTH = 64;
 /** 説明の長さの上限(Agent Skillsの上限と同じ) */
 export const MAX_DESCRIPTION_LENGTH = 1024;
 /** 本文の長さの上限(ファイルで登録するとき。入力画面からは、Discordの入力欄の上限まで) */
-export const MAX_BODY_LENGTH = 20_000;
+export const MAX_BODY_LENGTH = 100_000;
 
 /** 名前の規則(Agent Skillsと同じ)。英小文字、数字、ハイフンだけ */
 const NAME_PATTERN = /^[a-z0-9-]+$/;
