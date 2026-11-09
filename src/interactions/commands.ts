@@ -49,6 +49,8 @@ import {
 	PLUGINS_MARKETPLACE_OPTION_DESCRIPTION,
 	PLUGINS_PLUGIN_OPTION,
 	PLUGINS_PLUGIN_OPTION_DESCRIPTION,
+	PLUGINS_RELOAD_OPTION,
+	PLUGINS_RELOAD_OPTION_DESCRIPTION,
 } from "./plugins";
 import {
 	SKILLS_COMMAND_NAME,
@@ -155,6 +157,12 @@ export const COMMANDS: RESTPutAPIApplicationCommandsJSONBody = [
 				description: PLUGINS_MARKETPLACE_OPTION_DESCRIPTION,
 				required: false,
 				max_length: 200,
+			},
+			{
+				type: ApplicationCommandOptionType.Boolean,
+				name: PLUGINS_RELOAD_OPTION,
+				description: PLUGINS_RELOAD_OPTION_DESCRIPTION,
+				required: false,
 			},
 		],
 	},

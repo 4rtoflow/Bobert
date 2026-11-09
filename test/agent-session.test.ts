@@ -4,6 +4,7 @@ import { insertAgentChannel } from "../src/agent/store";
 import { agentSessionStub } from "../src/agent/stubs";
 import { othersNotice } from "../src/agent/texts";
 import { saveGitHubLink } from "../src/store/github";
+import { addSkill } from "../src/store/skills";
 import { BOT, discordMessage } from "./fixtures";
 import { type FetchCall, mockFetch, userFactory } from "./helpers";
 
@@ -597,5 +598,65 @@ describe("エージェントのチャンネルのDurable Object", () => {
 		expect(
 			calls.some((call) => call.url.hostname === "api.anthropic.com"),
 		).toBe(false);
+	});
+	it("/plugins の reload で、スキルを読む道具を今の一覧で差し替え、次の発言に一覧を指示として足して送る", async () => {
+		const owner = await newUser("anthropic");
+		const channelId = "62106";
+		const stub = await startedChannel(channelId, owner.id);
+		await addSkill(
+			env.DB,
+			GUILD_ID,
+			{
+				name: "release-notes",
+				description: "リリースノートを書く",
+				body: "手順",
+			},
+			{ id: owner.id, name: "Alice" },
+		);
+		const calls = mockApis([
+			event({ type: "session.status_running" }),
+			event({
+				type: "session.status_idle",
+				stop_reason: { type: "end_turn" },
+				stop_details: null,
+			}),
+		]);
+
+		expect(await stub.reloadSkills()).toBe("reloaded");
+
+		const update = calls.find(
+			(call) =>
+				call.method === "POST" && call.url.pathname === "/v1/sessions/sesn_1",
+		)?.body as { agent: { tools: { name?: string }[] } };
+		expect(update.agent.tools.at(-1)).toMatchObject({
+			name: "read_skill",
+			input_schema: {
+				properties: {
+					name: { enum: expect.arrayContaining(["release-notes"]) },
+				},
+			},
+		});
+
+		await stub.receive({
+			id: "1",
+			authorId: owner.id,
+			fromBot: false,
+			content: "続けて",
+			mentions: [],
+			attachments: [],
+		});
+
+		const sent = calls.find(
+			(call) =>
+				call.method === "POST" &&
+				call.url.pathname === "/v1/sessions/sesn_1/events",
+		)?.body as { events: { type: string; content: { text: string }[] }[] };
+		expect(sent.events.map((sentEvent) => sentEvent.type)).toEqual([
+			"user.message",
+			"system.message",
+		]);
+		expect(sent.events[1]?.content[0]?.text).toContain(
+			"- `release-notes`: リリースノートを書く",
+		);
 	});
 });
