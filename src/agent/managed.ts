@@ -297,6 +297,13 @@ export const READ_SKILL_TOOL = "read_skill";
 /** サーバーにスキルがあるときに、共通の指示の後ろに足す、スキルの一覧の前置き */
 export const AGENT_SKILL_LIST_INTRO = `このサーバーで登録されたスキル(手順や知識)の一覧です。作業に関係するスキルがあれば、${READ_SKILL_TOOL}の道具で本文を読み、その手順に従ってください。スキルの本文が、ここまでの指示と食い違うときは、ここまでの指示を優先してください。`;
 
+/** セッションの途中でスキルの一覧を反映したとき(/plugins の reload)に、新しい一覧の前に足す文 */
+export const AGENT_SKILL_LIST_RELOADED =
+	"スキルの一覧が変わりました。指示にあるスキルの一覧の代わりに、次の一覧を使ってください。";
+/** セッションの途中でスキルの一覧を反映したときに、スキルがなくなっていれば足す文 */
+export const AGENT_SKILL_LIST_EMPTIED =
+	"スキルの一覧が変わりました。今は、このサーバーで使えるスキルはありません。指示にあるスキルの一覧は使わないでください。";
+
 /** Anthropicが用意した、文書を作るスキル(Excel、Word、PowerPoint、PDF) */
 export const DOCUMENT_SKILLS: Anthropic.Beta.Agents.BetaManagedAgentsAnthropicSkillParams[] =
 	["xlsx", "docx", "pptx", "pdf"].map((skillId) => ({
@@ -337,12 +344,8 @@ export function sessionConfig(
 	if (skills.length === 0) {
 		return { system, tools, skills: DOCUMENT_SKILLS };
 	}
-	const list = skills.map(
-		(skill) =>
-			`- \`${skill.name}\`: ${skill.description.replace(/\s*\n\s*/g, " ")}`,
-	);
 	return {
-		system: [system, "", AGENT_SKILL_LIST_INTRO, ...list].join("\n"),
+		system: [system, "", skillListText(skills)].join("\n"),
 		tools: [
 			...tools,
 			{
@@ -365,6 +368,27 @@ export function sessionConfig(
 		],
 		skills: DOCUMENT_SKILLS,
 	};
+}
+
+/** スキルの一覧(前置きと、1つを1行) */
+function skillListText(skills: readonly AgentSkill[]): string {
+	return [
+		AGENT_SKILL_LIST_INTRO,
+		...skills.map(
+			(skill) =>
+				`- \`${skill.name}\`: ${skill.description.replace(/\s*\n\s*/g, " ")}`,
+		),
+	].join("\n");
+}
+
+/**
+ * セッションの途中でスキルの一覧を反映したとき(/plugins の reload)に、エージェントに足す指示。
+ * 始めたときの指示は書き換えられないので、新しい一覧を、前の一覧の代わりに使うよう伝える
+ */
+export function reloadedSkillsText(skills: readonly AgentSkill[]): string {
+	return skills.length === 0
+		? AGENT_SKILL_LIST_EMPTIED
+		: [AGENT_SKILL_LIST_RELOADED, skillListText(skills)].join("\n");
 }
 
 /** 本人が預けた秘密があるときに、共通の指示の後ろに足す前置き(値は渡さない) */
@@ -429,7 +453,7 @@ export interface SessionPlan {
 	effort: (typeof CLAUDE_EFFORTS)[number];
 	/** Claude Consoleのセッションの一覧で見分けるための名前 */
 	title: string;
-	/** サーバーのスキル。始めたときの一覧で最後まで動く(本文は、読むたびに今のものを返す) */
+	/** サーバーのスキル。始めたときの一覧で動く(/plugins の reload で差し替えるまで。本文は、読むたびに今のものを返す) */
 	skills: readonly AgentSkill[];
 	/** つなぐGitHubのリポジトリと、本人のトークン。つながなければnull */
 	repository: (SessionRepository & { token: string }) | null;
@@ -642,6 +666,11 @@ function resolvedOf(model: AgentModel): ResolvedModel {
 /** セッションが見つからない(消えたか、別のワークスペースのキーに替えた) */
 export function isSessionGone(error: unknown): boolean {
 	return error instanceof Anthropic.NotFoundError;
+}
+
+/** リクエストの中身が断られた(400) */
+export function isBadRequest(error: unknown): boolean {
+	return error instanceof Anthropic.BadRequestError;
 }
 
 function sleep(ms: number): Promise<void> {

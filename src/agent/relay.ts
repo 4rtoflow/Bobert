@@ -48,14 +48,18 @@ import {
 } from "../voice/voice";
 import {
 	type AgentModel,
+	type AgentSkill,
 	CREATE_PULL_REQUEST_TOOL,
 	describeAgentError,
 	describeSessionError,
 	GITHUB_READ_TOOL,
 	GITHUB_WRITE_TOOL,
+	isBadRequest,
 	isSessionGone,
 	READ_SKILL_TOOL,
+	reloadedSkillsText,
 	SEND_FILES_TOOL,
+	sessionConfig,
 } from "./managed";
 import {
 	ALLOW_BUTTON_LABEL,
@@ -301,6 +305,11 @@ export interface SessionState {
 	 * スキルを読み直しても、同じファイルを二度置かないようにする
 	 */
 	mountedSkillFiles: string[];
+	/**
+	 * セッションの途中で反映した(/plugins の reload)スキルの一覧の、エージェントへの指示。
+	 * 次に本人の発言を送るときに、指示(system.message)として足す。足すものがなければnull
+	 */
+	pendingSkillList: string | null;
 }
 
 /** セッションを始めたときの情報 */
@@ -335,10 +344,11 @@ export function initialState(setup: SessionSetup): SessionState {
 		pullRequests: [],
 		githubWrites: [],
 		mountedSkillFiles: [],
+		pendingSkillList: null,
 	};
 }
 
-/** 前の版で保存した状態に、後から足した項目(GitHub、スキルのファイル)を補う */
+/** 前の版で保存した状態に、後から足した項目(GitHub、スキルのファイル、反映したスキルの一覧)を補う */
 export function withDefaults(
 	state: Omit<
 		SessionState,
@@ -347,6 +357,7 @@ export function withDefaults(
 		| "pullRequests"
 		| "githubWrites"
 		| "mountedSkillFiles"
+		| "pendingSkillList"
 	> &
 		Partial<SessionState>,
 ): SessionState {
@@ -356,6 +367,7 @@ export function withDefaults(
 		pullRequests: [],
 		githubWrites: [],
 		mountedSkillFiles: [],
+		pendingSkillList: null,
 		...state,
 	};
 }
@@ -486,6 +498,12 @@ export type StreamDecision =
 
 /** 許可のボタンの結果 */
 export type ApprovalResult = "ok" | "stale" | "failed";
+
+/**
+ * スキルの一覧を反映した結果(/plugins の reload)。
+ * busy はエージェントが動いているか、本人の答えを待っている。ended はセッションが終わっている
+ */
+export type ReloadResult = "reloaded" | "busy" | "ended" | "failed";
 
 export class SessionRelay {
 	constructor(
@@ -987,6 +1005,104 @@ export class SessionRelay {
 	}
 
 	/**
+	 * スキルの今の一覧を、セッションに反映する(/plugins の reload)。
+	 * スキルを読む道具を、今の一覧で差し替え、置いたスキルのファイルを外す(次に読んだときに、今の版を置き直す)。
+	 * 一覧は、次に送る本人の発言に、指示として足す(始めたときの指示は書き換えられないため)。
+	 * Managed Agentsでは、止まっている間しか道具を差し替えられないので、動いている間と、本人の答えを待つ間は反映しない
+	 */
+	async reloadSkills(skills: readonly AgentSkill[]): Promise<ReloadResult> {
+		const { state, deps } = this;
+		const sessionId = state.sessionId;
+		if (sessionId === null) {
+			return "ended";
+		}
+		if (state.working || this.waitingForOwner()) {
+			return "busy";
+		}
+		const client = await deps.client();
+		if (client === null) {
+			await this.terminate(KEY_CANNOT_OPERATE);
+			return "ended";
+		}
+		const repository = state.repositories[0];
+		const { tools } = sessionConfig(
+			skills,
+			repository === undefined
+				? null
+				: { fullName: repository.fullName, mountPath: repository.mountPath },
+		);
+		try {
+			await client.beta.sessions.update(sessionId, { agent: { tools } });
+		} catch (error) {
+			if (isSessionGone(error)) {
+				await this.terminate(KEY_CANNOT_OPERATE);
+				return "ended";
+			}
+			log("skills_reload_failed", state, error);
+			return "failed";
+		}
+		state.pendingSkillList = reloadedSkillsText(skills);
+		await this.unmountSkillFiles(client, sessionId);
+		return "reloaded";
+	}
+
+	/**
+	 * 置いたスキルのファイルを、サンドボックスから外す(/plugins の reload)。
+	 * 外せなかったファイルは、置いたままとして覚えておく(読み直しても、置き直さない)
+	 */
+	private async unmountSkillFiles(
+		client: Anthropic,
+		sessionId: string,
+	): Promise<void> {
+		const { state } = this;
+		if (state.mountedSkillFiles.length === 0) {
+			return;
+		}
+		const mounted = new Set(state.mountedSkillFiles);
+		const targets: { id: string; path: string }[] = [];
+		try {
+			for await (const resource of client.beta.sessions.resources.list(
+				sessionId,
+			)) {
+				if (resource.type !== "file") {
+					continue;
+				}
+				const path = withoutUploadsDir(resource.mount_path);
+				if (mounted.has(path)) {
+					targets.push({ id: resource.id, path });
+				}
+			}
+		} catch (error) {
+			log("skill_unmount_failed", state, error);
+			return;
+		}
+		const kept: string[] = [];
+		for (let start = 0; start < targets.length; start += MOUNT_CONCURRENCY) {
+			const chunk = targets.slice(start, start + MOUNT_CONCURRENCY);
+			const results = await Promise.allSettled(
+				chunk.map((target) =>
+					client.beta.sessions.resources.delete(target.id, {
+						session_id: sessionId,
+					}),
+				),
+			);
+			results.forEach((result, index) => {
+				if (result.status === "rejected") {
+					log("skill_unmount_failed", state, result.reason);
+					const path = chunk[index]?.path;
+					if (path !== undefined) {
+						kept.push(path);
+					}
+				}
+			});
+		}
+		// 一覧になかった置き場所(もう外れている)も忘れ、次に読んだときに置き直す
+		state.mountedSkillFiles = state.mountedSkillFiles.filter((path) =>
+			kept.includes(path),
+		);
+	}
+
+	/**
 	 * セッションを終えたあとの、チャンネルの後始末と知らせ。
 	 * 許可のボタンと「止める」ボタンを外し、預かった発言の知らせを消して、「セッションを終えました。」を出す
 	 */
@@ -1033,12 +1149,7 @@ export class SessionRelay {
 				sessionId,
 				REPOSITORY_TOKEN_VALIDITY_MS,
 			);
-			await client.beta.sessions.events.send(sessionId, {
-				events: texts.map((text) => ({
-					type: "user.message" as const,
-					content: [{ type: "text" as const, text }],
-				})),
-			});
+			await this.sendUserMessages(client, sessionId, texts);
 		} catch (error) {
 			if (isSessionGone(error)) {
 				await this.terminate(KEY_CANNOT_OPERATE);
@@ -1057,6 +1168,53 @@ export class SessionRelay {
 		}
 		state.working = true;
 		return true;
+	}
+
+	/**
+	 * 本人の発言を送る。反映したスキルの一覧があれば、発言の後ろに指示(system.message)として足す。
+	 * 途中で指示を足せないモデル(Claude Sonnet 5など)では断られるので、そのときは、発言の前に知らせとして送る
+	 */
+	private async sendUserMessages(
+		client: Anthropic,
+		sessionId: string,
+		texts: readonly string[],
+	): Promise<void> {
+		const { state } = this;
+		const messages = texts.map((text) => ({
+			type: "user.message" as const,
+			content: [{ type: "text" as const, text }],
+		}));
+		const note = state.pendingSkillList;
+		if (note === null) {
+			await client.beta.sessions.events.send(sessionId, { events: messages });
+			return;
+		}
+		try {
+			await client.beta.sessions.events.send(sessionId, {
+				events: [
+					...messages,
+					{
+						type: "system.message" as const,
+						content: [{ type: "text" as const, text: note }],
+					},
+				],
+			});
+		} catch (error) {
+			if (!isBadRequest(error)) {
+				throw error;
+			}
+			log("system_message_rejected", state, error);
+			await client.beta.sessions.events.send(sessionId, {
+				events: [
+					{
+						type: "user.message" as const,
+						content: [{ type: "text" as const, text: skillListNotice(note) }],
+					},
+					...messages,
+				],
+			});
+		}
+		state.pendingSkillList = null;
 	}
 
 	/**
@@ -2318,6 +2476,18 @@ export function githubWriteRow(
 			ButtonStyle.Secondary,
 		),
 	);
+}
+
+/** セッションの資源の置き場所から、置き場所の根(/mnt/session/uploads)を除く。Bobertが渡したmount_pathの形にそろえる */
+function withoutUploadsDir(mountPath: string): string {
+	return mountPath.startsWith(`${UPLOADS_DIR}/`)
+		? mountPath.slice(UPLOADS_DIR.length)
+		: mountPath;
+}
+
+/** 途中で指示を足せないモデルに、反映したスキルの一覧を、発言として送るときの文 */
+function skillListNotice(note: string): string {
+	return `(Bobertからの知らせです。本人の発言ではありません)\n${note}`;
 }
 
 function log(event: string, state: SessionState, error: unknown): void {

@@ -5,6 +5,10 @@ import type {
 	APIInteractionResponse,
 	APIMessageComponentInteraction,
 } from "discord-api-types/v10";
+import type { ReloadResult } from "../agent/relay";
+import { getAgentChannel } from "../agent/store";
+import { agentSessionStub } from "../agent/stubs";
+import { ALREADY_ENDED, NOT_AGENT_CHANNEL } from "../agent/texts";
 import {
 	ApplicationCommandOptionType,
 	ButtonStyle,
@@ -58,6 +62,9 @@ export const PLUGINS_PLUGIN_OPTION_DESCRIPTION =
 	"入れるプラグインの名前(例: code-review)";
 export const PLUGINS_MARKETPLACE_OPTION_DESCRIPTION =
 	"プラグインを配っているGitHubのリポジトリ(例: anthropics/claude-plugins-official)";
+export const PLUGINS_RELOAD_OPTION = "reload";
+export const PLUGINS_RELOAD_OPTION_DESCRIPTION =
+	"エージェントのチャンネルで使うと、今のプラグインとスキルを、そのセッションに反映する";
 /** ボタンとセレクトメニューのIDの頭。続けて操作の種類と、プラグインのIDを「:」でつなぐ */
 export const PLUGINS_ID_PREFIX = "plugins:";
 
@@ -81,6 +88,19 @@ const NOT_FOUND =
 	"このプラグインは見つかりません。ほかの人が削除した可能性があります。`/plugins` から開き直してください。";
 const SAVE_FAILED =
 	"プラグインを保存できませんでした。少し待ってから、もう一度試してください。";
+/** reload(今のプラグインとスキルを、エージェントのセッションに反映する)の結果。文言は2026-11-09に承認 */
+const RELOADED =
+	"プラグインとスキルの今の一覧を、このセッションに反映しました。次の発言から使えます。";
+const RELOAD_OWNER_ONLY = "このセッションを始めた人だけが反映できます。";
+const RELOAD_BUSY =
+	"エージェントが作業している間は、反映できません。作業が終わってから、もう一度試してください。";
+const RELOAD_FAILED =
+	"セッションに反映できませんでした。少し待ってから、もう一度試してください。";
+const RELOAD_WITH_INSTALL =
+	"reloadは、pluginとmarketplaceと一緒には使えません。プラグインを入れてから、もう一度reloadを使ってください。";
+/** プラグインを入れたときの、reloadの案内 */
+const RELOAD_HINT =
+	"使っているセッションで使うときは、そのチャンネルで `/plugins` の `reload` を使ってください。";
 const MESSAGE_LENGTH = 2000;
 /** スキルの説明を、プラグインの画面に書く長さ */
 const DESCRIPTION_PREVIEW = 80;
@@ -95,6 +115,12 @@ export async function pluginsCommand(
 ): Promise<APIInteractionResponse> {
 	const plugin = stringOption(interaction, PLUGINS_PLUGIN_OPTION);
 	const marketplace = stringOption(interaction, PLUGINS_MARKETPLACE_OPTION);
+	if (booleanOption(interaction, PLUGINS_RELOAD_OPTION)) {
+		if (plugin !== undefined || marketplace !== undefined) {
+			return ephemeral(RELOAD_WITH_INSTALL);
+		}
+		return reload(interaction, env, ctx, editor.id);
+	}
 	if (plugin === undefined && marketplace === undefined) {
 		return {
 			type: InteractionResponseType.ChannelMessageWithSource,
@@ -120,6 +146,52 @@ export async function pluginsCommand(
 		() => install(env.DB, guildId, repository, plugin, editor),
 		{ content: SAVE_FAILED },
 	);
+}
+
+/**
+ * reload: エージェントのチャンネルで、プラグインとスキルの今の一覧を、そのセッションに反映する。
+ * セッションを始めた人だけが使える。Managed Agentsとのやり取りに時間がかかるので、保留にしてから結果を書く
+ */
+async function reload(
+	interaction: APIChatInputApplicationCommandInteraction,
+	env: Env,
+	ctx: ExecutionContext,
+	userId: string,
+): Promise<APIInteractionResponse> {
+	const channelId = interaction.channel?.id ?? interaction.channel_id;
+	const channel =
+		channelId === undefined ? null : await getAgentChannel(env.DB, channelId);
+	if (channel === null) {
+		return ephemeral(NOT_AGENT_CHANNEL);
+	}
+	if (channel.ownerId !== userId) {
+		return ephemeral(RELOAD_OWNER_ONLY);
+	}
+	if (channel.sessionId === null) {
+		return ephemeral(ALREADY_ENDED);
+	}
+	const stub = agentSessionStub(env, channel.channelId);
+	return respondLater(
+		ctx,
+		interaction,
+		userId,
+		"reply",
+		async () => ({ content: reloadResultText(await stub.reloadSkills()) }),
+		{ content: RELOAD_FAILED },
+	);
+}
+
+function reloadResultText(result: ReloadResult): string {
+	switch (result) {
+		case "reloaded":
+			return RELOADED;
+		case "busy":
+			return RELOAD_BUSY;
+		case "ended":
+			return ALREADY_ENDED;
+		case "failed":
+			return RELOAD_FAILED;
+	}
 }
 
 /** 一覧の画面のセレクトメニューと、プラグインの画面のボタン。知らない操作ならnull */
@@ -228,7 +300,7 @@ async function install(
 				commit: prepared.commit,
 			});
 			return {
-				content: `プラグイン「${plugin}」を入れました。スキル${quoted(prepared.skills.map((skill) => skill.content.name))}は、エージェント(\`/agent\`)の、次に始めるセッションから使います。`,
+				content: `プラグイン「${plugin}」を入れました。スキル${quoted(prepared.skills.map((skill) => skill.content.name))}は、エージェント(\`/agent\`)の、次に始めるセッションから使います。${RELOAD_HINT}`,
 			};
 	}
 }
@@ -460,6 +532,16 @@ function preview(text: string, length: number): string {
 }
 
 /** /plugins の、文字を入れる欄の値。前後の空白を除き、空なら(入れていなければ)undefined */
+function booleanOption(
+	interaction: APIChatInputApplicationCommandInteraction,
+	name: string,
+): boolean {
+	const option = interaction.data.options?.find(
+		(candidate) => candidate.name === name,
+	);
+	return option?.type === ApplicationCommandOptionType.Boolean && option.value;
+}
+
 function stringOption(
 	interaction: APIChatInputApplicationCommandInteraction,
 	name: string,

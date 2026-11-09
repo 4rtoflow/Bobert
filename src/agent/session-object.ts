@@ -22,7 +22,7 @@ import { listPluginSkillFiles } from "../store/plugins";
 import { listSkillFiles } from "../store/skills";
 import { loadCredential } from "../store/users";
 import { transcribeAudio } from "../voice/voice";
-import { readAgentSkill } from "./agent-skills";
+import { listAgentSkills, readAgentSkill } from "./agent-skills";
 import { agentClient, deleteSession } from "./managed";
 import {
 	type AgentEvent,
@@ -33,6 +33,7 @@ import {
 	MAX_ATTACHMENT_BYTES,
 	REPOSITORY_TOKEN_WATCH_VALIDITY_MS,
 	type RelayDeps,
+	type ReloadResult,
 	SessionRelay,
 	type SessionSetup,
 	type SessionState,
@@ -172,6 +173,21 @@ export class AgentSession extends DurableObject<Env> {
 			if (stream) {
 				this.startStreaming();
 			}
+			await this.scheduleAlarm(state);
+			return result;
+		});
+	}
+
+	/** /plugins の reload: プラグインとスキルの今の一覧を、セッションに反映する */
+	async reloadSkills(): Promise<ReloadResult> {
+		return this.serial(async () => {
+			const state = await this.loadState();
+			if (state === null || state.sessionId === null) {
+				return "ended";
+			}
+			const skills = await listAgentSkills(this.env.DB, state.guildId);
+			const result = await this.relay(state).reloadSkills(skills);
+			await this.saveState(state);
 			await this.scheduleAlarm(state);
 			return result;
 		});

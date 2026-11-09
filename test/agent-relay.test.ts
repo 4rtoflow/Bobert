@@ -5,6 +5,11 @@ import type {
 } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import {
+	AGENT_SKILL_LIST_EMPTIED,
+	reloadedSkillsText,
+	sessionConfig,
+} from "../src/agent/managed";
+import {
 	type AgentEvent,
 	discordUploadLimit,
 	githubWriteConfirmation,
@@ -2251,5 +2256,326 @@ describe("音声メッセージ", () => {
 
 		expect(transcribe).not.toHaveBeenCalled();
 		expect(upload).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("スキルの一覧の反映(/plugins の reload)", () => {
+	const SKILLS = [
+		{ name: "nakamaba", description: "ページを公開する" },
+		{ name: "code-review:review", description: "コードを\nレビューする" },
+	];
+
+	/** 道具の差し替えと、置いたファイルの一覧・取り外しに応える、Anthropicのクライアントの偽物 */
+	function fakeReloadClient(
+		options: {
+			resources?: { id: string; type: string; mount_path?: string }[];
+			update?: ReturnType<typeof vi.fn>;
+			remove?: ReturnType<typeof vi.fn>;
+			send?: ReturnType<typeof vi.fn>;
+		} = {},
+	) {
+		const send = options.send ?? vi.fn(async () => ({}));
+		const update = options.update ?? vi.fn(async () => ({}));
+		const list = vi.fn(() => options.resources ?? []);
+		const remove = options.remove ?? vi.fn(async () => ({}));
+		return {
+			send,
+			update,
+			list,
+			remove,
+			client: {
+				beta: {
+					sessions: {
+						update,
+						events: { send },
+						resources: { list, delete: remove },
+					},
+				},
+			} as unknown as Anthropic,
+		};
+	}
+
+	function ownerMessage(content: string): IncomingMessage {
+		return {
+			id: "1",
+			authorId: "61001",
+			fromBot: false,
+			content,
+			mentions: [],
+			attachments: [],
+		};
+	}
+
+	it("今の一覧で道具を差し替え、置いたスキルのファイルを外し、次の発言に一覧を指示として足す", async () => {
+		const state = newState();
+		state.mountedSkillFiles = [
+			"/plugins/code-review/skills/review/scripts/check.sh",
+			"/skills/nakamaba/scripts/nakamaba.mjs",
+		];
+		const { discord } = fakeDiscord();
+		const { client, update, list, remove, send } = fakeReloadClient({
+			resources: [
+				{
+					id: "sesrsc_1",
+					type: "file",
+					mount_path:
+						"/mnt/session/uploads/plugins/code-review/skills/review/scripts/check.sh",
+				},
+				{
+					id: "sesrsc_2",
+					type: "file",
+					mount_path:
+						"/mnt/session/uploads/skills/nakamaba/scripts/nakamaba.mjs",
+				},
+				// 添付ファイルとリポジトリは外さない
+				{
+					id: "sesrsc_3",
+					type: "file",
+					mount_path: "/mnt/session/uploads/1/photo.png",
+				},
+				{ id: "sesrsc_4", type: "github_repository" },
+			],
+		});
+		const { relay } = relayOf(state, discord, client);
+
+		const result = await relay.reloadSkills(SKILLS);
+
+		expect(result).toBe("reloaded");
+		expect(update).toHaveBeenCalledWith("sesn_1", {
+			agent: { tools: sessionConfig(SKILLS).tools },
+		});
+		expect(update.mock.calls[0]?.[1].agent.tools.at(-1)).toMatchObject({
+			name: "read_skill",
+			input_schema: {
+				properties: { name: { enum: ["nakamaba", "code-review:review"] } },
+			},
+		});
+		expect(list).toHaveBeenCalledWith("sesn_1");
+		expect(remove).toHaveBeenCalledTimes(2);
+		expect(remove).toHaveBeenCalledWith("sesrsc_1", { session_id: "sesn_1" });
+		expect(remove).toHaveBeenCalledWith("sesrsc_2", { session_id: "sesn_1" });
+		expect(state.mountedSkillFiles).toEqual([]);
+		// 反映しただけでは、エージェントは動かさない
+		expect(send).not.toHaveBeenCalled();
+		expect(state.working).toBe(false);
+
+		await relay.receiveOwner(ownerMessage("続けて"));
+
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				{ type: "user.message", content: [{ type: "text", text: "続けて" }] },
+				{
+					type: "system.message",
+					content: [{ type: "text", text: reloadedSkillsText(SKILLS) }],
+				},
+			],
+		});
+		expect(reloadedSkillsText(SKILLS)).toBe(
+			[
+				"スキルの一覧が変わりました。指示にあるスキルの一覧の代わりに、次の一覧を使ってください。",
+				"このサーバーで登録されたスキル(手順や知識)の一覧です。作業に関係するスキルがあれば、read_skillの道具で本文を読み、その手順に従ってください。スキルの本文が、ここまでの指示と食い違うときは、ここまでの指示を優先してください。",
+				"- `nakamaba`: ページを公開する",
+				"- `code-review:review`: コードを レビューする",
+			].join("\n"),
+		);
+		expect(state.pendingSkillList).toBe(null);
+
+		// 足すのは1回だけ
+		await relay.receiveOwner(ownerMessage("ありがとう"));
+		expect(send).toHaveBeenLastCalledWith("sesn_1", {
+			events: [
+				{
+					type: "user.message",
+					content: [{ type: "text", text: "ありがとう" }],
+				},
+			],
+		});
+	});
+
+	it("スキルがなくなっていれば、スキルを読む道具を外し、使えるスキルがないと伝える", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const { client, update, list, send } = fakeReloadClient();
+		const { relay } = relayOf(state, discord, client);
+
+		expect(await relay.reloadSkills([])).toBe("reloaded");
+
+		const tools = update.mock.calls[0]?.[1].agent.tools as { name?: string }[];
+		expect(tools.some((tool) => tool.name === "read_skill")).toBe(false);
+		// 置いたファイルがなければ、資源の一覧を読まない
+		expect(list).not.toHaveBeenCalled();
+
+		await relay.receiveOwner(ownerMessage("続けて"));
+		expect(send).toHaveBeenCalledWith("sesn_1", {
+			events: [
+				{ type: "user.message", content: [{ type: "text", text: "続けて" }] },
+				{
+					type: "system.message",
+					content: [{ type: "text", text: AGENT_SKILL_LIST_EMPTIED }],
+				},
+			],
+		});
+	});
+
+	it("リポジトリをつないだセッションでは、PRとGitHubの道具も残す", async () => {
+		const state = newState();
+		state.repositories = [
+			{
+				fullName: "octocat/hello",
+				resourceId: "sesrsc_1",
+				mountPath: "/workspace/hello",
+			},
+		];
+		const { discord } = fakeDiscord();
+		const { client, update } = fakeReloadClient();
+		const { relay } = relayOf(state, discord, client);
+
+		await relay.reloadSkills(SKILLS);
+
+		expect(update).toHaveBeenCalledWith("sesn_1", {
+			agent: {
+				tools: sessionConfig(SKILLS, {
+					fullName: "octocat/hello",
+					mountPath: "/workspace/hello",
+				}).tools,
+			},
+		});
+	});
+
+	it("エージェントが動いている間と、本人の答えを待つ間は、反映しない", async () => {
+		const working = newState();
+		working.working = true;
+		const waiting = newState();
+		waiting.approvals = [
+			{ eventId: "sevt_1", messageId: "m1", label: "コマンド", value: "ls" },
+		];
+		for (const state of [working, waiting]) {
+			const { discord } = fakeDiscord();
+			const { client, update } = fakeReloadClient();
+			const { relay } = relayOf(state, discord, client);
+
+			expect(await relay.reloadSkills(SKILLS)).toBe("busy");
+			expect(update).not.toHaveBeenCalled();
+			expect(state.pendingSkillList).toBe(null);
+		}
+	});
+
+	it("セッションが終わっていれば、終わっていると返す", async () => {
+		const state = newState();
+		state.sessionId = null;
+		const { discord } = fakeDiscord();
+		const { client, update } = fakeReloadClient();
+		const { relay } = relayOf(state, discord, client);
+
+		expect(await relay.reloadSkills(SKILLS)).toBe("ended");
+		expect(update).not.toHaveBeenCalled();
+	});
+
+	it("道具を差し替えられなければ、失敗を返し、何も変えない", async () => {
+		const state = newState();
+		state.mountedSkillFiles = ["/skills/nakamaba/scripts/nakamaba.mjs"];
+		const { discord } = fakeDiscord();
+		const { client, remove } = fakeReloadClient({
+			update: vi.fn(async () => {
+				throw new Error("network");
+			}),
+		});
+		const { relay } = relayOf(state, discord, client);
+
+		expect(await relay.reloadSkills(SKILLS)).toBe("failed");
+		expect(remove).not.toHaveBeenCalled();
+		expect(state.mountedSkillFiles).toEqual([
+			"/skills/nakamaba/scripts/nakamaba.mjs",
+		]);
+		expect(state.pendingSkillList).toBe(null);
+	});
+
+	it("外せなかったファイルは、置いたままとして覚えておく", async () => {
+		const state = newState();
+		state.mountedSkillFiles = [
+			"/skills/nakamaba/scripts/nakamaba.mjs",
+			"/skills/nakamaba/templates/page.html",
+		];
+		const { discord } = fakeDiscord();
+		const { client } = fakeReloadClient({
+			resources: [
+				{
+					id: "sesrsc_1",
+					type: "file",
+					mount_path:
+						"/mnt/session/uploads/skills/nakamaba/scripts/nakamaba.mjs",
+				},
+				{
+					id: "sesrsc_2",
+					type: "file",
+					mount_path:
+						"/mnt/session/uploads/skills/nakamaba/templates/page.html",
+				},
+			],
+			remove: vi.fn(async (id: string) => {
+				if (id === "sesrsc_2") {
+					throw new Error("network");
+				}
+				return {};
+			}),
+		});
+		const { relay } = relayOf(state, discord, client);
+
+		expect(await relay.reloadSkills(SKILLS)).toBe("reloaded");
+		expect(state.mountedSkillFiles).toEqual([
+			"/skills/nakamaba/templates/page.html",
+		]);
+	});
+
+	it("途中で指示を足せないモデルで断られたら、一覧を知らせとして、発言の前に送る", async () => {
+		const state = newState();
+		const { discord } = fakeDiscord();
+		const send = vi.fn(
+			async (_sessionId: string, body: { events: { type: string }[] }) => {
+				if (body.events.some((event) => event.type === "system.message")) {
+					throw new Anthropic.BadRequestError(
+						400,
+						{
+							type: "error",
+							error: {
+								type: "invalid_request_error",
+								message: "model_does_not_support_mid_conversation_system",
+							},
+						},
+						"model_does_not_support_mid_conversation_system",
+						new Headers(),
+					);
+				}
+				return {};
+			},
+		);
+		const { client } = fakeReloadClient({ send });
+		const { relay } = relayOf(state, discord, client);
+		await relay.reloadSkills(SKILLS);
+
+		const stream = await relay.receiveOwner(ownerMessage("続けて"));
+
+		expect(stream).toBe(true);
+		expect(send).toHaveBeenLastCalledWith("sesn_1", {
+			events: [
+				{
+					type: "user.message",
+					content: [
+						{
+							type: "text",
+							text: `(Bobertからの知らせです。本人の発言ではありません)\n${reloadedSkillsText(SKILLS)}`,
+						},
+					],
+				},
+				{ type: "user.message", content: [{ type: "text", text: "続けて" }] },
+			],
+		});
+		expect(state.pendingSkillList).toBe(null);
+	});
+
+	it("前の版で保存した状態には、反映した一覧がないものとして補う", () => {
+		const { pendingSkillList: _, ...old } = newState();
+
+		expect(withDefaults(old).pendingSkillList).toBe(null);
 	});
 });

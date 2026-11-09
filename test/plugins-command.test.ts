@@ -2,6 +2,9 @@ import { env } from "cloudflare:workers";
 import type { APIUser } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentSkills, readAgentSkill } from "../src/agent/agent-skills";
+import { insertAgentChannel, markAgentChannelEnded } from "../src/agent/store";
+import { agentSessionStub } from "../src/agent/stubs";
+import { ALREADY_ENDED, NOT_AGENT_CHANNEL } from "../src/agent/texts";
 import {
 	ButtonStyle,
 	ComponentType,
@@ -25,6 +28,7 @@ import {
 	guildInteraction,
 	mockFetch,
 	sendInteraction,
+	userFactory,
 } from "./helpers";
 
 afterEach(() => {
@@ -81,21 +85,30 @@ async function marketplaceRepo(
 
 function pluginsCommand(
 	guildId: string,
-	fields: { plugin?: string; marketplace?: string } = {},
+	fields: { plugin?: string; marketplace?: string; reload?: boolean } = {},
+	user: APIUser = ALICE,
 ) {
-	return inGuild(guildId, InteractionType.ApplicationCommand, {
-		id: "1",
-		name: "plugins",
-		type: 1,
-		options: [
-			...(fields.plugin === undefined
-				? []
-				: [{ name: "plugin", type: 3, value: fields.plugin }]),
-			...(fields.marketplace === undefined
-				? []
-				: [{ name: "marketplace", type: 3, value: fields.marketplace }]),
-		],
-	});
+	return inGuild(
+		guildId,
+		InteractionType.ApplicationCommand,
+		{
+			id: "1",
+			name: "plugins",
+			type: 1,
+			options: [
+				...(fields.plugin === undefined
+					? []
+					: [{ name: "plugin", type: 3, value: fields.plugin }]),
+				...(fields.marketplace === undefined
+					? []
+					: [{ name: "marketplace", type: 3, value: fields.marketplace }]),
+				...(fields.reload === undefined
+					? []
+					: [{ name: "reload", type: 5, value: fields.reload }]),
+			],
+		},
+		user,
+	);
 }
 
 function component(
@@ -192,6 +205,13 @@ describe("/plugins のコマンド", () => {
 						required: false,
 						max_length: 200,
 					},
+					{
+						type: 5,
+						name: "reload",
+						description:
+							"エージェントのチャンネルで使うと、今のプラグインとスキルを、そのセッションに反映する",
+						required: false,
+					},
 				],
 			}),
 		);
@@ -206,7 +226,7 @@ describe("/plugins で入れる", () => {
 		expect(edits(calls)).toEqual([
 			{
 				content:
-					"プラグイン「code-review」を入れました。スキル「review」「summarize」は、エージェント(`/agent`)の、次に始めるセッションから使います。",
+					"プラグイン「code-review」を入れました。スキル「review」「summarize」は、エージェント(`/agent`)の、次に始めるセッションから使います。使っているセッションで使うときは、そのチャンネルで `/plugins` の `reload` を使ってください。",
 			},
 		]);
 		expect(plugin).toMatchObject({
@@ -526,5 +546,140 @@ describe("エージェントに渡す", () => {
 		expect(await readAgentSkill(env.DB, guildId, "code-review:missing")).toBe(
 			null,
 		);
+	});
+});
+
+describe("/plugins の reload", () => {
+	const newUser = userFactory(65000);
+	const RELOADED =
+		"プラグインとスキルの今の一覧を、このセッションに反映しました。次の発言から使えます。";
+	let nextChannelId = 65100;
+
+	function inChannel(
+		payload: ReturnType<typeof pluginsCommand>,
+		channelId: string,
+	) {
+		return {
+			...payload,
+			channel_id: channelId,
+			channel: { id: channelId, type: 0 },
+		};
+	}
+
+	/** エージェントのチャンネルを記録し、Durable Objectを始める */
+	async function agentChannel(guildId: string, ownerId: string) {
+		const channelId = String(nextChannelId++);
+		await insertAgentChannel(env.DB, {
+			channelId,
+			guildId,
+			ownerId,
+			number: 1,
+			sessionId: "sesn_1",
+			createdAt: Date.now(),
+		});
+		await agentSessionStub(env, channelId).setup({
+			channelId,
+			guildId,
+			ownerId,
+			sessionId: "sesn_1",
+			model: { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+		});
+		return channelId;
+	}
+
+	it("プラグインとスキルの今の一覧で、セッションのスキルを読む道具を差し替え、結果を書く", async () => {
+		const guildId = newGuild();
+		await installCodeReview(guildId);
+		const owner = await newUser("anthropic");
+		const channelId = await agentChannel(guildId, owner.id);
+		const calls = mockFetch((call) =>
+			call.url.hostname === "api.anthropic.com"
+				? Response.json({ id: "sesn_1", type: "session", status: "idle" })
+				: Response.json({}),
+		);
+
+		const response = await sendInteraction(
+			inChannel(pluginsCommand(guildId, { reload: true }, owner), channelId),
+		);
+
+		expect(response).toEqual({
+			type: InteractionResponseType.DeferredChannelMessageWithSource,
+			data: { flags: MessageFlags.Ephemeral },
+		});
+		expect(edits(calls)).toEqual([{ content: RELOADED }]);
+		const update = calls.find(
+			(call) =>
+				call.method === "POST" && call.url.pathname === "/v1/sessions/sesn_1",
+		)?.body as { agent: { tools: { name?: string }[] } };
+		expect(update.agent.tools.at(-1)).toMatchObject({
+			name: "read_skill",
+			input_schema: {
+				properties: {
+					name: { enum: ["code-review:review", "code-review:summarize"] },
+				},
+			},
+		});
+	});
+
+	it("エージェントのチャンネルの外では、中で使うよう知らせる", async () => {
+		const response = await sendInteraction(
+			pluginsCommand(newGuild(), { reload: true }),
+		);
+
+		expect(response.data).toEqual({
+			flags: MessageFlags.Ephemeral,
+			content: NOT_AGENT_CHANNEL,
+		});
+	});
+
+	it("セッションを始めた人のほかは、反映できない", async () => {
+		const guildId = newGuild();
+		const channelId = await agentChannel(guildId, BOB.id);
+
+		const response = await sendInteraction(
+			inChannel(pluginsCommand(guildId, { reload: true }), channelId),
+		);
+
+		expect(response.data.content).toBe(
+			"このセッションを始めた人だけが反映できます。",
+		);
+	});
+
+	it("終えたセッションでは、もう終わっていると知らせる", async () => {
+		const guildId = newGuild();
+		const channelId = await agentChannel(guildId, ALICE.id);
+		await markAgentChannelEnded(env.DB, channelId);
+
+		const response = await sendInteraction(
+			inChannel(pluginsCommand(guildId, { reload: true }), channelId),
+		);
+
+		expect(response.data.content).toBe(ALREADY_ENDED);
+	});
+
+	it("pluginとmarketplaceと一緒には使えない(入れずに知らせる)", async () => {
+		const guildId = newGuild();
+		const calls = mockGitHub({});
+
+		const response = await sendInteraction(
+			pluginsCommand(guildId, {
+				plugin: "code-review",
+				marketplace: MARKETPLACE,
+				reload: true,
+			}),
+		);
+
+		expect(response.data.content).toBe(
+			"reloadは、pluginとmarketplaceと一緒には使えません。プラグインを入れてから、もう一度reloadを使ってください。",
+		);
+		expect(calls).toEqual([]);
+	});
+
+	it("reloadを「いいえ」にしたときは、今までどおり一覧を出す", async () => {
+		const response = await sendInteraction(
+			pluginsCommand(newGuild(), { reload: false }),
+		);
+
+		expect(response.data.content).toBe("**入れたプラグイン**: なし");
 	});
 });
